@@ -40,9 +40,12 @@ async function start(): Promise<void> {
   const apiKey = process.env.LLM_API_KEY ?? ''
   const model = resolveModel(provider, apiKey)
   const scorer = createLlmScorer(model)
+  // One shared BudgetLedger instance: the executor reserves/records spend on it,
+  // and runCycle calls startCycle on it — the single source of budget truth.
   const ledger = new BudgetLedger(DATA_DIR, config.budget)
   const executor = new WalletExecutor(defaultReppoCli, ledger)
-  const hl = createHyperliquidAdapter()
+  // Adapter registry — add new adapters here; routing is by adapter id from config.
+  const adapters = [createHyperliquidAdapter()]
 
   if (config.stake.lockReppo > 0) {
     const r = await executor.lock({
@@ -58,7 +61,7 @@ async function start(): Promise<void> {
     topN: 12,
     getRubric: (id) => getDatanetRubric(id),
     getPodsAndFilter: async () => ({ pods: [], filter: { currentEpoch: null, ownPodIds: [], votedPodIds: [] } }),
-    getAdapter: (id) => (id === 'hyperliquid' ? hl : undefined),
+    getAdapter: (id) => adapters.find((a) => a.id === id),
     voteScorer: scorer,
     candidateScorer: {
       scoreCandidate: (c, r) =>
@@ -83,6 +86,13 @@ async function start(): Promise<void> {
 const cmd = process.argv[2]
 const run = cmd === 'configure' ? onboard : start
 run().catch((e) => {
-  console.error('orquestra: fatal:', (e as Error).message)
+  const err = e as Error
+  console.error('orquestra: fatal:', err.message)
+  if (err.name === 'LedgerCorruptError') {
+    console.error(
+      `orquestra: the budget ledger at ${DATA_DIR}/budget-ledger.json is corrupt; the node refuses to run rather than ` +
+        `lose track of spend. Inspect it, or delete it to reset budget accounting to zero (caps restart from 0).`,
+    )
+  }
   process.exitCode = 1
 })
