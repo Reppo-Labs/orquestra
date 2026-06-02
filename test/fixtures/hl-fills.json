@@ -1,0 +1,23 @@
+[
+  { "coin": "BTC", "px": "60000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "120.5", "time": 1779465982424, "hash": "0xf1" },
+  { "coin": "ETH", "px": "3000", "sz": "1", "side": "A", "dir": "Close Short", "closedPnl": "-40", "time": 1779465982500, "hash": "0xf2" },
+  { "coin": "BTC", "px": "61000", "sz": "0.2", "side": "B", "dir": "Close Long", "closedPnl": "80", "time": 1779465982600, "hash": "0xf3" },
+  { "coin": "SOL", "px": "150", "sz": "10", "side": "A", "dir": "Close Short", "closedPnl": "200", "time": 1779465982700, "hash": "0xf4" },
+  { "coin": "BTC", "px": "62000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "-15", "time": 1779465982800, "hash": "0xf5" },
+  { "coin": "ETH", "px": "3100", "sz": "1", "side": "B", "dir": "Close Long", "closedPnl": "55", "time": 1779465982900, "hash": "0xf6" },
+  { "coin": "BTC", "px": "63000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "30", "time": 1779465983000, "hash": "0xf7" },
+  { "coin": "SOL", "px": "160", "sz": "5", "side": "A", "dir": "Close Short", "closedPnl": "12", "time": 1779465983100, "hash": "0xf8" },
+  { "coin": "ETH", "px": "3200", "sz": "2", "side": "A", "dir": "Close Short", "closedPnl": "-22", "time": 1779465983200, "hash": "0xf9" },
+  { "coin": "BTC", "px": "64000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "44", "time": 1779465983300, "hash": "0xfa" },
+  { "coin": "BTC", "px": "64500", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "18", "time": 1779465983400, "hash": "0xfb" },
+  { "coin": "ETH", "px": "3300", "sz": "1", "side": "B", "dir": "Close Long", "closedPnl": "9", "time": 1779465983500, "hash": "0xfc" },
+  { "coin": "SOL", "px": "170", "sz": "8", "side": "A", "dir": "Close Short", "closedPnl": "61", "time": 1779465983600, "hash": "0xfd" },
+  { "coin": "BTC", "px": "65000", "sz": "0.2", "side": "B", "dir": "Close Long", "closedPnl": "-5", "time": 1779465983700, "hash": "0xfe" },
+  { "coin": "ETH", "px": "3400", "sz": "1", "side": "A", "dir": "Close Short", "closedPnl": "27", "time": 1779465983800, "hash": "0x10" },
+  { "coin": "BTC", "px": "66000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "33", "time": 1779465983900, "hash": "0x11" },
+  { "coin": "SOL", "px": "180", "sz": "4", "side": "A", "dir": "Close Short", "closedPnl": "14", "time": 1779465984000, "hash": "0x12" },
+  { "coin": "ETH", "px": "3500", "sz": "1", "side": "B", "dir": "Close Long", "closedPnl": "21", "time": 1779465984100, "hash": "0x13" },
+  { "coin": "BTC", "px": "67000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "40", "time": 1779465984200, "hash": "0x14" },
+  { "coin": "SOL", "px": "190", "sz": "3", "side": "A", "dir": "Close Short", "closedPnl": "8", "time": 1779465984300, "hash": "0x15" },
+  { "coin": "BTC", "px": "68000", "sz": "0.1", "side": "B", "dir": "Close Long", "closedPnl": "50", "time": 1779465984400, "hash": "0x16" }
+]
