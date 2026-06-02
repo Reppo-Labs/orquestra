@@ -37,7 +37,7 @@ export const StrategyConfigSchema = z
   })
   .transform((cfg) => ({
     ...cfg,
-    datanets: { '*': { vote: false, mint: false, strictness: 'balanced' as const }, ...cfg.datanets },
+    datanets: { '*': { vote: false, mint: false, strictness: 'balanced' as const }, ...cfg.datanets } as Record<string, z.infer<typeof DatanetPolicy>>,
   }))
 
 export type StrategyConfig = z.infer<typeof StrategyConfigSchema>
