@@ -1,0 +1,13 @@
+{
+  "datanetId": "9",
+  "subnetName": "TradingGym AI",
+  "subnetDescription": "Personal RL gym and continuously updated training data marketplace for autonomous AI trading agents. High-signal, bias-free data optimized for improving agent performance in live perpetuals trading.",
+  "onboardingPublishers": "Share your Hyperliquid perp trading data. Include: trade details (market, direction, size, leverage, fill price); your signal; outcome (PnL, win/loss, hold duration); metrics (win rate, Sharpe, max drawdown); market context; timeframe; verification (timestamps or tx hashes). Quality: real trades OR high-fidelity replay using actual Hyperliquid OHLCV. JSON/CSV with clear labels.",
+  "onboardingVoters": "Score Pods 1-10 on usefulness for training agents to trade Hyperliquid perps. 8-10: clean, verifiable, actionable, entry+sizing+exit covered. 5-7: useful but incomplete. 2-4: noisy, hard to verify. 1: unusable. North star: would this help an autonomous agent compete in the Virtuals $100K?",
+  "nativeTokenSymbol": "REPPO",
+  "accessFeeREPPO": 50,
+  "emissionsPerEpochREPPO": 500,
+  "status": "ACTIVE",
+  "upVoteVolume": 9668144,
+  "downVoteVolume": 1568175
+}
