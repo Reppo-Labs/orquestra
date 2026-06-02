@@ -1,0 +1,8 @@
+{
+  "leaderboardRows": [
+    { "ethAddress": "0xAAA", "displayName": null, "windowPerformances": [["week", { "pnl": "11400452", "roi": "1", "vlm": "331509" }]] },
+    { "ethAddress": "0xBBB", "displayName": null, "windowPerformances": [["week", { "pnl": "3047441", "roi": "1", "vlm": "163210" }]] },
+    { "ethAddress": "0xLOWVLM", "displayName": null, "windowPerformances": [["week", { "pnl": "500", "roi": "1", "vlm": "1000" }]] },
+    { "ethAddress": "0xLOSS", "displayName": null, "windowPerformances": [["week", { "pnl": "-50000", "roi": "-1", "vlm": "500000" }]] }
+  ]
+}
