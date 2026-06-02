@@ -25,6 +25,9 @@ async function run(args: string[]): Promise<ChainResult> {
     timeout: 120_000,
   })
   const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
+  if (j.gasEth === undefined) {
+    console.warn('reppo CLI returned no gasEth; recording 0 — gas caps may under-count')
+  }
   return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0) }
 }
 

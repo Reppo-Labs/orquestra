@@ -1,6 +1,6 @@
 // src/wallet/executor.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BudgetLedger } from './ledger.js'
@@ -50,21 +50,114 @@ describe('WalletExecutor', () => {
     expect(cli.mintPod).not.toHaveBeenCalled()
   })
 
-  it('executes a mint within budget and records REPPO + gas', async () => {
+  it('executes a mint within budget and reconciles REPPO + actual gas', async () => {
     const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
     const ex = new WalletExecutor(cli, ledger)
     const r = await ex.executeMint(mintIntent('k1', 50))
     expect(r.status).toBe('executed')
     expect(ledger.state.mintReppoSpent).toBe(50)
+    // actual gas returned by fakeCli is 0.01; reconcileMint adjusts from MINT_GAS_EST_ETH (0.02)
     expect(ledger.state.mintGasSpentEth).toBeCloseTo(0.01)
   })
 
-  it('reports error (not executed) when the CLI throws, and does not record spend', async () => {
+  it('reports error (not executed) when the CLI throws, and reservation is released', async () => {
     const cli = fakeCli(); (cli.vote as any) = vi.fn(async () => { throw new Error('rpc down') })
     const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
     const ex = new WalletExecutor(cli, ledger)
     const r = await ex.executeVote(voteIntent('p1'))
     expect(r.status).toBe('error')
     expect(ledger.state.votesCastThisCycle).toBe(0)
+    expect(ledger.state.voteGasSpentEth).toBeCloseTo(0)
+  })
+
+  // --- crash-safety: reserve is persisted before CLI is called ---
+
+  it('crash-safety: vote reserve is persisted on disk before CLI is called', async () => {
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+
+    // CLI impl reads the ledger file from disk and verifies the debit is already there
+    let countSeenByCli = -1
+    const cli: ReppoCli = {
+      lock: vi.fn(async () => ({ txHash: '0xlock', gasEth: 0 })),
+      vote: vi.fn(async () => {
+        const persisted = JSON.parse(readFileSync(join(dir, 'budget-ledger.json'), 'utf-8'))
+        countSeenByCli = persisted.votesCastThisCycle
+        return { txHash: '0xvote', gasEth: 0.001 }
+      }),
+      mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0 })),
+    }
+
+    const ex = new WalletExecutor(cli, ledger)
+    await ex.executeVote(voteIntent('p1'))
+    // The CLI saw the debit already committed on disk
+    expect(countSeenByCli).toBe(1)
+  })
+
+  it('crash-safety: mint reserve is persisted on disk before CLI is called', async () => {
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+
+    let reppoSeenByCli = -1
+    const cli: ReppoCli = {
+      lock: vi.fn(async () => ({ txHash: '0xlock', gasEth: 0 })),
+      vote: vi.fn(async () => ({ txHash: '0xvote', gasEth: 0 })),
+      mintPod: vi.fn(async () => {
+        const persisted = JSON.parse(readFileSync(join(dir, 'budget-ledger.json'), 'utf-8'))
+        reppoSeenByCli = persisted.mintReppoSpent
+        return { txHash: '0xmint', gasEth: 0.01 }
+      }),
+    }
+
+    const ex = new WalletExecutor(cli, ledger)
+    await ex.executeMint(mintIntent('k1', 50))
+    expect(reppoSeenByCli).toBe(50)
+  })
+
+  // --- error path: reservation is released ---
+
+  it('error path: vote reservation is released when CLI throws', async () => {
+    const cli = fakeCli()
+    ;(cli.vote as any) = vi.fn(async () => { throw new Error('network error') })
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeVote(voteIntent('p1'))
+    expect(r.status).toBe('error')
+    expect(ledger.state.votesCastThisCycle).toBe(0)
+    expect(ledger.state.voteGasSpentEth).toBeCloseTo(0)
+  })
+
+  it('error path: mint reservation is released when CLI throws', async () => {
+    const cli = fakeCli()
+    ;(cli.mintPod as any) = vi.fn(async () => { throw new Error('network error') })
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeMint(mintIntent('k1', 50))
+    expect(r.status).toBe('error')
+    expect(ledger.state.mintReppoSpent).toBe(0)
+    expect(ledger.state.mintGasSpentEth).toBeCloseTo(0)
+  })
+
+  // --- empty txHash: treat as error and release reservation ---
+
+  it('empty txHash on vote returns status=error and releases reservation', async () => {
+    const cli = fakeCli()
+    ;(cli.vote as any) = vi.fn(async () => ({ txHash: '', gasEth: 0.001 }))
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeVote(voteIntent('p1'))
+    expect(r.status).toBe('error')
+    expect(r.detail).toBe('no txHash')
+    // reservation released
+    expect(ledger.state.votesCastThisCycle).toBe(0)
+  })
+
+  it('empty txHash on mint returns status=error and releases reservation', async () => {
+    const cli = fakeCli()
+    ;(cli.mintPod as any) = vi.fn(async () => ({ txHash: '', gasEth: 0.01 }))
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeMint(mintIntent('k1', 50))
+    expect(r.status).toBe('error')
+    expect(r.detail).toBe('no txHash')
+    expect(ledger.state.mintReppoSpent).toBe(0)
   })
 })
