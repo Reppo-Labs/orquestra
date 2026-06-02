@@ -33,7 +33,7 @@ describe('getDatanetRubric', () => {
   })
 
   it('propagates RubricUnavailableError from the parser', async () => {
-    const { onboardingVoters, subnetDescription, ...rest } = fixture
+    const { onboardingVoters, subnetDescription, onboardingPublishers, ...rest } = fixture
     await expect(getDatanetRubric('9', { fetcher: async () => rest })).rejects.toThrow(RubricUnavailableError)
   })
 })

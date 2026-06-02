@@ -25,13 +25,23 @@ describe('parseDatanetRubric', () => {
     expect(r.datanetId).toBe('9')
   })
 
-  it('throws RubricUnavailableError when the voter rubric is missing', () => {
+  it('keeps a missing voter rubric as empty (still mintable, gated downstream)', () => {
     const { onboardingVoters, ...rest } = fixture
-    expect(() => parseDatanetRubric(rest)).toThrow(RubricUnavailableError)
+    const r = parseDatanetRubric(rest)
+    expect(r.voterRubric).toBe('')
+    expect(r.goal).toMatch(/training data marketplace/)
+    expect(r.publisherSpec).toMatch(/Hyperliquid perp trading data/)
   })
 
-  it('throws RubricUnavailableError when goal+publisherSpec are missing', () => {
-    const { subnetDescription, onboardingPublishers, ...rest } = fixture
+  it('keeps a missing publisher spec as empty (still voteable, gated downstream)', () => {
+    const { onboardingPublishers, ...rest } = fixture
+    const r = parseDatanetRubric(rest)
+    expect(r.publisherSpec).toBe('')
+    expect(r.voterRubric).toMatch(/Score Pods 1-10/)
+  })
+
+  it('throws RubricUnavailableError when goal, voter rubric, and publisher spec are all missing', () => {
+    const { subnetDescription, onboardingPublishers, onboardingVoters, ...rest } = fixture
     expect(() => parseDatanetRubric(rest)).toThrow(RubricUnavailableError)
   })
 })

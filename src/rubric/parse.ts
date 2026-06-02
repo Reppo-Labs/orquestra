@@ -23,8 +23,11 @@ const MetadataSchema = z.object({
 })
 
 /** Parse Reppo datanet metadata into a DatanetRubric.
- *  Throws RubricUnavailableError if the rubric-essential fields are absent —
- *  the voter cannot operate generically on a datanet with no goal/vote rubric. */
+ *  Throws RubricUnavailableError only when the metadata carries NOTHING usable.
+ *  Capability is gated downstream (the design's two-tier model): the voter needs
+ *  `voterRubric` (or at least `goal`); the minter needs `publisherSpec`. A datanet
+ *  with a goal + publisher spec but no voter rubric is still mintable, so we must
+ *  not reject it here. */
 export function parseDatanetRubric(raw: unknown): DatanetRubric {
   const m = MetadataSchema.parse(raw)
   const id = m.datanetId ?? m.tokenId
@@ -33,12 +36,8 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
   const voterRubric = m.onboardingVoters?.trim() ?? ''
 
   if (id == null) throw new RubricUnavailableError('datanet metadata has no datanetId/tokenId')
-  // Voting requires the voter rubric; minting needs goal or publisherSpec.
-  if (!voterRubric) {
-    throw new RubricUnavailableError(`datanet ${id}: no onboardingVoters — cannot judge pods`)
-  }
-  if (!goal && !publisherSpec) {
-    throw new RubricUnavailableError(`datanet ${id}: no subnetDescription or onboardingPublishers`)
+  if (!goal && !voterRubric && !publisherSpec) {
+    throw new RubricUnavailableError(`datanet ${id}: metadata carries no goal, voter rubric, or publisher spec`)
   }
 
   return {
