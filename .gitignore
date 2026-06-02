@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+# Secrets & local node state — NEVER commit
+.env
+.env.*
+!.env.example
+data/
+*.key
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
