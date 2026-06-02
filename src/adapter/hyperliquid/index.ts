@@ -44,9 +44,13 @@ export function createHyperliquidAdapter(fetchers: HlFetchers = defaultFetchers)
       const wallets = rankByMargin(lb, WINDOW, ctx.topN, MIN_VLM)
       const out: CandidatePod[] = []
       for (const w of wallets) {
-        const fills = await fetchers.fetchFills(w)
-        const cand = buildHlDataset(w, fills, ctx.datanetId)
-        if (cand) out.push(cand)
+        try {
+          const fills = await fetchers.fetchFills(w)
+          const cand = buildHlDataset(w, fills, ctx.datanetId)
+          if (cand) out.push(cand)
+        } catch (err) {
+          console.warn(`[hl-adapter] fetchFills failed for ${w}:`, err)
+        }
       }
       return out
     },

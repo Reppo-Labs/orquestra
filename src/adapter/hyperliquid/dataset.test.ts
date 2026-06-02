@@ -25,4 +25,14 @@ describe('buildHlDataset', () => {
     expect(buildHlDataset('0xWALLET', [], '9')).toBeNull()
     expect(buildHlDataset('0xWALLET', [{ coin: 'BTC', px: '1', sz: '1', side: 'B', dir: 'Open Long', closedPnl: '0', time: 1, hash: '0x0' }], '9')).toBeNull()
   })
+
+  it('excludes malformed fills and keeps sum_pnl finite', () => {
+    const malformed = { coin: 'BTC', px: 'x', sz: '1', side: 'B' as const, dir: 'Close Long', closedPnl: 'oops', time: 1, hash: '0x0' }
+    const mixed = [...fills, malformed]
+    const c = buildHlDataset('0xWALLET', mixed, '9')
+    expect(c).not.toBeNull()
+    const ds = c!.dataset as { aggregate_metrics: { n_trades: number; sum_pnl: number } }
+    expect(Number.isFinite(ds.aggregate_metrics.sum_pnl)).toBe(true)
+    expect(ds.aggregate_metrics.n_trades).toBe(21)
+  })
 })
