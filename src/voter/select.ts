@@ -1,5 +1,5 @@
 // src/voter/select.ts
-import { STRICTNESS_THRESHOLDS, type Strictness } from '../config/schema.js'
+import { STRICTNESS_THRESHOLDS, Strictness } from '../config/schema.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { VoteIntent } from '../wallet/intents.js'
 import type { VoterPod, VoteFilter, PodScorer } from './types.js'
@@ -10,7 +10,7 @@ export async function selectVotes(
   datanetId: string,
   pods: VoterPod[],
   rubric: DatanetRubric,
-  strictness: Strictness,
+  strictness: typeof Strictness._type,
   filter: VoteFilter,
   scorer: PodScorer,
 ): Promise<VoteIntent[]> {
