@@ -10,6 +10,16 @@
 
 **Builds on:** Plan 1 (Foundation). Depends on `reppo` CLI ≥0.7.0 surfacing datanet metadata on `query datanet --json`. **0.6.0 (latest published) does NOT** — so the default CLI fetcher is exercised only at integration time; all unit tests use a fixture of the metadata shape (the platform `subnet` object).
 
+> **Correction applied during implementation (authoritative = shipped code):** the
+> Task 2 guard below was tightened then re-corrected. Final semantics:
+> `parseDatanetRubric` throws `RubricUnavailableError` **only when the metadata
+> carries nothing usable** (no id, OR no goal AND no voterRubric AND no
+> publisherSpec). It does **not** require `voterRubric` — a goal+publisherSpec
+> datanet with no voter rubric is still *mintable*. Vote/mint capability is gated
+> downstream (voter needs voterRubric/goal; minter needs publisherSpec), per the
+> design's two-tier model. The Task 2/4 tests were updated to match (5 parse + 4
+> load tests).
+
 ---
 
 ## File structure (this plan)
