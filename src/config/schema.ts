@@ -8,6 +8,8 @@ export const STRICTNESS_THRESHOLDS = {
 } as const
 
 export const Strictness = z.enum(['conservative', 'balanced', 'aggressive'])
+/** The strictness union as a TS type (stable; prefer over zod-internal `._type`). */
+export type StrictnessLevel = z.infer<typeof Strictness>
 
 const DatanetPolicy = z
   .object({

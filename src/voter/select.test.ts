@@ -51,6 +51,14 @@ describe('selectVotes (conservative: like>=8, dislike<=4)', () => {
     expect(votes[0].direction).toBe('up')
   })
 
+  it('boundary: score exactly at like→up, exactly at dislike→down, exactly between→skip', async () => {
+    const votes = await selectVotes('9', [pod('at-like'), pod('at-dislike'), pod('between')], rubric, 'conservative',
+      filter(), scorerOf({ 'at-like': 8, 'at-dislike': 4, between: 5 }))
+    expect(votes.find((v) => v.podId === 'at-like')!.direction).toBe('up')      // >= like(8)
+    expect(votes.find((v) => v.podId === 'at-dislike')!.direction).toBe('down') // <= dislike(4)
+    expect(votes.find((v) => v.podId === 'between')).toBeUndefined()            // 5 → skip
+  })
+
   it('tags every intent with kind=vote and the datanetId', async () => {
     const votes = await selectVotes('9', [pod('hi')], rubric, 'conservative', filter(), scorerOf({ hi: 10 }))
     expect(votes[0].kind).toBe('vote'); expect(votes[0].datanetId).toBe('9')
