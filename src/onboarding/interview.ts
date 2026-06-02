@@ -7,6 +7,7 @@ const STRICTNESS: StrictnessLevel[] = ['conservative', 'balanced', 'aggressive']
 const asStrictness = (s: string): StrictnessLevel =>
   (STRICTNESS as string[]).includes(s.trim()) ? (s.trim() as StrictnessLevel) : 'balanced'
 const numOr = (s: string, def: number): number => {
+  if (s.trim() === '') return def // blank → default (Number('') is 0, which would mask defaults)
   const n = Number(s)
   return Number.isFinite(n) ? n : def
 }
@@ -18,6 +19,10 @@ export async function runOnboarding(p: Prompter): Promise<OnboardingAnswers> {
 
   const idsRaw = await p.ask('Which datanet ids do you want to participate in? (comma-separated)', '9')
   const ids = idsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+  if (ids.length === 0) {
+    p.info('No datanet ids entered — defaulting to datanet 9.')
+    ids.push('9')
+  }
 
   const datanets: DatanetChoice[] = []
   for (const id of ids) {

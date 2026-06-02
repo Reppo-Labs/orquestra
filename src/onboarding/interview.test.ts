@@ -44,6 +44,17 @@ describe('runOnboarding', () => {
     expect(ans.datanets[0].mint).toBe(false)
     expect(ans.datanets[0].strictness).toBe('balanced') // default
     expect(ans.datanets[0].adapter).toBeUndefined()
-    expect(ans.lockReppo).toBeGreaterThanOrEqual(0)
+    expect(ans.lockReppo).toBe(0)              // default
+    expect(ans.voteGasEthMax).toBe(0.02)       // default applied (not 0)
+  })
+
+  it('numOr keeps numeric defaults even when the prompter returns raw blank strings', async () => {
+    const rawBlank: Prompter = { ask: async () => '', info: () => {} } // ignores def, returns ''
+    const ans = await runOnboarding(rawBlank)
+    expect(ans.datanets.map((d) => d.id)).toEqual(['9']) // zero ids → defaults to 9
+    expect(ans.voteGasEthMax).toBe(0.02)       // blank → def, not 0
+    expect(ans.mintGasEthMax).toBe(0.05)
+    expect(ans.cadenceHours).toBe(6)
+    expect(ans.lockReppo).toBe(0)
   })
 })
