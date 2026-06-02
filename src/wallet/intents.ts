@@ -20,6 +20,8 @@ export interface MintIntent {
   datasetPath: string
   /** optional REPPO cost estimate for budgeting; 0 if mint is gas-only. */
   estReppoCost?: number
+  /** scorer's 1-10 quality score; carried for downstream digest/audit. */
+  selfScore?: number
 }
 
 export interface ExecResult {
