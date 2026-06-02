@@ -10,6 +10,10 @@ export interface DatanetRubric {
   publisherSpec: string
   /** onboardingVoters — how to score pods 1-10 (vote rubric). */
   voterRubric: string
+  /** Derived capability (two-tier model): true when a voter rubric is present. */
+  canVote: boolean
+  /** Derived capability: true when a publisher spec is present (a data adapter is checked separately by the minter). */
+  canMint: boolean
   status: string
   economics: {
     accessFeeReppo: number

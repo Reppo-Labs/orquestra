@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { type DatanetRubric, RubricUnavailableError } from './types.js'
 
 const num = (v: unknown): number => {
-  const n = typeof v === 'string' ? Number(v) : (v as number)
+  const n = Number(v)
   return Number.isFinite(n) ? n : 0
 }
 
@@ -46,6 +46,8 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
     goal,
     publisherSpec,
     voterRubric,
+    canVote: voterRubric !== '',
+    canMint: publisherSpec !== '',
     status: m.status ?? 'UNKNOWN',
     economics: {
       accessFeeReppo: num(m.accessFeeREPPO),
