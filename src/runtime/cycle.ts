@@ -26,6 +26,8 @@ export interface DatanetReport {
   datanetId: string
   votes: ExecResult[]
   mints: ExecResult[]
+  /** set when this datanet was skipped due to an error (rubric unavailable, RPC failure, …). */
+  error?: string
 }
 export type CycleReport = DatanetReport[]
 
@@ -38,30 +40,40 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
     if (datanetId === '*') continue
     if (!policy.vote && !policy.mint) continue
-    const rubric = await deps.getRubric(datanetId)
     const votes: ExecResult[] = []
     const mints: ExecResult[] = []
 
-    if (policy.vote && rubric.canVote) {
-      const { pods, filter } = await deps.getPodsAndFilter(datanetId)
-      const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
-      for (const intent of intents) votes.push(await deps.executor.executeVote(intent))
-    }
+    // Per-datanet isolation: a failure here (RPC error, rubric unavailable on an
+    // older reppo CLI, a flaky adapter) skips THIS datanet and is recorded — it
+    // never aborts the whole cycle or the other datanets.
+    try {
+      const rubric = await deps.getRubric(datanetId)
 
-    if (policy.mint && policy.adapter && rubric.canMint) {
-      const adapter = deps.getAdapter(policy.adapter)
-      if (adapter) {
-        const candidates = await adapter.discover({ datanetId, rubric, topN: deps.topN })
-        const seenKeys = await deps.seenKeysFor(datanetId)
-        const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
-        const intents = await selectMints(datanetId, candidates, rubric, {
-          dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
-        })
-        for (const intent of intents) mints.push(await deps.executor.executeMint(intent))
+      if (policy.vote && rubric.canVote) {
+        const { pods, filter } = await deps.getPodsAndFilter(datanetId)
+        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
+        for (const intent of intents) votes.push(await deps.executor.executeVote(intent))
       }
-    }
 
-    report.push({ datanetId, votes, mints })
+      if (policy.mint && policy.adapter && rubric.canMint) {
+        const adapter = deps.getAdapter(policy.adapter)
+        if (adapter) {
+          const candidates = await adapter.discover({ datanetId, rubric, topN: deps.topN })
+          const seenKeys = await deps.seenKeysFor(datanetId)
+          const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
+          const intents = await selectMints(datanetId, candidates, rubric, {
+            dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
+          })
+          for (const intent of intents) mints.push(await deps.executor.executeMint(intent))
+        }
+      }
+
+      report.push({ datanetId, votes, mints })
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e)
+      console.error(`orquestra: datanet ${datanetId} skipped — ${error}`)
+      report.push({ datanetId, votes, mints, error })
+    }
   }
   return report
 }

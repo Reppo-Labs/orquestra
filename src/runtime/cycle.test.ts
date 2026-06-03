@@ -84,4 +84,19 @@ describe('runCycle', () => {
     await runCycle(cfg, 'c3', d)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
   })
+
+  it('isolates a per-datanet failure: a throwing getRubric skips that datanet, others proceed', async () => {
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => {
+        if (id === '2') throw new Error('RPC rate limit')
+        return rubric({ datanetId: id })
+      }),
+    })
+    const report = await runCycle(config, 'c4', d) // must NOT reject
+    const d2 = report.find((r) => r.datanetId === '2')!
+    expect(d2.error).toMatch(/RPC rate limit/)
+    expect(d2.votes).toEqual([])
+    const d9 = report.find((r) => r.datanetId === '9')!
+    expect(d9.votes.length).toBeGreaterThan(0) // datanet 9 still processed
+  })
 })
