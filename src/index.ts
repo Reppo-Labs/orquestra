@@ -3,8 +3,9 @@ import { resolve } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { loadConfig } from './config/load.js'
 import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
-import { runOnboarding } from './onboarding/interview.js'
 import { buildStrategyConfig } from './onboarding/build.js'
+import { runConversationalOnboarding } from './onboarding/agent.js'
+import { listDatanetsJson } from './reppo/listDatanets.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -21,11 +22,25 @@ const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
 async function onboard(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true })
+  const apiKey = process.env.LLM_API_KEY ?? ''
+  if (!apiKey) {
+    console.error('orquestra: onboarding needs an LLM key — set LLM_PROVIDER + LLM_API_KEY and re-run.')
+    process.exitCode = 1
+    return
+  }
+  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
+  const model = resolveModel(provider, apiKey)
   const p = terminalPrompter()
   try {
-    const answers = await runOnboarding(p)
-    const config = buildStrategyConfig(answers)
-    persistOnboarding(DATA_DIR, config, answers.notes)
+    const answers = await runConversationalOnboarding({
+      model,
+      prompter: p,
+      listDatanets: () => listDatanetsJson(),
+      getDatanetDetails: async (id) => {
+        try { return await getDatanetRubric(id) } catch (e) { return { error: (e as Error).message } }
+      },
+    })
+    persistOnboarding(DATA_DIR, buildStrategyConfig(answers), answers.notes)
     p.info(`Saved strategy to ${DATA_DIR}. Run \`orquestra\` to start the node.`)
   } finally {
     p.close()

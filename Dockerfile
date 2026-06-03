@@ -18,4 +18,5 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 ENV ORQUESTRA_DATA_DIR=/data
 VOLUME /data
+# First-run configure requires -it AND valid LLM_* env vars (onboarding is conversational).
 ENTRYPOINT ["node", "dist/index.js"]
