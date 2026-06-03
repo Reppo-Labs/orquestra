@@ -24,10 +24,22 @@ export interface MintIntent {
   selfScore?: number
 }
 
+export interface ClaimIntent {
+  kind: 'claim'
+  datanetId: string
+  podId: string
+  epoch: number
+  /** unclaimed REPPO this (pod, epoch) is worth at claim time; recorded for PnL. */
+  reppoDue: number
+  idempotencyKey: string
+}
+
 export interface ExecResult {
   ok: boolean
   /** 'executed' | 'refused-budget' | 'error' */
   status: 'executed' | 'refused-budget' | 'error'
   txHash?: string
+  /** actual gas (ETH) when known; surfaced for the activity log. */
+  gasEth?: number
   detail?: string
 }
