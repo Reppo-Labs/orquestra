@@ -17,7 +17,23 @@ import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
 import { createLlmScorer } from './voter/score.js'
 import { runCycle, type CycleDeps } from './runtime/cycle.js'
+import { listPodsJson, deriveCurrentEpoch } from './reppo/listPods.js'
+import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
+
+async function fetchPodContent(url: string): Promise<string> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 15_000)
+  try {
+    const res = await fetch(url, { signal: ctrl.signal })
+    if (!res.ok) return ''
+    return (await res.text()).slice(0, 4000) // cap tokens
+  } catch {
+    return ''
+  } finally {
+    clearTimeout(t)
+  }
+}
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -61,6 +77,7 @@ async function start(): Promise<void> {
   // and runCycle calls startCycle on it — the single source of budget truth.
   const ledger = new BudgetLedger(DATA_DIR, config.budget)
   const executor = new WalletExecutor(defaultReppoCli, ledger)
+  const dedup = new DedupState(DATA_DIR)
   // Adapter registry — add new adapters here; routing is by adapter id from config.
   const adapters = [createHyperliquidAdapter()]
 
@@ -77,16 +94,29 @@ async function start(): Promise<void> {
     dataDir: DATA_DIR,
     topN: 12,
     getRubric: (id) => getDatanetRubric(id),
-    getPodsAndFilter: async () => ({ pods: [], filter: { currentEpoch: null, ownPodIds: [], votedPodIds: [] } }),
+    getPodsAndFilter: async (id) => {
+      const pods = await listPodsJson(id, { all: true })
+      const own = await listPodsJson(id, { all: false }).then((p) => p.map((x) => x.podId)).catch(() => [] as string[])
+      const currentEpoch = deriveCurrentEpoch(pods)
+      const voted = dedup.getVotedPodIds(id)
+      const ownSet = new Set(own), votedSet = new Set(voted)
+      for (const p of pods) {
+        const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
+        if (eligible && p.url) { const c = await fetchPodContent(p.url); if (c) p.description = `${p.name}\n\n${c}` }
+      }
+      return { pods, filter: { currentEpoch, ownPodIds: own, votedPodIds: voted } }
+    },
     getAdapter: (id) => adapters.find((a) => a.id === id),
     voteScorer: scorer,
     candidateScorer: {
       scoreCandidate: (c, r) =>
         scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name: c.podName, description: c.podDescription }, r),
     },
-    seenKeysFor: async () => new Set<string>(),
+    seenKeysFor: async (id) => new Set(dedup.getMintedKeys(id)),
     executor,
     ledger,
+    recordVote: (id, podId) => dedup.recordVote(id, podId),
+    recordMint: (id, key) => dedup.recordMint(id, key),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
