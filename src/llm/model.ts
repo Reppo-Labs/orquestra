@@ -7,9 +7,9 @@ import type { LanguageModel } from 'ai'
 export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus'
 
 /** Surplus Intelligence — an OpenAI-compatible discounted-inference marketplace
- *  (https://surplusintelligence.ai). Base path `/v1`, Bearer `inf_…` API key.
- *  Reached via the OpenAI client with a custom baseURL. */
-const SURPLUS_BASE_URL = 'https://surplusintelligence.ai/v1'
+ *  (https://www.surplusintelligence.ai). Bearer `inf_…` API key. The OpenAI
+ *  client appends `/chat/completions` to this base URL. */
+const SURPLUS_BASE_URL = 'https://www.surplusintelligence.ai/api/inference/v1'
 
 /** Resolve a model from any supported provider + the user's API key.
  *  "Optimize for inference" = the node runs its OWN inference on the user's
