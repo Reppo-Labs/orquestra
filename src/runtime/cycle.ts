@@ -20,6 +20,8 @@ export interface CycleDeps {
   seenKeysFor(datanetId: string): Promise<Set<string>>
   executor: WalletExecutor
   ledger: BudgetLedger
+  recordVote(datanetId: string, podId: string): void
+  recordMint(datanetId: string, canonicalKey: string): void
 }
 
 export interface DatanetReport {
@@ -52,7 +54,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if (policy.vote && rubric.canVote) {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
         const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
-        for (const intent of intents) votes.push(await deps.executor.executeVote(intent))
+        for (const intent of intents) {
+          const r = await deps.executor.executeVote(intent)
+          votes.push(r)
+          if (r.ok) deps.recordVote(datanetId, intent.podId)
+        }
       }
 
       if (policy.mint && policy.adapter && rubric.canMint) {
@@ -64,7 +70,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           const intents = await selectMints(datanetId, candidates, rubric, {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
           })
-          for (const intent of intents) mints.push(await deps.executor.executeMint(intent))
+          for (const intent of intents) {
+            const r = await deps.executor.executeMint(intent)
+            mints.push(r)
+            if (r.ok) deps.recordMint(datanetId, intent.canonicalKey)
+          }
         }
       }
 

@@ -50,6 +50,8 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
       executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
     } as unknown as CycleDeps['executor'],
     ledger: { startCycle: vi.fn() } as unknown as CycleDeps['ledger'],
+    recordVote: vi.fn(),
+    recordMint: vi.fn(),
     ...over,
   }
 }
@@ -98,5 +100,16 @@ describe('runCycle', () => {
     expect(d2.votes).toEqual([])
     const d9 = report.find((r) => r.datanetId === '9')!
     expect(d9.votes.length).toBeGreaterThan(0) // datanet 9 still processed
+  })
+
+  it('records confirmed vote and mint via recordVote/recordMint on r.ok', async () => {
+    const d = deps()
+    await runCycle(config, 'c5', d)
+    // datanet 9 has vote:true + mint:true + adapter → both should be recorded
+    expect(d.recordVote).toHaveBeenCalledWith('9', 'p1')
+    expect(d.recordMint).toHaveBeenCalledWith('9', 'k1')
+    // datanet 2 has vote:true, mint:false → vote recorded, no mint call
+    expect(d.recordVote).toHaveBeenCalledWith('2', 'p1')
+    expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
 })
