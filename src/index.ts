@@ -82,12 +82,23 @@ async function start(): Promise<void> {
   const adapters = [createHyperliquidAdapter()]
 
   if (config.stake.lockReppo > 0) {
-    const r = await executor.lock({
-      amountReppo: config.stake.lockReppo,
-      durationSeconds: config.stake.lockDurationDays * 86400,
-      idempotencyKey: `lock-${config.stake.lockReppo}-${config.stake.lockDurationDays}`,
-    })
-    console.error(`orquestra: veREPPO lock ${r.status}${r.txHash ? ` (${r.txHash})` : ''}`)
+    // Idempotent: the veREPPO lock is one-time. If the wallet already holds veREPPO
+    // (locked on a prior run), skip — re-locking would just error every restart.
+    const existing = await queryBalanceJson().catch(() => null)
+    if (existing && existing.veReppo > 0) {
+      console.error(`orquestra: already holding ${existing.veReppo} veREPPO — skipping lock.`)
+    } else {
+      const r = await executor.lock({
+        amountReppo: config.stake.lockReppo,
+        durationSeconds: config.stake.lockDurationDays * 86400,
+        idempotencyKey: `lock-${config.stake.lockReppo}-${config.stake.lockDurationDays}`,
+      })
+      console.error(
+        `orquestra: veREPPO lock ${r.status}` +
+          (r.txHash ? ` (${r.txHash})` : '') +
+          (r.detail ? ` — ${r.detail}` : ''),
+      )
+    }
   }
 
   const deps: CycleDeps = {
