@@ -33,6 +33,6 @@ export function validateAnswers(raw: unknown): ValidateResult {
     buildStrategyConfig(parsed.data) // throws if the assembled config is invalid
     return { ok: true, answers: parsed.data }
   } catch (e) {
-    return { ok: false, error: (e as Error).message }
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }

@@ -41,5 +41,9 @@ export async function listDatanetsJson(): Promise<DatanetSummary[]> {
   const { stdout } = await execFileAsync('reppo', ['list', 'datanets', '--status', 'ACTIVE', '--json'], {
     env: { ...process.env, REPPO_NETWORK: process.env.REPPO_NETWORK ?? 'mainnet' }, timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
   })
-  return parseDatanetList(JSON.parse(stdout))
+  try {
+    return parseDatanetList(JSON.parse(stdout))
+  } catch {
+    throw new Error(`listDatanetsJson: could not parse reppo CLI output: ${stdout.slice(0, 200)}`)
+  }
 }

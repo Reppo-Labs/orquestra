@@ -54,7 +54,11 @@ export async function runConversationalOnboarding(deps: OnboardingAgentDeps): Pr
   ]
   deps.prompter.info('orquestra onboarding — chat with the assistant. Type "quit" to cancel.\n')
 
+  // Hard cap on conversation turns so a model that never finalizes can't spin forever.
+  let turn = 0
+  const MAX_TURNS = 30
   while (!finalAnswers) {
+    if (++turn > MAX_TURNS) throw new Error('onboarding: assistant did not finalize within the turn limit — aborting')
     const res = await generateText({ model: deps.model, tools, messages, maxSteps: 6 })
     messages.push(...res.response.messages)
     if (res.text.trim()) deps.prompter.info(`\nassistant: ${res.text}\n`)
