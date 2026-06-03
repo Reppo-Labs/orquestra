@@ -68,4 +68,12 @@ describe('onboarding tools', () => {
     const res = await tools.get_wallet_balance.execute({}, { toolCallId: 'b', messages: [] } as never)
     expect((res as { reppo: number }).reppo).toBe(1234.5)
   })
+
+  it('a failing tool returns an error instead of throwing (never crashes onboarding)', async () => {
+    const d: OnboardingAgentDeps = { ...deps(dummy), getBalance: vi.fn(async () => { throw new Error('MISSING_ADDRESS') }) }
+    const tools = buildOnboardingTools(d, () => {})
+    const res = await tools.get_wallet_balance.execute({}, { toolCallId: 'e', messages: [] } as never)
+    expect((res as { error?: string }).error).toMatch(/MISSING_ADDRESS/)
+    expect((res as { hint?: string }).hint).toMatch(/REPPO_PRIVATE_KEY/)
+  })
 })

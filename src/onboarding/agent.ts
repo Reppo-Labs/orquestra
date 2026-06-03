@@ -27,17 +27,40 @@ export function buildOnboardingTools(deps: OnboardingAgentDeps, onFinalize: (a: 
     list_datanets: tool({
       description: 'List active Reppo datanets (id, name, description, fees, emissions, vote volume).',
       parameters: z.object({}),
-      execute: async () => ({ datanets: await deps.listDatanets() }),
+      // Tool errors are RETURNED (not thrown) so a CLI/network failure becomes a
+      // recoverable message the assistant relays — a tool must never crash onboarding.
+      execute: async () => {
+        try {
+          return { datanets: await deps.listDatanets() }
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : String(e) }
+        }
+      },
     }),
     get_datanet_details: tool({
       description: "Get a datanet's goal + publisher/voter rubric + capability.",
       parameters: z.object({ datanetId: z.string() }),
-      execute: async ({ datanetId }) => deps.getDatanetDetails(datanetId),
+      execute: async ({ datanetId }) => {
+        try {
+          return await deps.getDatanetDetails(datanetId)
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : String(e) }
+        }
+      },
     }),
     get_wallet_balance: tool({
       description: "Get the operator's on-chain wallet balances (ETH, REPPO, veREPPO, USDC) — use this to size the lock/budget from their holdings.",
       parameters: z.object({}),
-      execute: async () => deps.getBalance(),
+      execute: async () => {
+        try {
+          return await deps.getBalance()
+        } catch (e) {
+          return {
+            error: e instanceof Error ? e.message : String(e),
+            hint: 'Wallet balance needs REPPO_PRIVATE_KEY set in the environment. Ask the operator to set it, or to enter the amount directly.',
+          }
+        }
+      },
     }),
     finalize: tool({
       description: 'Validate + save the operator-confirmed strategy. Call only after the operator confirms.',
