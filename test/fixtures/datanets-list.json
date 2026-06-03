@@ -1,0 +1,7 @@
+{
+  "network": "mainnet",
+  "datanets": [
+    { "id": "9", "name": "TradingGym AI", "status": "ACTIVE", "accessFeeREPPO": "50", "emissionsPerEpochREPPO": "500", "upVoteVolume": "9668144", "downVoteVolume": "1568175", "subnetDescription": "HL perp training data." },
+    { "id": "2", "name": "Geopolitical Flashpoint and Misinfo Detection", "status": "ACTIVE", "accessFeeREPPO": "100", "emissionsPerEpochREPPO": "3000", "upVoteVolume": "136169069", "downVoteVolume": "14213857" }
+  ]
+}
