@@ -7,6 +7,8 @@ export interface VoterPod {
   validityEpoch: string
   name: string
   description: string
+  /** IPFS content URL (the pod's dataset); used to enrich `description` for scoring. */
+  url?: string
 }
 
 /** Pre-rubric filter inputs (from the vote-filter the prefetch/CLI derives). */

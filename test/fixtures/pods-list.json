@@ -1,0 +1,6 @@
+{ "scope": "all", "network": "mainnet", "count": 3, "datanet": "9",
+  "pods": [
+    { "podId": "508", "name": "HotBot v4 — Signals Jun01-03", "creator": "0xother", "datanetId": "9", "upVotes": "0", "downVotes": "0", "validityEpoch": "101", "url": "https://gateway.pinata.cloud/ipfs/bafkA" },
+    { "podId": "492", "name": "HL perps, 0x9a15..37e6: 74 trades", "creator": "0xme", "datanetId": "9", "upVotes": "2", "downVotes": "0", "validityEpoch": "101", "url": "https://gateway.pinata.cloud/ipfs/bafkB" },
+    { "podId": "330", "name": "old pod", "creator": "0xother", "datanetId": "9", "upVotes": "1", "downVotes": "0", "validityEpoch": "98", "url": "https://gateway.pinata.cloud/ipfs/bafkC" }
+  ] }
