@@ -7,6 +7,12 @@ import type { Prompter } from '../onboarding/types.js'
  *  returns the provided default. */
 export function terminalPrompter(): Prompter & { close(): void } {
   const rl = createInterface({ input: stdin, output: stdout })
+  // readline intercepts SIGINT during a prompt; without this, Ctrl-C mid-onboarding
+  // is swallowed and the process hangs. Close + exit (130 = terminated by SIGINT).
+  rl.on('SIGINT', () => {
+    rl.close()
+    process.exit(130)
+  })
   return {
     async ask(question: string, def?: string): Promise<string> {
       const suffix = def !== undefined && def !== '' ? ` [${def}]` : ''

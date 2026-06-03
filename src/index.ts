@@ -126,13 +126,23 @@ async function start(): Promise<void> {
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
-  startScheduler(config.cadenceHours, async () => {
+  const handle = startScheduler(config.cadenceHours, async () => {
     const cycleId = new Date().toISOString()
     const report = await runCycle(config, cycleId, deps)
     const v = report.reduce((a, r) => a + r.votes.length, 0)
     const m = report.reduce((a, r) => a + r.mints.length, 0)
     console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints executed`)
   })
+
+  // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
+  // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler + exit.
+  const shutdown = (sig: string): void => {
+    console.error(`\norquestra: received ${sig} — stopping scheduler and exiting.`)
+    handle.stop()
+    process.exit(0)
+  }
+  process.once('SIGINT', () => shutdown('SIGINT'))
+  process.once('SIGTERM', () => shutdown('SIGTERM'))
 }
 
 const cmd = process.argv[2]
