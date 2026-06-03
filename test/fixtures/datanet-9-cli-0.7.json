@@ -1,0 +1,25 @@
+{
+  "datanetId": "9",
+  "network": "base",
+  "valid": true,
+  "accessFeeREPPO": { "raw": 50, "formatted": "50" },
+  "metadata": {
+    "subnetUuid": "00000000-0000-0000-0000-000000000009",
+    "name": "TradingGym AI",
+    "description": "Personal RL gym and continuously updated training data marketplace for autonomous AI trading agents.",
+    "status": "ACTIVE",
+    "nativeToken": {
+      "address": "0xREPPOADDRESS",
+      "symbol": "REPPO",
+      "decimals": 18
+    },
+    "emissionsPerEpochREPPO": 500,
+    "emissionsPerEpochPrimaryToken": 0,
+    "upVoteVolume": 9668144,
+    "downVoteVolume": 1568175,
+    "onboardingPublishers": "Share your Hyperliquid perp trading data. Include trade details, signal, outcome, and verification.",
+    "onboardingVoters": "Score Pods on how useful the data is for training autonomous trading agents on Hyperliquid perps.",
+    "thumbnailUrl": "https://example.com/thumb.png",
+    "isABTestingSubnet": false
+  }
+}
