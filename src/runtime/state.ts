@@ -2,9 +2,9 @@
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
-interface Shape { votedPodIds: Record<string, string[]>; mintedKeys: Record<string, string[]> }
+interface Shape { votedPodIds: Record<string, string[]>; mintedKeys: Record<string, string[]>; claimedKeys: Record<string, string[]> }
 const FILE = 'vote-state.json'
-const fresh = (): Shape => ({ votedPodIds: {}, mintedKeys: {} })
+const fresh = (): Shape => ({ votedPodIds: {}, mintedKeys: {}, claimedKeys: {} })
 
 /** Persisted dedup state: which pods we've voted on + which dataset keys we've
  *  minted, per datanet. Prevents re-voting (gas/power waste) + re-minting. */
@@ -15,7 +15,11 @@ export class DedupState {
     if (!existsSync(path)) { this.state = fresh(); return }
     try {
       const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<Shape>
-      this.state = { votedPodIds: parsed.votedPodIds ?? {}, mintedKeys: parsed.mintedKeys ?? {} }
+      this.state = {
+        votedPodIds: parsed.votedPodIds ?? {},
+        mintedKeys: parsed.mintedKeys ?? {},
+        claimedKeys: parsed.claimedKeys ?? {},
+      }
     } catch {
       this.state = fresh() // corrupt → start empty (worst case a re-vote attempt, which the chain dedups by epoch)
     }
@@ -24,6 +28,8 @@ export class DedupState {
   getMintedKeys(datanetId: string): string[] { return this.state.mintedKeys[datanetId] ?? [] }
   recordVote(datanetId: string, podId: string): void { this.add(this.state.votedPodIds, datanetId, podId) }
   recordMint(datanetId: string, key: string): void { this.add(this.state.mintedKeys, datanetId, key) }
+  getClaimedKeys(datanetId: string): string[] { return this.state.claimedKeys[datanetId] ?? [] }
+  recordClaim(datanetId: string, key: string): void { this.add(this.state.claimedKeys, datanetId, key) }
   private add(map: Record<string, string[]>, dn: string, v: string): void {
     // Update in-memory FIRST so reads stay correct this session even if the disk
     // write fails; persistence is best-effort and must never throw into the caller

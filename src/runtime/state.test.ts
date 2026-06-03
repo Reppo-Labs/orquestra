@@ -1,6 +1,6 @@
 // src/runtime/state.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DedupState } from './state.js'
@@ -33,5 +33,21 @@ describe('DedupState', () => {
     const s = new DedupState(dir)
     expect(s.getVotedPodIds('9')).toEqual([])
     expect(s.getMintedKeys('9')).toEqual([])
+  })
+})
+
+describe('DedupState claimedKeys', () => {
+  it('records and reads claimed (pod:epoch) keys per datanet', () => {
+    const s = new DedupState(dir)
+    s.recordClaim('9', '1:101')
+    s.recordClaim('9', '2:101')
+    expect(new Set(s.getClaimedKeys('9'))).toEqual(new Set(['1:101', '2:101']))
+    expect(s.getClaimedKeys('2')).toEqual([])
+  })
+
+  it('persists claimedKeys to disk', () => {
+    new DedupState(dir).recordClaim('9', '1:101')
+    const onDisk = JSON.parse(readFileSync(join(dir, 'vote-state.json'), 'utf-8'))
+    expect(onDisk.claimedKeys['9']).toContain('1:101')
   })
 })
