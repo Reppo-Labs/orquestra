@@ -10,6 +10,7 @@ export interface LockArgs { amountReppo: number; durationSeconds: number; idempo
 export interface MintArgs {
   datanetId: string; podName: string; podDescription: string; datasetPath: string; idempotencyKey: string
 }
+export interface ClaimEmissionsArgs { podId: string; epoch: number; idempotencyKey: string }
 /** Result of an on-chain action: tx hash + gas spent (ETH), parsed from the CLI's --json output. */
 export interface ChainResult { txHash: string; gasEth: number }
 
@@ -18,6 +19,7 @@ export interface ReppoCli {
   lock(args: LockArgs): Promise<ChainResult>
   vote(args: VoteArgs): Promise<ChainResult>
   mintPod(args: MintArgs): Promise<ChainResult>
+  claimEmissions(args: ClaimEmissionsArgs): Promise<ChainResult>
 }
 
 async function run(args: string[]): Promise<ChainResult> {
@@ -38,4 +40,5 @@ export const defaultReppoCli: ReppoCli = {
   lock: (a) => run(['lock', '--duration', String(a.durationSeconds), '--idempotency-key', a.idempotencyKey, String(a.amountReppo)]),
   vote: (a) => run(['vote', '--pod', a.podId, '--direction', a.direction, '--idempotency-key', a.idempotencyKey]),
   mintPod: (a) => run(['mint-pod', '--datanet', a.datanetId, '--pod-name', a.podName, '--pod-description', a.podDescription, '--dataset', a.datasetPath, '--idempotency-key', a.idempotencyKey, '--agree-to-terms']),
+  claimEmissions: (a) => run(['claim-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
 }
