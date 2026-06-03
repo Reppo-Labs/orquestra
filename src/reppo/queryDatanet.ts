@@ -1,6 +1,7 @@
 // src/reppo/queryDatanet.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { reppoEnv, withRpcUrl } from './exec.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -9,8 +10,8 @@ const execFileAsync = promisify(execFile)
 export async function queryDatanetJson(datanetId: string): Promise<unknown> {
   const { stdout } = await execFileAsync(
     'reppo',
-    ['query', 'datanet', datanetId, '--json'],
-    { env: { ...process.env, REPPO_NETWORK: process.env.REPPO_NETWORK ?? 'mainnet' }, timeout: 60_000 },
+    withRpcUrl(['query', 'datanet', datanetId, '--json']),
+    { env: reppoEnv(), timeout: 60_000 },
   )
   return JSON.parse(stdout)
 }

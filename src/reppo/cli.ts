@@ -1,6 +1,7 @@
 // src/reppo/cli.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { reppoEnv, withRpcUrl } from './exec.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -20,8 +21,8 @@ export interface ReppoCli {
 }
 
 async function run(args: string[]): Promise<ChainResult> {
-  const { stdout } = await execFileAsync('reppo', [...args, '--json'], {
-    env: { ...process.env, REPPO_NETWORK: process.env.REPPO_NETWORK ?? 'mainnet' },
+  const { stdout } = await execFileAsync('reppo', withRpcUrl([...args, '--json']), {
+    env: reppoEnv(),
     timeout: 120_000,
   })
   const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
