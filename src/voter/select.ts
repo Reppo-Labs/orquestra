@@ -28,7 +28,17 @@ export async function selectVotes(
 
   const intents: VoteIntent[] = []
   for (const pod of eligible) {
-    const { score, reason } = await scorer.scorePod(pod, rubric)
+    // Per-pod isolation: a single pod's scoring failure (e.g. the model returns
+    // output that doesn't match the score schema) skips THAT pod, not the whole
+    // datanet — the other pods still get scored + voted.
+    let result: { score: number; reason: string }
+    try {
+      result = await scorer.scorePod(pod, rubric)
+    } catch (e) {
+      console.error(`orquestra: pod ${pod.podId} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+      continue
+    }
+    const { score, reason } = result
     if (score >= like) {
       intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'up', conviction: score, reason })
     } else if (score <= dislike) {

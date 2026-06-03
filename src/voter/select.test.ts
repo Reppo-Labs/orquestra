@@ -63,4 +63,15 @@ describe('selectVotes (conservative: like>=8, dislike<=4)', () => {
     const votes = await selectVotes('9', [pod('hi')], rubric, 'conservative', filter(), scorerOf({ hi: 10 }))
     expect(votes[0].kind).toBe('vote'); expect(votes[0].datanetId).toBe('9')
   })
+
+  it('per-pod isolation: a scorer that throws on one pod skips it, others still vote', async () => {
+    const flaky: PodScorer = {
+      scorePod: async (p) => {
+        if (p.podId === 'bad') throw new Error('No object generated: response did not match schema')
+        return { score: 9, reason: 'ok' }
+      },
+    }
+    const votes = await selectVotes('9', [pod('bad'), pod('good')], rubric, 'conservative', filter(), flaky)
+    expect(votes.map((v) => v.podId)).toEqual(['good']) // bad skipped, good voted, no throw
+  })
 })
