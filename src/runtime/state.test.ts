@@ -1,6 +1,6 @@
 // src/runtime/state.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DedupState } from './state.js'
@@ -23,8 +23,15 @@ describe('DedupState', () => {
     expect(s2.getMintedKeys('9')).toEqual(['abc123'])
     expect(s2.getVotedPodIds('2')).toEqual(['12'])
   })
-  it('tolerates a missing/corrupt state file (starts empty)', () => {
+  it('starts empty when the state file is missing', () => {
     const s = new DedupState(dir)
+    expect(s.getMintedKeys('9')).toEqual([])
+  })
+
+  it('starts empty (does not throw) when the state file is corrupt', () => {
+    writeFileSync(join(dir, 'vote-state.json'), '{ not valid json')
+    const s = new DedupState(dir)
+    expect(s.getVotedPodIds('9')).toEqual([])
     expect(s.getMintedKeys('9')).toEqual([])
   })
 })

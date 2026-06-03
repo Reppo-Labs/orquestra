@@ -112,4 +112,19 @@ describe('runCycle', () => {
     expect(d.recordVote).toHaveBeenCalledWith('2', 'p1')
     expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
+
+  it('does NOT record a vote refused by budget, but DOES record one that errored (possibly landed)', async () => {
+    const refused = deps({
+      executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn(async () => ({ ok: false, status: 'refused-budget' })) } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(config, 'c6', refused)
+    expect(refused.recordVote).not.toHaveBeenCalled()
+    expect(refused.recordMint).not.toHaveBeenCalled()
+
+    const errored = deps({
+      executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'error', detail: 'no txHash' })), executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })) } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(config, 'c7', errored)
+    expect(errored.recordVote).toHaveBeenCalledWith('9', 'p1') // errored vote recorded → won't re-vote
+  })
 })

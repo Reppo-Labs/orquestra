@@ -57,7 +57,10 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         for (const intent of intents) {
           const r = await deps.executor.executeVote(intent)
           votes.push(r)
-          if (r.ok) deps.recordVote(datanetId, intent.podId)
+          // Record unless the budget manager CLEARLY refused (never submitted). An
+          // 'error' may mean the tx landed but we couldn't confirm the hash — record
+          // it so we don't re-vote (double-spend) next cycle. Fail-safe toward not repeating.
+          if (r.status !== 'refused-budget') deps.recordVote(datanetId, intent.podId)
         }
       }
 
@@ -73,7 +76,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           for (const intent of intents) {
             const r = await deps.executor.executeMint(intent)
             mints.push(r)
-            if (r.ok) deps.recordMint(datanetId, intent.canonicalKey)
+            // Same fail-safe as votes: record unless clearly refused, so a landed-but-
+            // unconfirmed mint isn't re-attempted next cycle.
+            if (r.status !== 'refused-budget') deps.recordMint(datanetId, intent.canonicalKey)
           }
         }
       }

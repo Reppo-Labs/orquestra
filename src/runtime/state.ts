@@ -25,7 +25,15 @@ export class DedupState {
   recordVote(datanetId: string, podId: string): void { this.add(this.state.votedPodIds, datanetId, podId) }
   recordMint(datanetId: string, key: string): void { this.add(this.state.mintedKeys, datanetId, key) }
   private add(map: Record<string, string[]>, dn: string, v: string): void {
-    const set = new Set(map[dn] ?? []); set.add(v); map[dn] = [...set]; this.save()
+    // Update in-memory FIRST so reads stay correct this session even if the disk
+    // write fails; persistence is best-effort and must never throw into the caller
+    // (a throw here would crash the cycle and orphan a just-landed on-chain action).
+    const set = new Set(map[dn] ?? []); set.add(v); map[dn] = [...set]
+    try {
+      this.save()
+    } catch (e) {
+      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
+    }
   }
   private save(): void {
     const path = join(this.dataDir, FILE)

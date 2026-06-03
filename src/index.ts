@@ -96,7 +96,12 @@ async function start(): Promise<void> {
     getRubric: (id) => getDatanetRubric(id),
     getPodsAndFilter: async (id) => {
       const pods = await listPodsJson(id, { all: true })
-      const own = await listPodsJson(id, { all: false }).then((p) => p.map((x) => x.podId)).catch(() => [] as string[])
+      const own = await listPodsJson(id, { all: false })
+        .then((p) => p.map((x) => x.podId))
+        .catch((e) => {
+          console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
+          return [] as string[]
+        })
       const currentEpoch = deriveCurrentEpoch(pods)
       const voted = dedup.getVotedPodIds(id)
       const ownSet = new Set(own), votedSet = new Set(voted)
