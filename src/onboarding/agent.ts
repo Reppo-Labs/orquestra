@@ -3,6 +3,7 @@ import { generateText, tool, type LanguageModel, type CoreMessage } from 'ai'
 import { z } from 'zod'
 import type { Prompter, OnboardingAnswers } from './types.js'
 import type { DatanetSummary } from '../reppo/listDatanets.js'
+import type { WalletBalance } from '../reppo/queryBalance.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import { OnboardingAnswersSchema, validateAnswers } from './schema.js'
 
@@ -11,12 +12,14 @@ export interface OnboardingAgentDeps {
   prompter: Prompter
   listDatanets(): Promise<DatanetSummary[]>
   getDatanetDetails(datanetId: string): Promise<DatanetRubric | { error: string }>
+  getBalance(): Promise<WalletBalance>
 }
 
 const SYSTEM = `You are Orquestra's onboarding assistant. Help the operator configure a self-hosted Reppo agent node: which datanets to VOTE and/or MINT on, how much REPPO to lock (veREPPO voting power) and for how long, budget caps (vote gas, votes/cycle, mint REPPO, mint gas), the budget horizon, and how often the node runs (cadence hours).
 Use list_datanets to answer "what's available" with live data. Use get_datanet_details to explain what a datanet wants and whether minting is possible.
 IMPORTANT: minting requires a data adapter. Today only datanet 9 (TradingGym AI) has one ("hyperliquid"); for every other datanet set mint=false (vote-only).
-You may RECOMMEND choices from the catalog economics, but always confirm each decision with the operator before finishing. When the operator confirms, call finalize with the complete structured answers. Keep messages short.`
+You may RECOMMEND choices from the catalog economics, but always confirm each decision with the operator before finishing. When the operator confirms, call finalize with the complete structured answers. Keep messages short.
+Use get_wallet_balance to look up the operator's REPPO/veREPPO/ETH/USDC holdings when they express amounts relative to their balance (e.g. '80% of my REPPO').`
 
 /** Build the agent's tools. onFinalize is called with validated answers when the model finalizes. */
 export function buildOnboardingTools(deps: OnboardingAgentDeps, onFinalize: (a: OnboardingAnswers) => void) {
@@ -30,6 +33,11 @@ export function buildOnboardingTools(deps: OnboardingAgentDeps, onFinalize: (a: 
       description: "Get a datanet's goal + publisher/voter rubric + capability.",
       parameters: z.object({ datanetId: z.string() }),
       execute: async ({ datanetId }) => deps.getDatanetDetails(datanetId),
+    }),
+    get_wallet_balance: tool({
+      description: "Get the operator's on-chain wallet balances (ETH, REPPO, veREPPO, USDC) — use this to size the lock/budget from their holdings.",
+      parameters: z.object({}),
+      execute: async () => deps.getBalance(),
     }),
     finalize: tool({
       description: 'Validate + save the operator-confirmed strategy. Call only after the operator confirms.',

@@ -1,0 +1,10 @@
+{
+  "address": "0xDeAdBeEf000000000000000000000000DeAdBeEf",
+  "network": "mainnet",
+  "balances": {
+    "eth": { "raw": "50000000000000000", "formatted": "0.05" },
+    "reppo": { "raw": "1234500000000000000000", "formatted": "1234.5" },
+    "veReppo": { "raw": "500000000000000000000", "formatted": "500" },
+    "usdc": { "raw": "10000000", "formatted": "10" }
+  }
+}

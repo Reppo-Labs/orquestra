@@ -17,6 +17,7 @@ function deps(model: OnboardingAgentDeps['model']): OnboardingAgentDeps {
     prompter: silentPrompter,
     listDatanets: vi.fn(async () => [{ id: '9', name: 'TradingGym AI', status: 'ACTIVE', description: 'HL', accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1 }]),
     getDatanetDetails: vi.fn(async () => ({ datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v', canVote: true, canMint: true, status: 'ACTIVE', economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' } })),
+    getBalance: vi.fn(async () => ({ eth: 0.05, reppo: 1234.5, veReppo: 500, usdc: 10 })),
   }
 }
 
@@ -60,5 +61,11 @@ describe('onboarding tools', () => {
     const tools = buildOnboardingTools(deps(dummy), () => {})
     const res = await tools.list_datanets.execute({}, { toolCallId: 'c', messages: [] } as never)
     expect((res as { datanets: { id: string }[] }).datanets[0].id).toBe('9')
+  })
+
+  it('get_wallet_balance returns the injected balance', async () => {
+    const tools = buildOnboardingTools(deps(dummy), () => {})
+    const res = await tools.get_wallet_balance.execute({}, { toolCallId: 'b', messages: [] } as never)
+    expect((res as { reppo: number }).reppo).toBe(1234.5)
   })
 })

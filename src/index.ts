@@ -6,6 +6,7 @@ import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
 import { listDatanetsJson } from './reppo/listDatanets.js'
+import { queryBalanceJson } from './reppo/queryBalance.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -39,6 +40,7 @@ async function onboard(): Promise<void> {
       getDatanetDetails: async (id) => {
         try { return await getDatanetRubric(id) } catch (e) { return { error: (e as Error).message } }
       },
+      getBalance: () => queryBalanceJson(),
     })
     persistOnboarding(DATA_DIR, buildStrategyConfig(answers), answers.notes)
     p.info(`Saved strategy to ${DATA_DIR}. Run \`orquestra\` to start the node.`)
