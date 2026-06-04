@@ -34,6 +34,7 @@ describe('snapshot', () => {
       balance: async () => { throw new Error('rpc') },          // fails → keep prior 9s
       votingPower: async () => ({ power: 600, lockupCount: 2 }),
       emissionsDue: async () => ({ totalReppo: 0, pods: [] }),
+      epoch: async () => ({ epoch: 97, epochStart: 1780493161, epochDurationSeconds: 172800, secondsRemaining: 72636 }),
       budget: () => snap().budget,
     })
     expect(result.balance.reppo).toBe(9)        // retained from prior snapshot

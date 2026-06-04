@@ -49,7 +49,9 @@ async function load() {
   const p = pnlRes.pnl, snap = pnlRes.snapshot
   document.getElementById('sub').textContent = `· ${cfg.cadenceHours}h cadence · claim ${cfg.claimEmissions ? 'on' : 'off'}`
   document.getElementById('asof').textContent = snap ? `as of ${new Date(snap.ts).toLocaleString()}` : 'PnL pending first cycle'
+  const epochLabel = (e) => e ? `${e.epoch} · ${Math.max(0, Math.round(e.secondsRemaining / 3600))}h left` : '—'
   const cards = [
+    ['Epoch', snap ? epochLabel(snap.epoch) : '—'],
     ['Net REPPO', p ? `<span class="${sign(p.netReppo)}">${fmt(p.netReppo)}</span>` : '—'],
     ['Earned', p ? fmt(p.earnedReppo) : '—'], ['Claimed', p ? fmt(p.claimedReppo) : '—'],
     ['Claimable', p ? fmt(p.claimableReppo) : '—'], ['Spent (mint)', p ? fmt(p.spentReppo) : '—'],

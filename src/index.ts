@@ -24,6 +24,7 @@ import { appendActivity } from './dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, type SnapshotBudget } from './dashboard/snapshot.js'
 import { queryVotingPowerJson } from './reppo/queryVotingPower.js'
 import { queryEmissionsDueJson } from './reppo/queryEmissionsDue.js'
+import { queryEpochJson } from './reppo/queryEpoch.js'
 import { startDashboard } from './dashboard/server.js'
 import { backfillActivityLog } from './dashboard/backfill.js'
 
@@ -170,6 +171,7 @@ async function start(): Promise<void> {
         balance: () => queryBalanceJson(),
         votingPower: () => queryVotingPowerJson(),
         emissionsDue: () => queryEmissionsDueJson(),
+        epoch: () => queryEpochJson(),
         budget: () => budget,
       })
       writeSnapshot(DATA_DIR, snap)

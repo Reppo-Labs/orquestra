@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { WalletBalance } from '../reppo/queryBalance.js'
 import type { VotingPower } from '../reppo/queryVotingPower.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
+import type { EpochInfo } from '../reppo/queryEpoch.js'
 import type { BudgetCaps } from '../wallet/ledger.js'
 
 export interface SnapshotBudget {
@@ -20,6 +21,8 @@ export interface Snapshot {
   votingPower: VotingPower
   emissionsDue: EmissionsDue
   budget: SnapshotBudget
+  /** authoritative current on-chain epoch (reppo >=0.8.0); optional for back-compat. */
+  epoch?: EpochInfo
 }
 
 const FILE = 'snapshot.json'
@@ -39,6 +42,7 @@ export interface SnapshotReaders {
   balance(): Promise<WalletBalance>
   votingPower(): Promise<VotingPower>
   emissionsDue(): Promise<EmissionsDue>
+  epoch(): Promise<EpochInfo>
   budget(): SnapshotBudget
 }
 
@@ -55,6 +59,7 @@ export async function collectSnapshot(dataDir: string, cycleId: string, readers:
   const balance = await safe(readers.balance, prev?.balance ?? { eth: 0, reppo: 0, veReppo: 0, usdc: 0 }, 'balance')
   const votingPower = await safe(readers.votingPower, prev?.votingPower ?? { power: 0, lockupCount: 0 }, 'votingPower')
   const emissionsDue = await safe(readers.emissionsDue, prev?.emissionsDue ?? { totalReppo: 0, pods: [] }, 'emissionsDue')
+  const epoch = await safe(readers.epoch, prev?.epoch ?? { epoch: 0, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 }, 'epoch')
   const ts = new Date().toISOString()
-  return { ts, cycleId, balance, votingPower, emissionsDue, budget: readers.budget() }
+  return { ts, cycleId, balance, votingPower, emissionsDue, epoch, budget: readers.budget() }
 }
