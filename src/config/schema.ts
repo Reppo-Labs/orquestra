@@ -33,7 +33,9 @@ export const StrategyConfigSchema = z
       voteRateMaxPerCycle: z.number().int().nonnegative(),
       mintReppoMax: z.number().nonnegative(),
       mintGasEthMax: z.number().nonnegative(),
+      claimGasEthMax: z.number().nonnegative(),
     }),
+    claimEmissions: z.boolean().default(true),
     datanets: z.record(z.string(), DatanetPolicy),
     notes: z.string().default(''),
   })

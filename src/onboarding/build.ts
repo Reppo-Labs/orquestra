@@ -17,7 +17,9 @@ export function buildStrategyConfig(a: OnboardingAnswers): StrategyConfig {
       voteRateMaxPerCycle: a.voteRateMaxPerCycle,
       mintReppoMax: a.mintReppoMax,
       mintGasEthMax: a.mintGasEthMax,
+      claimGasEthMax: 0.05,
     },
+    claimEmissions: true,
     datanets,
     notes: a.notes,
   })

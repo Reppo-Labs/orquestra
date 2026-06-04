@@ -6,7 +6,7 @@ const valid = {
   horizonDays: 30,
   cadenceHours: 6,
   stake: { lockReppo: 500, lockDurationDays: 30 },
-  budget: { voteGasEthMax: 0.02, voteRateMaxPerCycle: 25, mintReppoMax: 100, mintGasEthMax: 0.05 },
+  budget: { voteGasEthMax: 0.02, voteRateMaxPerCycle: 25, mintReppoMax: 100, mintGasEthMax: 0.05, claimGasEthMax: 0.05 },
   datanets: { '9': { vote: true, mint: true, strictness: 'conservative', adapter: 'hyperliquid' } },
   notes: 'be picky',
 }
@@ -30,5 +30,18 @@ describe('StrategyConfigSchema', () => {
   it('exposes like/dislike thresholds per strictness on the 1-10 scale', () => {
     expect(STRICTNESS_THRESHOLDS.conservative).toEqual({ like: 8, dislike: 4 })
     expect(STRICTNESS_THRESHOLDS.aggressive.like).toBeLessThan(STRICTNESS_THRESHOLDS.conservative.like)
+  })
+})
+
+describe('StrategyConfig claim fields', () => {
+  it('defaults claimEmissions to true', () => {
+    expect(StrategyConfigSchema.parse(valid).claimEmissions).toBe(true)
+  })
+  it('requires claimGasEthMax in budget', () => {
+    const { claimGasEthMax, ...partialBudget } = valid.budget
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: partialBudget })).toThrow()
+  })
+  it('accepts claimEmissions:false', () => {
+    expect(StrategyConfigSchema.parse({ ...valid, claimEmissions: false }).claimEmissions).toBe(false)
   })
 })
