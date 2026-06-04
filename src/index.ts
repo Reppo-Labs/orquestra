@@ -139,11 +139,11 @@ async function start(): Promise<void> {
     recordVote: (id, podId) => dedup.recordVote(id, podId),
     recordMint: (id, key) => dedup.recordMint(id, key),
     getEmissionsDue: async () => (await queryEmissionsDueJson()).pods,
-    seenClaimsFor: async (id) => new Set(dedup.getClaimedKeys(id)),
+    seenClaims: async () => new Set(dedup.getClaimedKeys()),
     recordActivity: (entry) => {
       try { appendActivity(DATA_DIR, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
     },
-    recordClaim: (id, key) => dedup.recordClaim(id, key),
+    recordClaim: (key) => dedup.recordClaim(key),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length

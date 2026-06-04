@@ -25,9 +25,11 @@ export interface CycleDeps {
   recordVote(datanetId: string, podId: string): void
   recordMint(datanetId: string, canonicalKey: string): void
   getEmissionsDue(): Promise<ClaimableEmission[]>
-  seenClaimsFor(datanetId: string): Promise<Set<string>>
+  /** Claimed (podId:epoch) keys — global, not datanet-scoped (claims are keyed
+   *  on-chain by pod+epoch only). */
+  seenClaims(): Promise<Set<string>>
   recordActivity(entry: ActivityEntry): void
-  recordClaim(datanetId: string, key: string): void
+  recordClaim(key: string): void
 }
 
 export interface DatanetReport {
@@ -121,11 +123,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     } catch (e) {
       console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
     }
-    const seenByDatanet = new Map<string, Set<string>>()
+    const seen = await deps.seenClaims()
     for (const em of due) {
       const key = `${em.podId}:${em.epoch}`
-      let seen = seenByDatanet.get(em.datanetId)
-      if (!seen) { seen = await deps.seenClaimsFor(em.datanetId); seenByDatanet.set(em.datanetId, seen) }
       if (seen.has(key)) continue
       // Per-claim isolation: one failing claim never aborts the rest of the phase.
       let r: ExecResult
@@ -143,7 +143,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Fail-safe like vote/mint: record unless clearly refused (budget), so a landed-
       // but-unconfirmed claim isn't re-attempted. Mark in-memory `seen` too so a
       // duplicate (pod,epoch) in the same `due` list isn't re-claimed this cycle.
-      if (r.status !== 'refused-budget') { deps.recordClaim(em.datanetId, key); seen.add(key) }
+      if (r.status !== 'refused-budget') { deps.recordClaim(key); seen.add(key) }
     }
   }
 

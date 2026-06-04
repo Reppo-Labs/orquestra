@@ -53,7 +53,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     recordVote: vi.fn(),
     recordMint: vi.fn(),
     getEmissionsDue: async () => [],
-    seenClaimsFor: async () => new Set<string>(),
+    seenClaims: async () => new Set<string>(),
     recordActivity: vi.fn(),
     recordClaim: vi.fn(),
     ...over,
@@ -148,9 +148,9 @@ describe('runCycle claim phase', () => {
         { podId: '1', datanetId: '9', epoch: 101, reppo: 12.5 },
         { podId: '2', datanetId: '9', epoch: 101, reppo: 4 },
       ],
-      seenClaimsFor: async () => claimed,
+      seenClaims: async () => claimed,
       executor: claimExecutor(async () => ({ ok: true, status: 'executed', txHash: '0xc', gasEth: 0.0009 })),
-      recordClaim: vi.fn((_dn: string, key: string) => { recorded.push(key) }),
+      recordClaim: vi.fn((key: string) => { recorded.push(key) }),
     })
     const report = await runCycle(config, 'c1', d)
     expect(report.claims).toHaveLength(1) // only pod 1 (pod 2 already claimed)
@@ -177,7 +177,7 @@ describe('runCycle claim phase', () => {
         { podId: '1', datanetId: '9', epoch: 101, reppo: 5 },
         { podId: '2', datanetId: '9', epoch: 101, reppo: 5 },
       ],
-      seenClaimsFor: async () => new Set<string>(),
+      seenClaims: async () => new Set<string>(),
       executor: claimExecutor(async (i) => i.podId === '1'
         ? Promise.reject(new Error('boom'))
         : { ok: true, status: 'executed', txHash: '0xc', gasEth: 0.0009 }),

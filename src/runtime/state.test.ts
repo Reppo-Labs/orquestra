@@ -37,17 +37,18 @@ describe('DedupState', () => {
 })
 
 describe('DedupState claimedKeys', () => {
-  it('records and reads claimed (pod:epoch) keys per datanet', () => {
+  it('records and reads claimed (pod:epoch) keys globally (deduped, not datanet-scoped)', () => {
     const s = new DedupState(dir)
-    s.recordClaim('9', '1:101')
-    s.recordClaim('9', '2:101')
-    expect(new Set(s.getClaimedKeys('9'))).toEqual(new Set(['1:101', '2:101']))
-    expect(s.getClaimedKeys('2')).toEqual([])
+    s.recordClaim('1:101')
+    s.recordClaim('2:101')
+    s.recordClaim('1:101') // duplicate ignored
+    expect(new Set(s.getClaimedKeys())).toEqual(new Set(['1:101', '2:101']))
   })
 
-  it('persists claimedKeys to disk', () => {
-    new DedupState(dir).recordClaim('9', '1:101')
+  it('persists claimedKeys (flat array) to disk and reloads', () => {
+    new DedupState(dir).recordClaim('1:101')
     const onDisk = JSON.parse(readFileSync(join(dir, 'vote-state.json'), 'utf-8'))
-    expect(onDisk.claimedKeys['9']).toContain('1:101')
+    expect(onDisk.claimedKeys).toContain('1:101')
+    expect(new DedupState(dir).getClaimedKeys()).toContain('1:101') // reload
   })
 })
