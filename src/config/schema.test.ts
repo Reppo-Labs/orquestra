@@ -37,9 +37,10 @@ describe('StrategyConfig claim fields', () => {
   it('defaults claimEmissions to true', () => {
     expect(StrategyConfigSchema.parse(valid).claimEmissions).toBe(true)
   })
-  it('requires claimGasEthMax in budget', () => {
+  it('defaults claimGasEthMax when absent (back-compat for pre-existing configs)', () => {
     const { claimGasEthMax, ...partialBudget } = valid.budget
-    expect(() => StrategyConfigSchema.parse({ ...valid, budget: partialBudget })).toThrow()
+    const cfg = StrategyConfigSchema.parse({ ...valid, budget: partialBudget })
+    expect(cfg.budget.claimGasEthMax).toBe(0.05)
   })
   it('accepts claimEmissions:false', () => {
     expect(StrategyConfigSchema.parse({ ...valid, claimEmissions: false }).claimEmissions).toBe(false)
