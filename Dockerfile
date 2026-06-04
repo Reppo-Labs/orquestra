@@ -17,5 +17,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 ENV ORQUESTRA_DATA_DIR=/data
 VOLUME /data
+# Read-only dashboard (see DASHBOARD_PORT). Expose to localhost with `-p 127.0.0.1:7070:7070`.
+EXPOSE 7070
 # First-run configure requires -it AND valid LLM_* env vars (onboarding is conversational).
 ENTRYPOINT ["node", "dist/index.js"]

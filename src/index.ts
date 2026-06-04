@@ -20,6 +20,11 @@ import { runCycle, type CycleDeps } from './runtime/cycle.js'
 import { listPodsJson, deriveCurrentEpoch } from './reppo/listPods.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
+import { appendActivity } from './dashboard/activityLog.js'
+import { collectSnapshot, writeSnapshot, type SnapshotBudget } from './dashboard/snapshot.js'
+import { queryVotingPowerJson } from './reppo/queryVotingPower.js'
+import { queryEmissionsDueJson } from './reppo/queryEmissionsDue.js'
+import { startDashboard } from './dashboard/server.js'
 
 async function fetchPodContent(url: string): Promise<string> {
   const ctrl = new AbortController()
@@ -133,6 +138,12 @@ async function start(): Promise<void> {
     ledger,
     recordVote: (id, podId) => dedup.recordVote(id, podId),
     recordMint: (id, key) => dedup.recordMint(id, key),
+    getEmissionsDue: async () => (await queryEmissionsDueJson()).pods,
+    seenClaimsFor: async (id) => new Set(dedup.getClaimedKeys(id)),
+    recordActivity: (entry) => {
+      try { appendActivity(DATA_DIR, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
+    },
+    recordClaim: (id, key) => dedup.recordClaim(id, key),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
@@ -140,16 +151,43 @@ async function start(): Promise<void> {
   const handle = startScheduler(config.cadenceHours, async () => {
     const cycleId = new Date().toISOString()
     const report = await runCycle(config, cycleId, deps)
-    const v = report.reduce((a, r) => a + r.votes.length, 0)
-    const m = report.reduce((a, r) => a + r.mints.length, 0)
-    console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints executed`)
+    const v = report.datanets.reduce((a, r) => a + r.votes.length, 0)
+    const m = report.datanets.reduce((a, r) => a + r.mints.length, 0)
+    const c = report.claims.length
+    console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints, ${c} claims executed`)
+
+    // Snapshot the on-chain view for the dashboard (best-effort; never throws into the loop).
+    try {
+      const budget: SnapshotBudget = {
+        mintReppoSpent: ledger.state.mintReppoSpent,
+        mintGasSpentEth: ledger.state.mintGasSpentEth,
+        voteGasSpentEth: ledger.state.voteGasSpentEth,
+        claimGasSpentEth: ledger.state.claimGasSpentEth,
+        caps: config.budget,
+      }
+      const snap = await collectSnapshot(DATA_DIR, cycleId, {
+        balance: () => queryBalanceJson(),
+        votingPower: () => queryVotingPowerJson(),
+        emissionsDue: () => queryEmissionsDueJson(),
+        budget: () => budget,
+      })
+      writeSnapshot(DATA_DIR, snap)
+    } catch (e) {
+      console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)
+    }
   })
+
+  const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
+  const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort) : null
+  if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
   // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler + exit.
   const shutdown = (sig: string): void => {
     console.error(`\norquestra: received ${sig} — stopping scheduler and exiting.`)
     handle.stop()
+    if (dash) void dash.close()
     process.exit(0)
   }
   process.once('SIGINT', () => shutdown('SIGINT'))
