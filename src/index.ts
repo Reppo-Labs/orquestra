@@ -25,6 +25,7 @@ import { collectSnapshot, writeSnapshot, type SnapshotBudget } from './dashboard
 import { queryVotingPowerJson } from './reppo/queryVotingPower.js'
 import { queryEmissionsDueJson } from './reppo/queryEmissionsDue.js'
 import { startDashboard } from './dashboard/server.js'
+import { backfillActivityLog } from './dashboard/backfill.js'
 
 async function fetchPodContent(url: string): Promise<string> {
   const ctrl = new AbortController()
@@ -194,8 +195,18 @@ async function start(): Promise<void> {
   process.once('SIGTERM', () => shutdown('SIGTERM'))
 }
 
+/** One-time migration: surface pre-dashboard votes/mints in the activity log. */
+async function runBackfill(): Promise<void> {
+  const config = loadConfig(DATA_DIR)
+  const datanetIds = Object.keys(config.datanets).filter((k) => k !== '*')
+  const ts = new Date().toISOString()
+  const r = await backfillActivityLog(DATA_DIR, datanetIds, (id) => listPodsJson(id, { all: false }), ts)
+  if (r.skipped) console.error('orquestra: backfill skipped — activity log already has backfilled rows.')
+  else console.error(`orquestra: backfill complete — ${r.votes} votes, ${r.mints} mints written to activity-log.jsonl`)
+}
+
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : start
+const run = cmd === 'configure' ? onboard : cmd === 'backfill' ? runBackfill : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)
