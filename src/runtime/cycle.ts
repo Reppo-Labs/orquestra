@@ -6,6 +6,8 @@ import type { PodScorer, VoterPod, VoteFilter } from '../voter/types.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult } from '../wallet/intents.js'
+import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
+import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { selectVotes } from '../voter/select.js'
 import { selectMints } from '../minter/select.js'
 
@@ -22,6 +24,10 @@ export interface CycleDeps {
   ledger: BudgetLedger
   recordVote(datanetId: string, podId: string): void
   recordMint(datanetId: string, canonicalKey: string): void
+  getEmissionsDue(): Promise<ClaimableEmission[]>
+  seenClaimsFor(datanetId: string): Promise<Set<string>>
+  recordActivity(entry: ActivityEntry): void
+  recordClaim(datanetId: string, key: string): void
 }
 
 export interface DatanetReport {
@@ -31,13 +37,17 @@ export interface DatanetReport {
   /** set when this datanet was skipped due to an error (rubric unavailable, RPC failure, …). */
   error?: string
 }
-export type CycleReport = DatanetReport[]
+export interface CycleReport {
+  datanets: DatanetReport[]
+  /** global emissions-claim results (one query across all our pods, not per-datanet). */
+  claims: ExecResult[]
+}
 
 /** One swarm cycle: for each configured datanet, vote (if enabled + capable) and
  *  mint (if enabled + adapter + capable). The executor enforces the budget. */
 export async function runCycle(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<CycleReport> {
   deps.ledger.startCycle(cycleId)
-  const report: CycleReport = []
+  const datanets: DatanetReport[] = []
 
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
     if (datanetId === '*') continue
@@ -61,6 +71,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // 'error' may mean the tx landed but we couldn't confirm the hash — record
           // it so we don't re-vote (double-spend) next cycle. Fail-safe toward not repeating.
           if (r.status !== 'refused-budget') deps.recordVote(datanetId, intent.podId)
+          deps.recordActivity({
+            ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
+            podId: intent.podId, direction: intent.direction, conviction: intent.conviction, reason: intent.reason,
+            status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+          })
         }
       }
 
@@ -79,16 +94,58 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             // Same fail-safe as votes: record unless clearly refused, so a landed-but-
             // unconfirmed mint isn't re-attempted next cycle.
             if (r.status !== 'refused-budget') deps.recordMint(datanetId, intent.canonicalKey)
+            deps.recordActivity({
+              ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
+              canonicalKey: intent.canonicalKey, podName: intent.podName,
+              status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+            })
           }
         }
       }
 
-      report.push({ datanetId, votes, mints })
+      datanets.push({ datanetId, votes, mints })
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
       console.error(`orquestra: datanet ${datanetId} skipped — ${error}`)
-      report.push({ datanetId, votes, mints, error })
+      datanets.push({ datanetId, votes, mints, error })
     }
   }
-  return report
+
+  // Global claim phase: emissions-due is one query across ALL our pods (not per
+  // datanet). Claim every unclaimed (pod, epoch) we haven't already claimed.
+  const claims: ExecResult[] = []
+  if (config.claimEmissions) {
+    let due: ClaimableEmission[] = []
+    try {
+      due = await deps.getEmissionsDue()
+    } catch (e) {
+      console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
+    }
+    const seenByDatanet = new Map<string, Set<string>>()
+    for (const em of due) {
+      const key = `${em.podId}:${em.epoch}`
+      let seen = seenByDatanet.get(em.datanetId)
+      if (!seen) { seen = await deps.seenClaimsFor(em.datanetId); seenByDatanet.set(em.datanetId, seen) }
+      if (seen.has(key)) continue
+      // Per-claim isolation: one failing claim never aborts the rest of the phase.
+      let r: ExecResult
+      try {
+        r = await deps.executor.executeClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, idempotencyKey: `claim-${em.podId}-${em.epoch}` })
+      } catch (e) {
+        r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
+      }
+      claims.push(r)
+      deps.recordActivity({
+        ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
+        podId: em.podId, epoch: em.epoch, reppoClaimed: em.reppo,
+        status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+      })
+      // Fail-safe like vote/mint: record unless clearly refused (budget), so a landed-
+      // but-unconfirmed claim isn't re-attempted. Mark in-memory `seen` too so a
+      // duplicate (pod,epoch) in the same `due` list isn't re-claimed this cycle.
+      if (r.status !== 'refused-budget') { deps.recordClaim(em.datanetId, key); seen.add(key) }
+    }
+  }
+
+  return { datanets, claims }
 }
