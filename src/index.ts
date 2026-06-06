@@ -16,6 +16,7 @@ import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
 import { createLlmScorer } from './voter/score.js'
+import { candidateScoreInput } from './minter/score.js'
 import { runCycle, type CycleDeps } from './runtime/cycle.js'
 import { listPodsJson, deriveCurrentEpoch } from './reppo/listPods.js'
 import { DedupState } from './runtime/state.js'
@@ -132,8 +133,13 @@ async function start(): Promise<void> {
     getAdapter: (id) => adapters.find((a) => a.id === id),
     voteScorer: scorer,
     candidateScorer: {
-      scoreCandidate: (c, r) =>
-        scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name: c.podName, description: c.podDescription }, r),
+      scoreCandidate: (c, r) => {
+        // Score the DATASET against the publisher spec, not just the summary line —
+        // otherwise every candidate scores low ("no trade detail / no verification")
+        // and nothing ever mints. See src/minter/score.ts.
+        const { name, description } = candidateScoreInput(c)
+        return scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
+      },
     },
     seenKeysFor: async (id) => new Set(dedup.getMintedKeys(id)),
     executor,

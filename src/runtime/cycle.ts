@@ -90,6 +90,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           const intents = await selectMints(datanetId, candidates, rubric, {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
           })
+          // Surface the otherwise-silent case where the adapter found candidates but
+          // none cleared scoring/dedup — the difference between "no data" and "data
+          // rejected" is invisible without this (it hid a zero-mint bug for weeks).
+          if (candidates.length > 0 && intents.length === 0) {
+            console.error(`orquestra: datanet ${datanetId} — ${candidates.length} mint candidate(s) discovered but none passed scoring/dedup (min score ${minScore}); nothing minted.`)
+          }
           for (const intent of intents) {
             const r = await deps.executor.executeMint(intent)
             mints.push(r)
