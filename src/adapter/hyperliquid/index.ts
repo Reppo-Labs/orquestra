@@ -71,28 +71,48 @@ const defaultFetchers: HlFetchers = {
   },
 }
 
-/** Reference adapter: HL leaderboard → margin-ranked wallets → labeled datasets.
- *  Routes to the TradingGym datanet (id 9 / name contains "tradinggym"). */
-export function createHyperliquidAdapter(fetchers: HlFetchers = defaultFetchers): DatanetAdapter {
+/** Reference adapter: HL leaderboard (candidate pool) → epoch-aligned fills per
+ *  wallet → reconstructed round-trips → rank by realized in-window PnL → quality
+ *  gate → labeled datasets. */
+export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
+  const fetchers = deps.fetchers ?? defaultFetchers
+  const params: HlParams = { ...HL_DEFAULTS, ...deps.params }
+  const epochProvider = deps.epochProvider ?? (async () => {
+    const e = await queryEpochJson()
+    return { epochStart: e.epochStart, epochDurationSeconds: e.epochDurationSeconds }
+  })
+  const now = deps.now ?? (() => Date.now())
+
   return {
     id: 'hyperliquid',
-    matches(datanetId: string, rubric: DatanetRubric): boolean {
-      return datanetId === '9' || /tradinggym/i.test(rubric.name ?? '')
+    matches(datanetId: string): boolean {
+      return datanetId === '9' || datanetId === 'hyperliquid'
     },
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
+      const epoch = await epochProvider()
+      const window = fillsWindow(epoch, params.openLookbackDays, now())
+
       const lb = await fetchers.fetchLeaderboard()
-      const wallets = rankByMargin(lb, WINDOW, ctx.topN, MIN_VLM)
-      const out: CandidatePod[] = []
-      for (const w of wallets) {
+      const pool = rankByMargin(lb, LEADERBOARD_WINDOW, params.poolSize, params.minVlm)
+
+      const scored: Array<{ cand: CandidatePod; realizedPnl: number }> = []
+      for (const wallet of pool) {
         try {
-          const fills = await fetchers.fetchFills(w)
-          const cand = buildHlDataset(w, fills, ctx.datanetId)
-          if (cand) out.push(cand)
+          const fills = await fetchers.fetchFills(wallet, window)
+          const trips = aggregateRoundTrips(fills as Parameters<typeof aggregateRoundTrips>[0])
+          const q = walletQuality(trips)
+          if (!passesQualityGate(q, params)) continue
+          const cand = buildHlDataset(wallet, fills, ctx.datanetId)
+          if (cand) scored.push({ cand, realizedPnl: q.realizedPnl })
         } catch (err) {
-          console.warn(`[hl-adapter] fetchFills failed for ${w}:`, err)
+          console.warn(`[hl-adapter] wallet ${wallet} skipped:`, err instanceof Error ? err.message : String(err))
         }
       }
-      return out
+
+      // Select by realized in-window PnL (NOT the leaderboard metric) — fixes the
+      // rank/label contradiction where a top-ranked wallet showed in-window losses.
+      scored.sort((a, b) => b.realizedPnl - a.realizedPnl)
+      return scored.slice(0, ctx.topN).map((s) => s.cand)
     },
   }
 }
