@@ -68,16 +68,17 @@ describe('hyperliquidAdapter', () => {
     expect(cands[0].podName).toContain('0xAAA') // winner (higher realized PnL) ranked first
   })
 
-  it('isolates a wallet whose fetchFills throws (others still considered, no throw)', async () => {
+  it('isolates a wallet whose fetchFills throws (the surviving wallet still yields a candidate)', async () => {
+    const good = wallet({ btc: 90, eth: 10 })
     let n = 0
     const a = createHyperliquidAdapter({
       fetchers: {
         fetchLeaderboard: async () => lb,
-        fetchFills: async () => { if (++n === 1) throw new Error('rpc'); return fills },
+        fetchFills: async () => { if (++n === 1) throw new Error('rpc'); return good },
       },
-      epochProvider, now, params: { minRoundTrips: 1, minMarkets: 1, minRealizedPnl: -1e12 },
+      epochProvider, now, params: { minRoundTrips: 2, minMarkets: 2, minRealizedPnl: 0, poolSize: 12 },
     })
     const cands = await a.discover({ datanetId: '9', rubric, topN: 5 })
-    expect(Array.isArray(cands)).toBe(true)
+    expect(cands.length).toBe(1) // first wallet threw, second still produced a candidate
   })
 })

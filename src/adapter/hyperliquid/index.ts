@@ -10,6 +10,44 @@ import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 
+const HL_PAGE_SIZE = 2000
+const MAX_PAGES = 50
+
+const finite = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+
+/** Page through fills over [window.startTime, window.endTime] (ms) using an injected
+ *  page fetcher. Dedups by `hash` so fills sharing a boundary timestamp are neither
+ *  dropped nor double-counted; terminates on a short page or when a page adds nothing
+ *  new (the only case left is >HL_PAGE_SIZE fills at one identical ms — an HL limit we
+ *  cannot page past; documented). */
+export async function fetchFillsPaged(
+  fetchPage: (startTime: number, endTime: number) => Promise<Array<{ time?: number; hash?: string }>>,
+  window: FillsWindow,
+  opts: { pageSize?: number; maxPages?: number } = {},
+): Promise<unknown[]> {
+  const pageSize = opts.pageSize ?? HL_PAGE_SIZE
+  const maxPages = opts.maxPages ?? MAX_PAGES
+  const seen = new Set<string>()
+  const all: unknown[] = []
+  let cursor = window.startTime
+  for (let page = 0; page < maxPages; page++) {
+    const batch = await fetchPage(cursor, window.endTime)
+    if (!Array.isArray(batch) || batch.length === 0) break
+    let added = 0
+    for (const f of batch) {
+      const key = typeof f.hash === 'string' ? f.hash : JSON.stringify(f)
+      if (!seen.has(key)) { seen.add(key); all.push(f); added++ }
+    }
+    if (batch.length < pageSize) break
+    const lastT = finite(batch[batch.length - 1]!.time)
+    // Re-request from lastT (inclusive) so same-ms fills beyond the page boundary are
+    // captured; dedup above removes the overlap. If a full page made no progress, stop.
+    if (lastT <= cursor && added === 0) break
+    cursor = lastT
+  }
+  return all
+}
+
 /** Leaderboard ranking window (HL's own metric) — used only to pre-filter a
  *  candidate pool; selection is by realized in-window PnL (see discover). */
 const LEADERBOARD_WINDOW = 'week'
@@ -55,19 +93,12 @@ const defaultFetchers: HlFetchers = {
     return JSON.parse(stdout)
   },
   async fetchFills(wallet: string, window: FillsWindow) {
-    const all: unknown[] = []
-    let cursor = window.startTime
-    for (let page = 0; page < 50; page++) {
-      const body = JSON.stringify({ type: 'userFillsByTime', user: wallet, startTime: cursor, endTime: window.endTime, aggregateByTime: false })
+    return fetchFillsPaged(async (startTime, endTime) => {
+      const body = JSON.stringify({ type: 'userFillsByTime', user: wallet, startTime, endTime, aggregateByTime: false })
       const { stdout } = await execFileAsync('curl', ['-fsS', '--max-time', '60', '-H', 'Content-Type: application/json', '-d', body, 'https://api.hyperliquid.xyz/info'], { maxBuffer: 64 * 1024 * 1024 })
-      const batch = JSON.parse(stdout) as Array<{ time: number }>
-      if (!Array.isArray(batch) || batch.length === 0) break
-      all.push(...batch)
-      const lastT = batch[batch.length - 1]!.time
-      if (batch.length < 2000 || lastT <= cursor) break
-      cursor = lastT + 1
-    }
-    return all
+      const parsed = JSON.parse(stdout)
+      return Array.isArray(parsed) ? parsed : []
+    }, window)
   },
 }
 
@@ -89,13 +120,16 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
       return datanetId === '9' || datanetId === 'hyperliquid'
     },
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
+      // A failed epoch/leaderboard fetch throws out of discover by design: runCycle wraps
+      // each datanet's mint in per-datanet try/catch, so this datanet is skipped and logged
+      // while votes + other datanets proceed. (Per-wallet failures below are isolated locally.)
       const epoch = await epochProvider()
       const window = fillsWindow(epoch, params.openLookbackDays, now())
 
       const lb = await fetchers.fetchLeaderboard()
       const pool = rankByMargin(lb, LEADERBOARD_WINDOW, params.poolSize, params.minVlm)
 
-      const scored: Array<{ cand: CandidatePod; realizedPnl: number }> = []
+      const scored: Array<{ cand: CandidatePod; realizedPnl: number; nTrips: number }> = []
       for (const wallet of pool) {
         try {
           const fills = await fetchers.fetchFills(wallet, window)
@@ -103,7 +137,7 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
           const q = walletQuality(trips)
           if (!passesQualityGate(q, params)) continue
           const cand = buildHlDataset(wallet, fills, ctx.datanetId)
-          if (cand) scored.push({ cand, realizedPnl: q.realizedPnl })
+          if (cand) scored.push({ cand, realizedPnl: q.realizedPnl, nTrips: q.nCompleteTrips })
         } catch (err) {
           console.warn(`[hl-adapter] wallet ${wallet} skipped:`, err instanceof Error ? err.message : String(err))
         }
@@ -111,7 +145,8 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
 
       // Select by realized in-window PnL (NOT the leaderboard metric) — fixes the
       // rank/label contradiction where a top-ranked wallet showed in-window losses.
-      scored.sort((a, b) => b.realizedPnl - a.realizedPnl)
+      // Tiebreak by nTrips for deterministic ranking when PnL is equal.
+      scored.sort((a, b) => b.realizedPnl - a.realizedPnl || b.nTrips - a.nTrips)
       return scored.slice(0, ctx.topN).map((s) => s.cand)
     },
   }

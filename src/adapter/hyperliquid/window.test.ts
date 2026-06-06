@@ -23,4 +23,9 @@ describe('fillsWindow', () => {
     const earlyNow = (1_780_000_000 - 1000) * 1000
     expect(fillsWindow(epoch, 30, earlyNow).endTime).toBe(1_780_000_000 * 1000)
   })
+
+  it('caps endTime at the epoch end when now is past it', () => {
+    const w = fillsWindow(epoch, 30, (1_780_000_000 + 999_999) * 1000) // now far past epoch end
+    expect(w.endTime).toBe((1_780_000_000 + 172_800) * 1000)
+  })
 })

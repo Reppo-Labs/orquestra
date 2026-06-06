@@ -7,6 +7,7 @@ export interface WalletQuality {
   /** round-trips whose open was captured in-window (entry_px present). */
   nCompleteTrips: number
   nMarkets: number
+  /** over ALL realized round-trips (complete + close-only), not only complete ones */
   winRate: number
 }
 
