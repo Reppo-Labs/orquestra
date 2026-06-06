@@ -20,7 +20,7 @@ describe('loadConfig', () => {
     writeCfg({
       horizonDays: 30, cadenceHours: 6,
       stake: { lockReppo: 500, lockDurationDays: 30 },
-      budget: { voteGasEthMax: 0.02, voteRateMaxPerCycle: 25, mintReppoMax: 100, mintGasEthMax: 0.05 },
+      budget: { voteGasEthMax: 0.02, voteRateMaxPerCycle: 25, mintReppoMax: 100, mintGasEthMax: 0.05, claimGasEthMax: 0.05 },
       datanets: { '9': { vote: true, strictness: 'balanced' } },
     })
     const cfg = loadConfig(dir)

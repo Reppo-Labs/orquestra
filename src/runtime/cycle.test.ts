@@ -18,7 +18,7 @@ const rubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
 const config = StrategyConfigSchema.parse({
   horizonDays: 30, cadenceHours: 6,
   stake: { lockReppo: 0, lockDurationDays: 30 },
-  budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1 },
+  budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
   datanets: {
     '9': { vote: true, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' },
     '2': { vote: true, mint: false, strictness: 'aggressive' },
@@ -52,6 +52,10 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     ledger: { startCycle: vi.fn() } as unknown as CycleDeps['ledger'],
     recordVote: vi.fn(),
     recordMint: vi.fn(),
+    getEmissionsDue: async () => [],
+    seenClaims: async () => new Set<string>(),
+    recordActivity: vi.fn(),
+    recordClaim: vi.fn(),
     ...over,
   }
 }
@@ -63,10 +67,10 @@ describe('runCycle', () => {
     expect(d.ledger.startCycle).toHaveBeenCalledWith('cycle-1')
     expect((d.executor.executeVote as any).mock.calls.length).toBe(2)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(1)
-    const d9 = report.find((r) => r.datanetId === '9')!
+    const d9 = report.datanets.find((r) => r.datanetId === '9')!
     expect(d9.votes[0].txHash).toBe('0xvote')
     expect(d9.mints[0].txHash).toBe('0xmint')
-    expect(report.find((r) => r.datanetId === '2')!.mints).toEqual([])
+    expect(report.datanets.find((r) => r.datanetId === '2')!.mints).toEqual([])
   })
 
   it('skips voting when rubric.canVote is false and minting when canMint is false', async () => {
@@ -74,7 +78,7 @@ describe('runCycle', () => {
     const report = await runCycle(config, 'c2', d)
     expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
-    expect(report.every((r) => r.votes.length === 0 && r.mints.length === 0)).toBe(true)
+    expect(report.datanets.every((r) => r.votes.length === 0 && r.mints.length === 0)).toBe(true)
   })
 
   it('does not mint a datanet with mint:true but no adapter configured', async () => {
@@ -95,10 +99,10 @@ describe('runCycle', () => {
       }),
     })
     const report = await runCycle(config, 'c4', d) // must NOT reject
-    const d2 = report.find((r) => r.datanetId === '2')!
+    const d2 = report.datanets.find((r) => r.datanetId === '2')!
     expect(d2.error).toMatch(/RPC rate limit/)
     expect(d2.votes).toEqual([])
-    const d9 = report.find((r) => r.datanetId === '9')!
+    const d9 = report.datanets.find((r) => r.datanetId === '9')!
     expect(d9.votes.length).toBeGreaterThan(0) // datanet 9 still processed
   })
 
@@ -126,5 +130,59 @@ describe('runCycle', () => {
     })
     await runCycle(config, 'c7', errored)
     expect(errored.recordVote).toHaveBeenCalledWith('9', 'p1') // errored vote recorded → won't re-vote
+  })
+})
+
+const claimExecutor = (executeClaim: CycleDeps['executor']['executeClaim']): CycleDeps['executor'] => ({
+  executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+  executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+  executeClaim,
+}) as unknown as CycleDeps['executor']
+
+describe('runCycle claim phase', () => {
+  it('claims each unclaimed (pod,epoch), skips already-claimed, records activity + claimedKeys', async () => {
+    const recorded: string[] = []
+    const claimed = new Set<string>(['2:101']) // 2:101 already claimed
+    const d = deps({
+      getEmissionsDue: async () => [
+        { podId: '1', datanetId: '9', epoch: 101, reppo: 12.5 },
+        { podId: '2', datanetId: '9', epoch: 101, reppo: 4 },
+      ],
+      seenClaims: async () => claimed,
+      executor: claimExecutor(async () => ({ ok: true, status: 'executed', txHash: '0xc', gasEth: 0.0009 })),
+      recordClaim: vi.fn((key: string) => { recorded.push(key) }),
+    })
+    const report = await runCycle(config, 'c1', d)
+    expect(report.claims).toHaveLength(1) // only pod 1 (pod 2 already claimed)
+    expect(recorded).toEqual(['1:101'])
+    const activity = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+    expect(activity.some((c: unknown[]) => {
+      const e = c[0] as { kind: string; podId?: string; reppoClaimed?: number }
+      return e.kind === 'claim' && e.podId === '1' && e.reppoClaimed === 12.5
+    })).toBe(true)
+  })
+
+  it('skips the claim phase entirely when claimEmissions is false', async () => {
+    let called = 0
+    const d = deps({ getEmissionsDue: async () => { called++; return [] } })
+    const cfg = StrategyConfigSchema.parse({ ...config, claimEmissions: false })
+    const report = await runCycle(cfg, 'c2', d)
+    expect(called).toBe(0)
+    expect(report.claims).toEqual([])
+  })
+
+  it('isolates a single failing claim from the rest', async () => {
+    const d = deps({
+      getEmissionsDue: async () => [
+        { podId: '1', datanetId: '9', epoch: 101, reppo: 5 },
+        { podId: '2', datanetId: '9', epoch: 101, reppo: 5 },
+      ],
+      seenClaims: async () => new Set<string>(),
+      executor: claimExecutor(async (i) => i.podId === '1'
+        ? Promise.reject(new Error('boom'))
+        : { ok: true, status: 'executed', txHash: '0xc', gasEth: 0.0009 }),
+    })
+    const report = await runCycle(config, 'c3', d)
+    expect(report.claims.filter((c) => c.status === 'executed')).toHaveLength(1) // pod 2 still claimed
   })
 })

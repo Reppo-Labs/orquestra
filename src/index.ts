@@ -16,10 +16,18 @@ import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
 import { createLlmScorer } from './voter/score.js'
+import { candidateScoreInput } from './minter/score.js'
 import { runCycle, type CycleDeps } from './runtime/cycle.js'
 import { listPodsJson, deriveCurrentEpoch } from './reppo/listPods.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
+import { appendActivity } from './dashboard/activityLog.js'
+import { collectSnapshot, writeSnapshot, type SnapshotBudget } from './dashboard/snapshot.js'
+import { queryVotingPowerJson } from './reppo/queryVotingPower.js'
+import { queryEmissionsDueJson } from './reppo/queryEmissionsDue.js'
+import { queryEpochJson } from './reppo/queryEpoch.js'
+import { startDashboard } from './dashboard/server.js'
+import { backfillActivityLog } from './dashboard/backfill.js'
 
 async function fetchPodContent(url: string): Promise<string> {
   const ctrl = new AbortController()
@@ -125,14 +133,25 @@ async function start(): Promise<void> {
     getAdapter: (id) => adapters.find((a) => a.id === id),
     voteScorer: scorer,
     candidateScorer: {
-      scoreCandidate: (c, r) =>
-        scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name: c.podName, description: c.podDescription }, r),
+      scoreCandidate: (c, r) => {
+        // Score the DATASET against the publisher spec, not just the summary line —
+        // otherwise every candidate scores low ("no trade detail / no verification")
+        // and nothing ever mints. See src/minter/score.ts.
+        const { name, description } = candidateScoreInput(c)
+        return scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
+      },
     },
     seenKeysFor: async (id) => new Set(dedup.getMintedKeys(id)),
     executor,
     ledger,
     recordVote: (id, podId) => dedup.recordVote(id, podId),
     recordMint: (id, key) => dedup.recordMint(id, key),
+    getEmissionsDue: async () => (await queryEmissionsDueJson()).pods,
+    seenClaims: async () => new Set(dedup.getClaimedKeys()),
+    recordActivity: (entry) => {
+      try { appendActivity(DATA_DIR, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
+    },
+    recordClaim: (key) => dedup.recordClaim(key),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
@@ -140,24 +159,62 @@ async function start(): Promise<void> {
   const handle = startScheduler(config.cadenceHours, async () => {
     const cycleId = new Date().toISOString()
     const report = await runCycle(config, cycleId, deps)
-    const v = report.reduce((a, r) => a + r.votes.length, 0)
-    const m = report.reduce((a, r) => a + r.mints.length, 0)
-    console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints executed`)
+    const v = report.datanets.reduce((a, r) => a + r.votes.length, 0)
+    const m = report.datanets.reduce((a, r) => a + r.mints.length, 0)
+    const c = report.claims.length
+    console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints, ${c} claims executed`)
+
+    // Snapshot the on-chain view for the dashboard (best-effort; never throws into the loop).
+    try {
+      const budget: SnapshotBudget = {
+        mintReppoSpent: ledger.state.mintReppoSpent,
+        mintGasSpentEth: ledger.state.mintGasSpentEth,
+        voteGasSpentEth: ledger.state.voteGasSpentEth,
+        claimGasSpentEth: ledger.state.claimGasSpentEth,
+        caps: config.budget,
+      }
+      const snap = await collectSnapshot(DATA_DIR, cycleId, {
+        balance: () => queryBalanceJson(),
+        votingPower: () => queryVotingPowerJson(),
+        emissionsDue: () => queryEmissionsDueJson(),
+        epoch: () => queryEpochJson(),
+        budget: () => budget,
+      })
+      writeSnapshot(DATA_DIR, snap)
+    } catch (e) {
+      console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)
+    }
   })
+
+  const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
+  const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort) : null
+  if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
   // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler + exit.
   const shutdown = (sig: string): void => {
     console.error(`\norquestra: received ${sig} — stopping scheduler and exiting.`)
     handle.stop()
+    if (dash) void dash.close()
     process.exit(0)
   }
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
 }
 
+/** One-time migration: surface pre-dashboard votes/mints in the activity log. */
+async function runBackfill(): Promise<void> {
+  const config = loadConfig(DATA_DIR)
+  const datanetIds = Object.keys(config.datanets).filter((k) => k !== '*')
+  const ts = new Date().toISOString()
+  const r = await backfillActivityLog(DATA_DIR, datanetIds, (id) => listPodsJson(id, { all: false }), ts)
+  if (r.skipped) console.error('orquestra: backfill skipped — activity log already has backfilled rows.')
+  else console.error(`orquestra: backfill complete — ${r.votes} votes, ${r.mints} mints written to activity-log.jsonl`)
+}
+
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : start
+const run = cmd === 'configure' ? onboard : cmd === 'backfill' ? runBackfill : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)

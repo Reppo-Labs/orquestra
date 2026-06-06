@@ -3,9 +3,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { BudgetLedger, LedgerCorruptError } from './ledger.js'
+import { BudgetLedger, LedgerCorruptError, type BudgetCaps } from './ledger.js'
 
-const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 3, mintReppoMax: 100, mintGasEthMax: 0.1 }
+const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 3, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.01 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-led-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
@@ -193,5 +193,33 @@ describe('BudgetLedger', () => {
     const res = l.reserveMint(150, 0.01) // 150 > 100 cap
     expect(res).toBeNull()
     expect(l.state.mintReppoSpent).toBe(0) // not incremented
+  })
+})
+
+const CAPS: BudgetCaps = {
+  voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.01,
+}
+
+describe('BudgetLedger claim gas cap', () => {
+  it('reserves, reconciles to actual, and persists claimGasSpentEth', () => {
+    const l = new BudgetLedger(dir, CAPS)
+    const res = l.reserveClaim(0.003)!
+    expect(res).not.toBeNull()
+    l.reconcileClaim(res, 0.004) // actual higher than est
+    expect(l.state.claimGasSpentEth).toBeCloseTo(0.004)
+  })
+
+  it('refuses once claimGasEthMax is reached', () => {
+    const l = new BudgetLedger(dir, CAPS)
+    const a = l.reserveClaim(0.006); expect(a).not.toBeNull()
+    const b = l.reserveClaim(0.006) // 0.012 > 0.01 cap
+    expect(b).toBeNull()
+  })
+
+  it('release rolls back a reservation', () => {
+    const l = new BudgetLedger(dir, CAPS)
+    const res = l.reserveClaim(0.004)!
+    l.releaseClaim(res)
+    expect(l.state.claimGasSpentEth).toBeCloseTo(0)
   })
 })

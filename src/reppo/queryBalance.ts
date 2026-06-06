@@ -1,6 +1,7 @@
 // src/reppo/queryBalance.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { reppoEnv, withRpcUrl } from './exec.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -36,8 +37,8 @@ export function parseBalance(raw: unknown): WalletBalance {
 
 /** Live wallet balances via `reppo query balance --json`. */
 export async function queryBalanceJson(): Promise<WalletBalance> {
-  const { stdout } = await execFileAsync('reppo', ['query', 'balance', '--json'], {
-    env: { ...process.env, REPPO_NETWORK: process.env.REPPO_NETWORK ?? 'mainnet' },
+  const { stdout } = await execFileAsync('reppo', withRpcUrl(['query', 'balance', '--json']), {
+    env: reppoEnv(),
     timeout: 60_000,
     maxBuffer: 64 * 1024 * 1024,
   })

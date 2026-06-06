@@ -8,6 +8,7 @@ export interface BudgetCaps {
   voteRateMaxPerCycle: number
   mintReppoMax: number
   mintGasEthMax: number
+  claimGasEthMax: number
 }
 
 export interface LedgerState {
@@ -16,6 +17,7 @@ export interface LedgerState {
   voteGasSpentEth: number // cumulative over horizon
   mintReppoSpent: number // cumulative
   mintGasSpentEth: number // cumulative
+  claimGasSpentEth: number // cumulative
 }
 
 export interface VoteReservation {
@@ -26,6 +28,11 @@ export interface VoteReservation {
 export interface MintReservation {
   kind: 'mint'
   estReppo: number
+  estGasEth: number
+}
+
+export interface ClaimReservation {
+  kind: 'claim'
   estGasEth: number
 }
 
@@ -48,10 +55,11 @@ const LedgerSchema = z.object({
   voteGasSpentEth: nonNegativeFinite,
   mintReppoSpent: nonNegativeFinite,
   mintGasSpentEth: nonNegativeFinite,
+  claimGasSpentEth: nonNegativeFinite.default(0),
 })
 
 const fresh = (): LedgerState => ({
-  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0,
+  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0,
 })
 
 /** Persisted per-pool budget enforcement. The ONLY authority on whether an
@@ -150,6 +158,31 @@ export class BudgetLedger {
   releaseMint(res: MintReservation): void {
     this._state.mintReppoSpent = Math.max(0, this._state.mintReppoSpent - res.estReppo)
     this._state.mintGasSpentEth = Math.max(0, this._state.mintGasSpentEth - res.estGasEth)
+    this.save()
+  }
+
+  canClaim(estGasEth: number): boolean {
+    return this._state.claimGasSpentEth + estGasEth <= this.caps.claimGasEthMax
+  }
+
+  /** Debit and persist BEFORE signing. Returns null if over the gas cap (no debit). */
+  reserveClaim(estGasEth: number): ClaimReservation | null {
+    if (!this.canClaim(estGasEth)) return null
+    this._state.claimGasSpentEth += estGasEth
+    this.save()
+    return { kind: 'claim', estGasEth }
+  }
+
+  /** Adjust gas to actual after a successful sign. */
+  reconcileClaim(res: ClaimReservation, actualGasEth: number): void {
+    this._state.claimGasSpentEth += (actualGasEth - res.estGasEth)
+    this._state.claimGasSpentEth = Math.max(0, this._state.claimGasSpentEth)
+    this.save()
+  }
+
+  /** Roll back the reservation when signing fails. */
+  releaseClaim(res: ClaimReservation): void {
+    this._state.claimGasSpentEth = Math.max(0, this._state.claimGasSpentEth - res.estGasEth)
     this.save()
   }
 

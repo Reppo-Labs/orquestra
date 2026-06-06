@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp src/dashboard/index.html dist/dashboard/index.html",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",

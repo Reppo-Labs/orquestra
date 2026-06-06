@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Orquestra</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; background: #0b0e14; color: #d7dce5; }
+  header { padding: 16px 24px; border-bottom: 1px solid #1c2230; display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 18px; margin: 0; } .muted { color: #7d8799; font-size: 12px; }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: #121620; border: 1px solid #1c2230; border-radius: 8px; padding: 14px; }
+  .card .k { color: #7d8799; font-size: 12px; } .card .v { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .pos { color: #5ad19b; } .neg { color: #e5707e; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #1c2230; font-variant-numeric: tabular-nums; }
+  th { color: #7d8799; font-weight: 500; font-size: 12px; }
+  .pill { padding: 1px 8px; border-radius: 999px; font-size: 11px; }
+  .up { background: #163a2b; color: #5ad19b; } .down { background: #3a1620; color: #e5707e; }
+  .mint { background: #1c2a3a; color: #6fb3e8; } .claim { background: #2a2440; color: #b39ae5; }
+  .vote { background: #1c2230; color: #9aa7bd; }
+  .err { color: #e5707e; } select { background: #121620; color: #d7dce5; border: 1px solid #1c2230; border-radius: 6px; padding: 4px; }
+  a { color: #6fb3e8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Orquestra <span class="muted" id="sub"></span></h1>
+  <span class="muted" id="asof"></span>
+</header>
+<main>
+  <div class="cards" id="cards"></div>
+  <h2 style="font-size:15px">Claimable emissions</h2>
+  <table id="emTable"><thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>REPPO</th></tr></thead><tbody></tbody></table>
+  <h2 style="font-size:15px">Activity
+    <select id="kind"><option value="">all</option><option>vote</option><option>mint</option><option>claim</option></select>
+  </h2>
+  <table id="actTable"><thead><tr><th>Time</th><th>Kind</th><th>Datanet</th><th>Pod</th><th>Detail</th><th>Status</th><th>Tx</th></tr></thead><tbody></tbody></table>
+</main>
+<script>
+const fmt = (n) => (n === undefined || n === null) ? '—' : (Math.round(n * 10000) / 10000).toLocaleString()
+const sign = (n) => n > 0 ? 'pos' : n < 0 ? 'neg' : ''
+async function load() {
+  const [pnlRes, act, cfg] = await Promise.all([
+    fetch('/api/pnl').then(r => r.json()),
+    fetch('/api/activity').then(r => r.json()),
+    fetch('/api/config').then(r => r.json()),
+  ])
+  const p = pnlRes.pnl, snap = pnlRes.snapshot
+  document.getElementById('sub').textContent = `· ${cfg.cadenceHours}h cadence · claim ${cfg.claimEmissions ? 'on' : 'off'}`
+  document.getElementById('asof').textContent = snap ? `as of ${new Date(snap.ts).toLocaleString()}` : 'PnL pending first cycle'
+  const epochLabel = (e) => e ? `${e.epoch} · ${Math.max(0, Math.round(e.secondsRemaining / 3600))}h left` : '—'
+  const cards = [
+    ['Epoch', snap ? epochLabel(snap.epoch) : '—'],
+    ['Net REPPO', p ? `<span class="${sign(p.netReppo)}">${fmt(p.netReppo)}</span>` : '—'],
+    ['Earned', p ? fmt(p.earnedReppo) : '—'], ['Claimed', p ? fmt(p.claimedReppo) : '—'],
+    ['Claimable', p ? fmt(p.claimableReppo) : '—'], ['Spent (mint)', p ? fmt(p.spentReppo) : '—'],
+    ['Gas (ETH)', p ? fmt(p.gasSpentEth) : '—'],
+    ['REPPO bal', snap ? fmt(snap.balance.reppo) : '—'], ['veREPPO', snap ? fmt(snap.balance.veReppo) : '—'],
+  ]
+  document.getElementById('cards').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')
+  const em = snap ? snap.emissionsDue.pods : []
+  document.querySelector('#emTable tbody').innerHTML = em.length
+    ? em.map(e => `<tr><td>${e.podId}</td><td>${e.datanetId}</td><td>${e.epoch}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">none — all claimed</td></tr>'
+  window._activity = act
+  renderActivity()
+}
+function renderActivity() {
+  const kind = document.getElementById('kind').value
+  const rows = (window._activity || []).filter(r => !kind || r.kind === kind)
+  const detail = (r) => r.kind === 'vote'
+      ? (r.direction ? `${r.direction} · conv ${r.conviction} · ${r.reason ?? ''}` : (r.detail || '—'))
+    : r.kind === 'mint' ? (r.podName ?? r.canonicalKey ?? '')
+    : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
+  const tx = (r) => r.txHash ? `<a href="https://basescan.org/tx/${r.txHash}" target="_blank">${r.txHash.slice(0,8)}…</a>` : ''
+  const pillClass = (r) => r.kind === 'vote' ? (r.direction || 'vote') : r.kind
+  document.querySelector('#actTable tbody').innerHTML = rows.length
+    ? rows.map(r => `<tr><td>${new Date(r.ts).toLocaleTimeString()}</td><td><span class="pill ${pillClass(r)}">${r.kind}</span></td><td>${r.datanetId}</td><td>${r.podId ?? r.canonicalKey ?? ''}</td><td>${detail(r)}</td><td class="${r.status === 'executed' ? '' : 'err'}">${r.status}</td><td>${tx(r)}</td></tr>`).join('')
+    : '<tr><td colspan="7" class="muted">no activity yet</td></tr>'
+}
+document.getElementById('kind').addEventListener('change', renderActivity)
+load().catch(e => document.getElementById('asof').textContent = 'load error: ' + e.message)
+setInterval(load, 30000)
+</script>
+</body>
+</html>

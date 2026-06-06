@@ -33,7 +33,10 @@ export const StrategyConfigSchema = z
       voteRateMaxPerCycle: z.number().int().nonnegative(),
       mintReppoMax: z.number().nonnegative(),
       mintGasEthMax: z.number().nonnegative(),
+      // Defaulted (not required) so configs written before this cap existed still load.
+      claimGasEthMax: z.number().nonnegative().default(0.05),
     }),
+    claimEmissions: z.boolean().default(true),
     datanets: z.record(z.string(), DatanetPolicy),
     notes: z.string().default(''),
   })

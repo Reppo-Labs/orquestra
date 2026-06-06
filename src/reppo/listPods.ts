@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { VoterPod } from '../voter/types.js'
+import { reppoEnv, withRpcUrl } from './exec.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -37,8 +38,8 @@ export function deriveCurrentEpoch(pods: VoterPod[]): string | null {
 export async function listPodsJson(datanetId: string, opts: { all: boolean }): Promise<VoterPod[]> {
   const args = ['list', 'pods', '--datanet', datanetId, '--json']
   if (opts.all) args.splice(2, 0, '--all')
-  const { stdout } = await execFileAsync('reppo', args, {
-    env: { ...process.env, REPPO_NETWORK: process.env.REPPO_NETWORK ?? 'mainnet' }, timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
+  const { stdout } = await execFileAsync('reppo', withRpcUrl(args), {
+    env: reppoEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
   })
   try { return parsePods(JSON.parse(stdout)) } catch { throw new Error(`listPodsJson: bad reppo output: ${stdout.slice(0, 200)}`) }
 }

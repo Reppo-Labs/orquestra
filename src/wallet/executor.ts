@@ -1,11 +1,12 @@
 // src/wallet/executor.ts
 import { BudgetLedger } from './ledger.js'
 import type { ReppoCli, LockArgs } from '../reppo/cli.js'
-import type { VoteIntent, MintIntent, ExecResult } from './intents.js'
+import type { VoteIntent, MintIntent, ClaimIntent, ExecResult } from './intents.js'
 
 // Conservative pre-sign gas estimates; reconciled to actual after signing.
 const VOTE_GAS_EST_ETH = 0.003
 const MINT_GAS_EST_ETH = 0.02
+const CLAIM_GAS_EST_ETH = 0.003
 
 /** The only component that signs. Each public method reserves budget BEFORE
  *  signing (fail-closed), then reconciles to actual gas on success or
@@ -33,7 +34,7 @@ export class WalletExecutor {
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
       this.ledger.reconcileVote(res, r.gasEth)
-      return { ok: true, status: 'executed', txHash: r.txHash }
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseVote(res)
       return { ok: false, status: 'error', detail: (e as Error).message }
@@ -54,9 +55,26 @@ export class WalletExecutor {
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
       this.ledger.reconcileMint(res, r.gasEth)
-      return { ok: true, status: 'executed', txHash: r.txHash }
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseMint(res)
+      return { ok: false, status: 'error', detail: (e as Error).message }
+    }
+  }
+
+  async executeClaim(intent: ClaimIntent): Promise<ExecResult> {
+    const res = this.ledger.reserveClaim(CLAIM_GAS_EST_ETH)
+    if (!res) return { ok: false, status: 'refused-budget', detail: 'claim gas budget exhausted' }
+    try {
+      const r = await this.cli.claimEmissions({ podId: intent.podId, epoch: intent.epoch, idempotencyKey: intent.idempotencyKey })
+      if (!r.txHash) {
+        this.ledger.releaseClaim(res)
+        return { ok: false, status: 'error', detail: 'no txHash' }
+      }
+      this.ledger.reconcileClaim(res, r.gasEth)
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
+    } catch (e) {
+      this.ledger.releaseClaim(res)
       return { ok: false, status: 'error', detail: (e as Error).message }
     }
   }

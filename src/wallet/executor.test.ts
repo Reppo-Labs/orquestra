@@ -6,9 +6,9 @@ import { join } from 'node:path'
 import { BudgetLedger } from './ledger.js'
 import { WalletExecutor } from './executor.js'
 import type { ReppoCli } from '../reppo/cli.js'
-import type { VoteIntent, MintIntent } from './intents.js'
+import type { VoteIntent, MintIntent, ClaimIntent } from './intents.js'
 
-const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 2, mintReppoMax: 100, mintGasEthMax: 0.1 }
+const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 2, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.05 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-exec-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
@@ -17,6 +17,7 @@ const fakeCli = (): ReppoCli => ({
   lock: vi.fn(async () => ({ txHash: '0xlock', gasEth: 0.002 })),
   vote: vi.fn(async () => ({ txHash: '0xvote', gasEth: 0.001 })),
   mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0.01 })),
+  claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0.0009 })),
 })
 const voteIntent = (podId: string): VoteIntent => ({ kind: 'vote', datanetId: '9', podId, direction: 'up', conviction: 9, reason: 'aligned' })
 const mintIntent = (key: string, est = 0): MintIntent => ({ kind: 'mint', datanetId: '9', canonicalKey: key, podName: 'p', podDescription: 'd', datasetPath: '/tmp/x.json', estReppoCost: est })
@@ -85,6 +86,7 @@ describe('WalletExecutor', () => {
         return { txHash: '0xvote', gasEth: 0.001 }
       }),
       mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0 })),
+      claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0 })),
     }
 
     const ex = new WalletExecutor(cli, ledger)
@@ -105,6 +107,7 @@ describe('WalletExecutor', () => {
         reppoSeenByCli = persisted.mintReppoSpent
         return { txHash: '0xmint', gasEth: 0.01 }
       }),
+      claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0 })),
     }
 
     const ex = new WalletExecutor(cli, ledger)
@@ -159,5 +162,51 @@ describe('WalletExecutor', () => {
     expect(r.status).toBe('error')
     expect(r.detail).toBe('no txHash')
     expect(ledger.state.mintReppoSpent).toBe(0)
+  })
+})
+
+const CLAIM_CAPS: typeof caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 }
+const claimIntent = (over: Partial<ClaimIntent> = {}): ClaimIntent => ({ kind: 'claim', datanetId: '9', podId: '1', epoch: 101, reppoDue: 12.5, idempotencyKey: 'claim-1-101', ...over })
+
+const fakeClaimCli = (over: Partial<ReppoCli> = {}): ReppoCli => ({
+  lock: async () => ({ txHash: '0xlock', gasEth: 0 }),
+  vote: async () => ({ txHash: '0xvote', gasEth: 0.001 }),
+  mintPod: async () => ({ txHash: '0xmint', gasEth: 0.01 }),
+  claimEmissions: async () => ({ txHash: '0xclaim', gasEth: 0.0009 }),
+  ...over,
+})
+
+describe('WalletExecutor.executeClaim', () => {
+  it('claims, reconciles gas, returns txHash + gasEth', async () => {
+    const ledger = new BudgetLedger(dir, CLAIM_CAPS)
+    const ex = new WalletExecutor(fakeClaimCli(), ledger)
+    const r = await ex.executeClaim(claimIntent())
+    expect(r.status).toBe('executed')
+    expect(r.txHash).toBe('0xclaim')
+    expect(r.gasEth).toBeCloseTo(0.0009)
+    expect(ledger.state.claimGasSpentEth).toBeCloseTo(0.0009)
+  })
+
+  it('refuses when the claim gas cap is exhausted', async () => {
+    const ledger = new BudgetLedger(dir, { ...CLAIM_CAPS, claimGasEthMax: 0 })
+    const ex = new WalletExecutor(fakeClaimCli(), ledger)
+    const r = await ex.executeClaim(claimIntent())
+    expect(r.status).toBe('refused-budget')
+  })
+
+  it('releases the reservation when the CLI throws', async () => {
+    const ledger = new BudgetLedger(dir, CLAIM_CAPS)
+    const ex = new WalletExecutor(fakeClaimCli({ claimEmissions: async () => { throw new Error('rpc down') } }), ledger)
+    const r = await ex.executeClaim(claimIntent())
+    expect(r.status).toBe('error')
+    expect(ledger.state.claimGasSpentEth).toBeCloseTo(0)
+  })
+
+  it('surfaces gasEth on vote results too', async () => {
+    const ledger = new BudgetLedger(dir, CLAIM_CAPS)
+    ledger.startCycle('c1')
+    const ex = new WalletExecutor(fakeClaimCli(), ledger)
+    const r = await ex.executeVote({ kind: 'vote', datanetId: '9', podId: '1', direction: 'up', conviction: 9, reason: 'r' })
+    expect(r.gasEth).toBeCloseTo(0.001)
   })
 })
