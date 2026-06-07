@@ -47,7 +47,7 @@ export class WalletExecutor {
     if (!res) return { ok: false, status: 'refused-budget', detail: 'mint budget exhausted' }
     try {
       const r = await this.cli.mintPod({
-        datanetId: intent.datanetId, podName: intent.podName, podDescription: intent.podDescription,
+        datanetId: intent.datanetId, subnetUuid: intent.subnetUuid, podName: intent.podName, podDescription: intent.podDescription,
         datasetPath: intent.datasetPath, idempotencyKey: `mint-${intent.canonicalKey}`,
       })
       if (!r.txHash) {

@@ -38,7 +38,7 @@ export async function selectMints(
     const datasetPath = join(dataOut, `mint-${c.canonicalKey}.json`)
     writeFileSync(datasetPath, JSON.stringify(c.dataset))
     intents.push({
-      kind: 'mint', datanetId, canonicalKey: c.canonicalKey,
+      kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
       podName: c.podName, podDescription: c.podDescription, datasetPath,
       estReppoCost: opts.estReppoCost ?? 0, selfScore: score,
     })

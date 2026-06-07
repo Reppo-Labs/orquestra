@@ -66,6 +66,14 @@ describe('parseDatanetRubric — CLI 0.7.0 nested shape', () => {
     expect(r.publisherSpec).toMatch(/Hyperliquid/)
   })
 
+  it('reads subnetUuid from metadata (required by reppo 0.8.0 mint-pod --subnet-uuid)', () => {
+    expect(parseDatanetRubric(nestedFixture).subnetUuid).toBe('00000000-0000-0000-0000-000000000009')
+  })
+
+  it('subnetUuid is empty string when absent (flat pre-0.7 shape)', () => {
+    expect(parseDatanetRubric(fixture).subnetUuid).toBe('')
+  })
+
   it('reads voterRubric from metadata.onboardingVoters', () => {
     const r = parseDatanetRubric(nestedFixture)
     expect(r.voterRubric).toMatch(/Score Pods/)
