@@ -69,10 +69,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         for (const intent of intents) {
           const r = await deps.executor.executeVote(intent)
           votes.push(r)
-          // Record unless the budget manager CLEARLY refused (never submitted). An
-          // 'error' may mean the tx landed but we couldn't confirm the hash — record
-          // it so we don't re-vote (double-spend) next cycle. Fail-safe toward not repeating.
-          if (r.status !== 'refused-budget') deps.recordVote(datanetId, intent.podId)
+          // Record dedup ONLY on confirmed execution. A non-executed result (refused,
+          // or an 'error' such as a validation failure / missing credential) most often
+          // means the tx never submitted — recording it would PERMANENTLY block a
+          // legitimate retry. The idempotency key (vote-<pod>-<dir>) guards the rare
+          // landed-but-unconfirmed case on retry, and the chain rejects a duplicate vote.
+          if (r.status === 'executed') deps.recordVote(datanetId, intent.podId)
           deps.recordActivity({
             ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
             podId: intent.podId, direction: intent.direction, conviction: intent.conviction, reason: intent.reason,
@@ -99,9 +101,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           for (const intent of intents) {
             const r = await deps.executor.executeMint(intent)
             mints.push(r)
-            // Same fail-safe as votes: record unless clearly refused, so a landed-but-
-            // unconfirmed mint isn't re-attempted next cycle.
-            if (r.status !== 'refused-budget') deps.recordMint(datanetId, intent.canonicalKey)
+            // Record dedup ONLY on confirmed execution (see vote rationale): a validation
+            // or transient error never submitted, so recording it would block a legitimate
+            // re-mint. The idempotency key (mint-<canonicalKey>) guards a landed-but-
+            // unconfirmed mint on retry. (This recurred live: each missing-credential error
+            // poisoned dedup and required manually clearing the key before retrying.)
+            if (r.status === 'executed') deps.recordMint(datanetId, intent.canonicalKey)
             deps.recordActivity({
               ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
               canonicalKey: intent.canonicalKey, podName: intent.podName,
@@ -146,10 +151,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         podId: em.podId, epoch: em.epoch, reppoClaimed: em.reppo,
         status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
       })
-      // Fail-safe like vote/mint: record unless clearly refused (budget), so a landed-
-      // but-unconfirmed claim isn't re-attempted. Mark in-memory `seen` too so a
-      // duplicate (pod,epoch) in the same `due` list isn't re-claimed this cycle.
-      if (r.status !== 'refused-budget') { deps.recordClaim(key); seen.add(key) }
+      // Record dedup ONLY on confirmed execution: a transiently-failed claim SHOULD retry
+      // next cycle — unclaimed emissions are money left on the table, and the chain
+      // rejects an already-claimed (pod,epoch). Mark in-memory `seen` too so a duplicate
+      // (pod,epoch) in the same `due` list isn't re-claimed this cycle.
+      if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
     }
   }
 
