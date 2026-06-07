@@ -7,6 +7,7 @@ import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
 import { listDatanetsJson } from './reppo/listDatanets.js'
 import { queryBalanceJson } from './reppo/queryBalance.js'
+import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } from './reppo/agent.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -107,6 +108,32 @@ async function start(): Promise<void> {
           (r.detail ? ` — ${r.detail}` : ''),
       )
     }
+  }
+
+  // Reppo agent identity for minting (reppo >=0.8.0 `mint-pod` requires REPPO_AGENT_ID).
+  // Idempotent like the veREPPO lock: operator-set env wins, else reuse the persisted
+  // agent.json, else register once and persist. Gated on minting being enabled so a
+  // voting-only node never registers. A failure here is non-fatal — voting still runs;
+  // mints will error visibly until an agent id is available.
+  const mintingEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
+  try {
+    const res = await ensureAgentId({
+      mintingEnabled,
+      envAgentId: process.env.REPPO_AGENT_ID,
+      readStored: () => readAgentStore(DATA_DIR),
+      register: () => registerAgentJson('orquestra', 'Reppo Orquestra swarm node — publishes data pods'),
+      writeStored: (c) => writeAgentStore(DATA_DIR, c),
+      setEnv: (c) => {
+        process.env.REPPO_AGENT_ID = c.agentId
+        // apiKey env name is a best-effort guess; if mint-pod needs a different name,
+        // first run surfaces it. The id is the confirmed requirement.
+        if (c.apiKey) process.env.REPPO_API_KEY = c.apiKey
+      },
+    })
+    if (res.source === 'registered') console.error(`orquestra: registered Reppo agent ${res.agentId} — persisted to ${DATA_DIR}/agent.json`)
+    else if (res.source !== 'skipped') console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
+  } catch (e) {
+    console.error(`orquestra: agent registration failed — mints will error until REPPO_AGENT_ID is set (run \`reppo register-agent\`): ${(e as Error).message}`)
   }
 
   const deps: CycleDeps = {
