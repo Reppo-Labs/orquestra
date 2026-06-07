@@ -117,7 +117,7 @@ describe('runCycle', () => {
     expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
 
-  it('does NOT record a vote refused by budget, but DOES record one that errored (possibly landed)', async () => {
+  it('records dedup ONLY on executed — refused AND errored are not recorded (so retries are not blocked)', async () => {
     const refused = deps({
       executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn(async () => ({ ok: false, status: 'refused-budget' })) } as unknown as CycleDeps['executor'],
     })
@@ -129,7 +129,8 @@ describe('runCycle', () => {
       executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'error', detail: 'no txHash' })), executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })) } as unknown as CycleDeps['executor'],
     })
     await runCycle(config, 'c7', errored)
-    expect(errored.recordVote).toHaveBeenCalledWith('9', 'p1') // errored vote recorded → won't re-vote
+    expect(errored.recordVote).not.toHaveBeenCalled()        // errored vote NOT recorded → retried next cycle (idempotency key guards double-spend)
+    expect(errored.recordMint).toHaveBeenCalledWith('9', 'k1') // executed mint IS recorded
   })
 })
 
