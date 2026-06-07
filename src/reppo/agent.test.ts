@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseAgentRegistration, readAgentStore, writeAgentStore, ensureAgentId, type EnsureAgentDeps } from './agent.js'
+import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, type EnsureAgentDeps } from './agent.js'
 
 describe('parseAgentRegistration', () => {
   it('extracts agentId + apiKey from register-agent --json', () => {
@@ -15,6 +15,19 @@ describe('parseAgentRegistration', () => {
   it('returns empty strings on garbage', () => {
     expect(parseAgentRegistration(null)).toEqual({ agentId: '', apiKey: '' })
     expect(parseAgentRegistration({})).toEqual({ agentId: '', apiKey: '' })
+  })
+})
+
+describe('parseRegisterAgentOutput (CLI emits TEXT even with --json)', () => {
+  it('parses the human-readable text output the reppo CLI actually prints', () => {
+    const stdout = `✓ Registered new agent "orquestra"\n\n  id:     cmq4cug3d0000l404g40nyjn0\n  apiKey: agent_cqj3ljok99m_wy3p83yr31d\n\n⚠ SAVE THESE CREDENTIALS NOW.\n  - The apiKey is the agent's persistent Bearer token — do not lose it.\n`
+    expect(parseRegisterAgentOutput(stdout)).toEqual({ agentId: 'cmq4cug3d0000l404g40nyjn0', apiKey: 'agent_cqj3ljok99m_wy3p83yr31d' })
+  })
+  it('still parses genuine JSON output if a future CLI honors --json', () => {
+    expect(parseRegisterAgentOutput('{"agentId":"ag_9","apiKey":"sk_9"}')).toEqual({ agentId: 'ag_9', apiKey: 'sk_9' })
+  })
+  it('throws when neither JSON nor an id line is present', () => {
+    expect(() => parseRegisterAgentOutput('some unexpected error text')).toThrow()
   })
 })
 

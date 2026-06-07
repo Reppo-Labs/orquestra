@@ -40,6 +40,26 @@ export function writeAgentStore(dataDir: string, creds: AgentCreds): void {
   renameSync(`${path}.tmp`, path)
 }
 
+/** Parse register-agent output. The CLI prints a human-readable block even with
+ *  `--json` (the flag isn't honored), e.g.:
+ *    ✓ Registered new agent "orquestra"
+ *      id:     cmq4...
+ *      apiKey: agent_...
+ *  Try JSON first (future-proofing), then fall back to scraping `id:`/`apiKey:` lines.
+ *  Throws if neither yields an agentId — so a failed registration never looks like success. */
+export function parseRegisterAgentOutput(stdout: string): AgentCreds {
+  try {
+    const j = parseAgentRegistration(JSON.parse(stdout))
+    if (j.agentId) return j
+  } catch {
+    // not JSON — fall through to text scraping
+  }
+  const id = stdout.match(/\bid:\s*(\S+)/i)?.[1] ?? ''
+  const apiKey = stdout.match(/\bapiKey:\s*(\S+)/i)?.[1] ?? ''
+  if (!id) throw new Error(`register-agent: could not parse credentials from output: ${stdout.slice(0, 200)}`)
+  return { agentId: id, apiKey }
+}
+
 /** Live: register an agent identity on the Reppo platform (signs with the wallet).
  *  One-time per operator — callers gate it behind ensureAgentId's idempotency. */
 export async function registerAgentJson(name: string, description: string): Promise<AgentCreds> {
@@ -48,11 +68,7 @@ export async function registerAgentJson(name: string, description: string): Prom
     withRpcUrl(['register-agent', '--name', name, '--description', description, '--json']),
     { env: reppoEnv(), timeout: 120_000 },
   )
-  try {
-    return parseAgentRegistration(JSON.parse(stdout))
-  } catch {
-    throw new Error(`registerAgentJson: bad reppo output: ${stdout.slice(0, 200)}`)
-  }
+  return parseRegisterAgentOutput(stdout)
 }
 
 export interface EnsureAgentDeps {
