@@ -10,6 +10,9 @@ export interface DatanetRubric {
   publisherSpec: string
   /** onboardingVoters — how to score pods 1-10 (vote rubric). */
   voterRubric: string
+  /** Platform subnet UUID (cuid) from datanet metadata — REQUIRED by reppo >=0.8.0
+   *  `mint-pod --subnet-uuid`. Empty string when metadata predates it (vote-only). */
+  subnetUuid: string
   /** Derived capability (two-tier model): true when a voter rubric is present. */
   canVote: boolean
   /** Derived capability: true when a publisher spec is present (a data adapter is checked separately by the minter). */

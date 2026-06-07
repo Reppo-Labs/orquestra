@@ -20,7 +20,7 @@ const fakeCli = (): ReppoCli => ({
   claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0.0009 })),
 })
 const voteIntent = (podId: string): VoteIntent => ({ kind: 'vote', datanetId: '9', podId, direction: 'up', conviction: 9, reason: 'aligned' })
-const mintIntent = (key: string, est = 0): MintIntent => ({ kind: 'mint', datanetId: '9', canonicalKey: key, podName: 'p', podDescription: 'd', datasetPath: '/tmp/x.json', estReppoCost: est })
+const mintIntent = (key: string, est = 0): MintIntent => ({ kind: 'mint', datanetId: '9', subnetUuid: 'cm-subnet-9', canonicalKey: key, podName: 'p', podDescription: 'd', datasetPath: '/tmp/x.json', estReppoCost: est })
 
 describe('WalletExecutor', () => {
   it('executes a vote within budget and records it', async () => {

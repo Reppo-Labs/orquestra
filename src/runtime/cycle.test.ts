@@ -10,7 +10,7 @@ import type { DatanetAdapter } from '../adapter/types.js'
 
 const rubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
-  canVote: true, canMint: true, status: 'ACTIVE',
+  canVote: true, canMint: true, status: 'ACTIVE', subnetUuid: 'cm-test-9',
   economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
   ...over,
 })

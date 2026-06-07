@@ -16,7 +16,7 @@ function deps(model: OnboardingAgentDeps['model']): OnboardingAgentDeps {
     model,
     prompter: silentPrompter,
     listDatanets: vi.fn(async () => [{ id: '9', name: 'TradingGym AI', status: 'ACTIVE', description: 'HL', accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1 }]),
-    getDatanetDetails: vi.fn(async () => ({ datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v', canVote: true, canMint: true, status: 'ACTIVE', economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' } })),
+    getDatanetDetails: vi.fn(async () => ({ datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v', subnetUuid: 'cm-test-9', canVote: true, canMint: true, status: 'ACTIVE', economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' } })),
     getBalance: vi.fn(async () => ({ eth: 0.05, reppo: 1234.5, veReppo: 500, usdc: 10 })),
   }
 }

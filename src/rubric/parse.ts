@@ -46,6 +46,7 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
   const name = str(m['subnetName'] ?? m['name'])
   const publisherSpec = str(m['onboardingPublishers'])
   const voterRubric = str(m['onboardingVoters'])
+  const subnetUuid = str(m['subnetUuid'])
 
   if (id == null) throw new RubricUnavailableError('datanet metadata has no datanetId/tokenId')
   if (!goal && !voterRubric && !publisherSpec) {
@@ -60,6 +61,7 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
     goal,
     publisherSpec,
     voterRubric,
+    subnetUuid,
     canVote: voterRubric !== '',
     canMint: publisherSpec !== '',
     status: str(m['status']) || 'UNKNOWN',

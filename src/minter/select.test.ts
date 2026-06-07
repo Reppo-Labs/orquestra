@@ -9,7 +9,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 
 const rubric: DatanetRubric = {
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'HL perp data', voterRubric: 'v',
-  canVote: true, canMint: true, status: 'ACTIVE',
+  canVote: true, canMint: true, status: 'ACTIVE', subnetUuid: 'cm-subnet-9',
   economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' },
 }
 const cand = (key: string): CandidatePod => ({ canonicalKey: key, podName: `pod-${key}`, podDescription: 'd', dataset: { rows: [key] } })
@@ -27,6 +27,7 @@ describe('selectMints (minScore 7)', () => {
       { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ a: 9, b: 4 }) })
     expect(intents.map((i) => i.canonicalKey)).toEqual(['a']) // b scored 4 < 7
     expect(intents[0].kind).toBe('mint'); expect(intents[0].datanetId).toBe('9')
+    expect(intents[0].subnetUuid).toBe('cm-subnet-9') // carried from rubric for mint-pod --subnet-uuid
     expect(existsSync(intents[0].datasetPath)).toBe(true)
     expect(JSON.parse(readFileSync(intents[0].datasetPath, 'utf-8'))).toEqual({ rows: ['a'] })
   })

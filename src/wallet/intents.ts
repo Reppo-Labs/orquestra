@@ -12,6 +12,8 @@ export interface VoteIntent {
 export interface MintIntent {
   kind: 'mint'
   datanetId: string
+  /** platform subnet UUID for `mint-pod --subnet-uuid` (reppo >=0.8.0). */
+  subnetUuid: string
   /** sha256-derived dedup key. */
   canonicalKey: string
   podName: string
