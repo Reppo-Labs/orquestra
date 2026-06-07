@@ -29,6 +29,9 @@ import { queryEmissionsDueJson } from './reppo/queryEmissionsDue.js'
 import { queryEpochJson } from './reppo/queryEpoch.js'
 import { startDashboard } from './dashboard/server.js'
 import { backfillActivityLog } from './dashboard/backfill.js'
+import { readActivity } from './dashboard/activityLog.js'
+import { earnSummary, formatEarnStatus, type OwnPodVote } from './dashboard/earnStatus.js'
+import { queryOwnPodVotes } from './reppo/queryOwnPods.js'
 
 async function fetchPodContent(url: string): Promise<string> {
   const ctrl = new AbortController()
@@ -240,8 +243,29 @@ async function runBackfill(): Promise<void> {
   else console.error(`orquestra: backfill complete — ${r.votes} votes, ${r.mints} mints written to activity-log.jsonl`)
 }
 
+/** `orquestra earn-status` — one-glance report of whether minted pods are earning
+ *  (the G1 gate). Runs in-container with the node's own data + live reppo queries. */
+async function runEarnStatus(): Promise<void> {
+  const config = loadConfig(DATA_DIR)
+  const activity = readActivity(DATA_DIR, { limit: 100_000 })
+  const emissionsDue = await queryEmissionsDueJson().catch((e) => {
+    console.error(`orquestra: emissions-due query failed: ${(e as Error).message}`)
+    return { totalReppo: 0, pods: [] }
+  })
+  const mintDatanets = Object.entries(config.datanets).filter(([k, d]) => k !== '*' && d.mint).map(([k]) => k)
+  const votes: OwnPodVote[] = []
+  for (const id of mintDatanets) {
+    try {
+      votes.push(...(await queryOwnPodVotes(id)))
+    } catch (e) {
+      console.error(`orquestra: own-pods query failed for datanet ${id}: ${(e as Error).message}`)
+    }
+  }
+  console.log(formatEarnStatus(earnSummary(activity, emissionsDue, votes)))
+}
+
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : cmd === 'backfill' ? runBackfill : start
+const run = cmd === 'configure' ? onboard : cmd === 'backfill' ? runBackfill : cmd === 'earn-status' ? runEarnStatus : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)
