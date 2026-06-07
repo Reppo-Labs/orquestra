@@ -12,11 +12,11 @@ const pod = (over: Partial<OwnPodVote> = {}): OwnPodVote => ({ podId: '1', name:
 describe('earnSummary', () => {
   it('counts executed mints, sums claimed, carries claimable + vote tallies', () => {
     const s = earnSummary(
-      [mint(), mint({ status: 'error' }), claim(12.5), claim(4, 'error')],
+      [mint(), mint({ status: 'error' }), mint({ cycleId: 'backfill' }), claim(12.5), claim(4, 'error')],
       due(3),
       [pod({ upVotes: 5, downVotes: 1 }), pod({ podId: '2', upVotes: 2, downVotes: 0 })],
     )
-    expect(s.mintedPods).toBe(1)         // only executed
+    expect(s.mintedPods).toBe(1)         // only executed, node-era (backfill rows excluded)
     expect(s.claimedReppo).toBe(12.5)    // only executed claim
     expect(s.claimableReppo).toBe(3)
     expect(s.totalUpVotes).toBe(7)

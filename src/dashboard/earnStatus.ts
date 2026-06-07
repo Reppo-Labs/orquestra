@@ -22,7 +22,9 @@ export interface EarnSummary {
 /** Pure: roll up the earn-test signal from local activity + a live emissions-due
  *  query + on-chain pod vote tallies. */
 export function earnSummary(activity: ActivityEntry[], emissionsDue: EmissionsDue, ownPodVotes: OwnPodVote[]): EarnSummary {
-  const mintedPods = activity.filter((e) => e.kind === 'mint' && e.status === 'executed').length
+  // Exclude 'backfill' rows — those are pre-dashboard historical placeholders, not pods
+  // this node minted; counting them would overstate the earn-test's actual output.
+  const mintedPods = activity.filter((e) => e.kind === 'mint' && e.status === 'executed' && e.cycleId !== 'backfill').length
   const claimedReppo = activity
     .filter((e) => e.kind === 'claim' && e.status === 'executed')
     .reduce((s, e) => s + (e.reppoClaimed ?? 0), 0)
