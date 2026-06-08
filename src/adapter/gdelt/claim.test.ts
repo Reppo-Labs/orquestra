@@ -35,6 +35,22 @@ describe('synthesizeClaims', () => {
   it('returns [] (no throw) when generate throws', async () => {
     expect(await synthesizeClaims(arts, r, '9', s, { generate: async () => { throw new Error('llm down') } })).toEqual([])
   })
+  it('canonicalKey is stable for the same claim and distinct for different claims', async () => {
+    const g1 = async () => ({ claims: [{ claim: 'Ceasefire holds through June', verdict: 'credible' as const, confidence: 7, importance: 8, rationale: 'r', sources: ['https://ex.com/a'] }] })
+    const g2 = async () => ({ claims: [{ claim: 'Ceasefire holds through June', verdict: 'credible' as const, confidence: 7, importance: 8, rationale: 'r2', sources: ['https://OTHER.com/z'] }] })
+    const a = await synthesizeClaims(arts, r, '9', s, { generate: g1 })
+    const b = await synthesizeClaims(arts, r, '9', s, { generate: g2 })
+    expect(a[0].canonicalKey).toBe(b[0].canonicalKey)   // same claim, different source URL → same key
+  })
+  it('two distinct claims citing the SAME source get distinct keys (no collision)', async () => {
+    const g = async () => ({ claims: [
+      { claim: 'Ceasefire holds through June', verdict: 'credible' as const, confidence: 7, importance: 8, rationale: 'r', sources: ['https://ex.com/a'] },
+      { claim: 'Oil prices stabilize after the deal', verdict: 'likely' as const, confidence: 7, importance: 8, rationale: 'r', sources: ['https://ex.com/a'] },
+    ] })
+    const cands = await synthesizeClaims(arts, r, '9', s, { generate: g })
+    expect(cands).toHaveLength(2)
+    expect(cands[0].canonicalKey).not.toBe(cands[1].canonicalKey)
+  })
 })
 
 describe('buildSynthesisPrompt', () => {

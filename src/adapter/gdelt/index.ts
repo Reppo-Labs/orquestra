@@ -24,10 +24,11 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
       return true
     },
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
+      const s = ctx.strategy as Partial<GdeltStrategy> | undefined
       const strategy: GdeltStrategy = {
-        ...STRATEGY_DEFAULTS, ...deps.defaults,
-        ...(ctx.strategy as Partial<GdeltStrategy> | undefined),
-        topN: ctx.topN || STRATEGY_DEFAULTS.topN,
+        ...STRATEGY_DEFAULTS, ...deps.defaults, ...s,
+        // operator's adapterParams topN wins, else the cycle's topN, else the default.
+        topN: s?.topN ?? deps.defaults?.topN ?? ctx.topN ?? STRATEGY_DEFAULTS.topN,
       }
       const q: GdeltQuery = {
         query: deps.defaults?.query ?? strategy.focus,

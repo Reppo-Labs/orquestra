@@ -31,4 +31,11 @@ describe('createGdeltAdapter', () => {
     const a = createGdeltAdapter({ fetchEvents: async () => [], generate: gen })
     expect(await a.discover({ datanetId: '2', rubric, topN: 5, strategy })).toEqual([])
   })
+  it('honors the operator strategy topN over the cycle topN', async () => {
+    let seenPrompt = ''
+    const capture = async (args: { system: string; prompt: string }) => { seenPrompt = args.prompt; return { claims: [] } }
+    const a = createGdeltAdapter({ fetchEvents: async () => articles, generate: capture })
+    await a.discover({ datanetId: '2', rubric, topN: 12, strategy: { ...strategy, topN: 3 } })
+    expect(seenPrompt).toContain('up to 3')   // strategy topN 3 wins over ctx.topN 12
+  })
 })

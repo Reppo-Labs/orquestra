@@ -16,4 +16,9 @@ describe('filterNovel', () => {
   it('keeps everything when there are no existing pods', () => {
     expect(filterNovel([cand('a claim about something')], [])).toHaveLength(1)
   })
+  it('catches a reworded claim about the same event (overlap coefficient)', () => {
+    const existing = ['Israel and Lebanon extend ceasefire through June 2026']
+    const out = filterNovel([cand('Israel Lebanon ceasefire collapses after strike')], existing)
+    expect(out).toEqual([])   // shares israel/lebanon/ceasefire → overlap >= 0.5 → dropped
+  })
 })

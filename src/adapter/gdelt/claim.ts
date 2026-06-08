@@ -69,7 +69,10 @@ export async function synthesizeClaims(
     if (c.importance < strategy.minImportance) continue
     const sources = [...c.sources].sort()
     const primary = sources[0] ?? ''
-    const canonicalKey = createHash('sha256').update(`geo:${datanetId}:${primary}`).digest('hex').slice(0, 16)
+    // Key on the CLAIM (the unit of dedup), normalized — stable across source churn and
+    // unique per distinct claim (URL-keying collided same-source claims + re-minted on source change).
+    const normClaim = c.claim.trim().toLowerCase().replace(/\s+/g, ' ')
+    const canonicalKey = createHash('sha256').update(`geo:${datanetId}:${normClaim}`).digest('hex').slice(0, 16)
     cands.push({
       canonicalKey,
       podName: c.claim,
