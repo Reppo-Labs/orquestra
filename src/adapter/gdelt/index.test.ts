@@ -31,6 +31,14 @@ describe('createGdeltAdapter', () => {
     const a = createGdeltAdapter({ fetchEvents: async () => [], generate: gen })
     expect(await a.discover({ datanetId: '2', rubric, topN: 5, strategy })).toEqual([])
   })
+  it('sanitizes the free-text focus into a valid GDELT query (no commas/slashes)', async () => {
+    let seenQuery = ''
+    const fetchEvents = vi.fn(async (q: { query: string }) => { seenQuery = q.query; return articles })
+    const a = createGdeltAdapter({ fetchEvents, generate: gen })
+    await a.discover({ datanetId: '2', rubric, topN: 5, strategy: { ...strategy, focus: 'Middle East conflict, Taiwan/China tensions' } })
+    expect(seenQuery).toBe('("Middle East conflict" OR "Taiwan China tensions")')
+    expect(seenQuery).not.toMatch(/[,/]/)
+  })
   it('honors the operator strategy topN over the cycle topN', async () => {
     let seenPrompt = ''
     const capture = async (args: { system: string; prompt: string }) => { seenPrompt = args.prompt; return { claims: [] } }
