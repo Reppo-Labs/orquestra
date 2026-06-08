@@ -1,6 +1,31 @@
 // src/dashboard/earnStatus.ts
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
 import type { ActivityEntry } from './activityLog.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
+
+const FILE = 'earn-status.json'
+
+/** EarnSummary plus the cycle timestamp it was computed at (persisted each cycle). */
+export type PersistedEarn = EarnSummary & { ts: string }
+
+/** Atomic write (tmp + rename), matching the snapshot/ledger persistence pattern. */
+export function writeEarnStatus(dataDir: string, earn: PersistedEarn): void {
+  const path = join(dataDir, FILE)
+  writeFileSync(`${path}.tmp`, JSON.stringify(earn, null, 2))
+  renameSync(`${path}.tmp`, path)
+}
+
+/** Read the last persisted earn status; null if absent/corrupt. */
+export function readEarnStatus(dataDir: string): PersistedEarn | null {
+  const path = join(dataDir, FILE)
+  if (!existsSync(path)) return null
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as PersistedEarn
+  } catch {
+    return null
+  }
+}
 
 /** Per-pod vote tallies for our own pods (leading earn signal — emissions follow votes). */
 export interface OwnPodVote { podId: string; name: string; validityEpoch: string; upVotes: number; downVotes: number }

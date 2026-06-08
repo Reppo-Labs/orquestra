@@ -29,6 +29,7 @@
   <span class="muted" id="asof"></span>
 </header>
 <main>
+  <div id="earnBanner" class="muted" style="margin-bottom:16px"></div>
   <div class="cards" id="cards"></div>
   <h2 style="font-size:15px">Claimable emissions</h2>
   <table id="emTable"><thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>REPPO</th></tr></thead><tbody></tbody></table>
@@ -41,12 +42,16 @@
 const fmt = (n) => (n === undefined || n === null) ? '—' : (Math.round(n * 10000) / 10000).toLocaleString()
 const sign = (n) => n > 0 ? 'pos' : n < 0 ? 'neg' : ''
 async function load() {
-  const [pnlRes, act, cfg] = await Promise.all([
+  const [pnlRes, act, cfg, earn] = await Promise.all([
     fetch('/api/pnl').then(r => r.json()),
     fetch('/api/activity').then(r => r.json()),
     fetch('/api/config').then(r => r.json()),
+    fetch('/api/earn').then(r => r.json()).catch(() => null),
   ])
   const p = pnlRes.pnl, snap = pnlRes.snapshot
+  document.getElementById('earnBanner').textContent = earn
+    ? `Earn-test: ${earn.earning ? 'EARNING' : (earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet')} · ${earn.mintedPods} pod(s), ${fmt(earn.claimableReppo)} claimable + ${fmt(earn.claimedReppo)} claimed REPPO, ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
+    : 'Earn-test: pending first cycle'
   document.getElementById('sub').textContent = `· ${cfg.cadenceHours}h cadence · claim ${cfg.claimEmissions ? 'on' : 'off'}`
   document.getElementById('asof').textContent = snap ? `as of ${new Date(snap.ts).toLocaleString()}` : 'PnL pending first cycle'
   const epochLabel = (e) => e ? `${e.epoch} · ${Math.max(0, Math.round(e.secondsRemaining / 3600))}h left` : '—'

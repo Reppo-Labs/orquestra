@@ -1,6 +1,9 @@
 // src/dashboard/earnStatus.test.ts
-import { describe, it, expect } from 'vitest'
-import { earnSummary, formatEarnStatus, type OwnPodVote } from './earnStatus.js'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { earnSummary, formatEarnStatus, writeEarnStatus, readEarnStatus, type OwnPodVote } from './earnStatus.js'
 import type { ActivityEntry } from './activityLog.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
 
@@ -46,5 +49,20 @@ describe('formatEarnStatus', () => {
   it('renders the "too early" verdict when nothing yet', () => {
     const out = formatEarnStatus(earnSummary([mint()], due(0), []))
     expect(out).toMatch(/too early/)
+  })
+})
+
+describe('earn-status persistence', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-earn-')) })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  it('round-trips the persisted earn status', () => {
+    const earn = { ...earnSummary([mint()], due(5), [pod({ upVotes: 2 })]), ts: '2026-06-07T00:00:00.000Z' }
+    writeEarnStatus(dir, earn)
+    expect(readEarnStatus(dir)).toEqual(earn)
+  })
+  it('returns null when absent', () => {
+    expect(readEarnStatus(dir)).toBeNull()
   })
 })

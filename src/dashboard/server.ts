@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { readActivity } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
+import { readEarnStatus } from './earnStatus.js'
 
 const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
 
@@ -39,6 +40,7 @@ function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): voi
     }
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
     if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
+    if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
       const activity = readActivity(dataDir, { limit: 5000 })
