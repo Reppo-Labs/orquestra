@@ -1,0 +1,7 @@
+{
+  "articles": [
+    { "url": "https://ex.com/a", "title": "Israel and Lebanon extend ceasefire", "domain": "ex.com", "seendate": "20260608T120000Z" },
+    { "url": "https://ex.com/b", "title": "OPEC+ hikes output as Brent holds above $105", "domain": "ex.com", "seendate": "20260608T100000Z" },
+    { "title": "no url should be dropped", "domain": "ex.com", "seendate": "20260608T090000Z" }
+  ]
+}
