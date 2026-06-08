@@ -6,7 +6,11 @@ import type { OnboardingAnswers } from './types.js'
 export function buildStrategyConfig(a: OnboardingAnswers): StrategyConfig {
   const datanets: Record<string, unknown> = {}
   for (const d of a.datanets) {
-    datanets[d.id] = { vote: d.vote, mint: d.mint, strictness: d.strictness, ...(d.adapter ? { adapter: d.adapter } : {}) }
+    datanets[d.id] = {
+      vote: d.vote, mint: d.mint, strictness: d.strictness,
+      ...(d.adapter ? { adapter: d.adapter } : {}),
+      ...(d.adapterParams ? { adapterParams: d.adapterParams } : {}),
+    }
   }
   return StrategyConfigSchema.parse({
     horizonDays: a.horizonDays,
