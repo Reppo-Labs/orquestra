@@ -1,6 +1,10 @@
 // src/adapter/gdelt/claim.ts
+import { createHash } from 'node:crypto'
+import { generateObject, type LanguageModel } from 'ai'
+import { z } from 'zod'
 import type { GeoArticle } from './gdelt.js'
 import type { DatanetRubric } from '../../rubric/types.js'
+import type { CandidatePod } from '../types.js'
 
 /** Per-operator strategy that personalizes claim synthesis. */
 export interface GdeltStrategy {
@@ -9,6 +13,77 @@ export interface GdeltStrategy {
   brief: string         // freeform strategy brief
   topN: number          // max claims per cycle
   minImportance: number // 1-10 quality gate
+}
+
+const ClaimSchema = z.object({
+  claims: z.array(z.object({
+    claim: z.string().min(1).max(200),
+    verdict: z.enum(['credible', 'likely', 'disputed', 'exaggerated']),
+    confidence: z.number().int().min(1).max(10),
+    importance: z.number().int().min(1).max(10),
+    timeframe: z.string().optional(),
+    rationale: z.string().max(400),
+    sources: z.array(z.string()).min(1),
+  })),
+})
+type ClaimOut = z.infer<typeof ClaimSchema>
+
+/** Injected generator (default: the ai SDK). Lets tests avoid a real LLM. */
+export interface SynthDeps { generate?: (args: { system: string; prompt: string }) => Promise<ClaimOut>; model?: LanguageModel }
+
+const defaultGenerate = (model: LanguageModel) => async ({ system, prompt }: { system: string; prompt: string }): Promise<ClaimOut> => {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { object } = await generateObject({ model, schema: ClaimSchema, mode: 'json', system, prompt })
+      return object
+    } catch (e) { lastErr = e }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+}
+
+/** Synthesize claims from articles, personalized by strategy, gated on importance.
+ *  A synthesis failure yields [] (logged) — never throws into the cycle. */
+export async function synthesizeClaims(
+  articles: GeoArticle[],
+  rubric: DatanetRubric,
+  datanetId: string,
+  strategy: GdeltStrategy,
+  deps: SynthDeps = {},
+): Promise<CandidatePod[]> {
+  if (articles.length === 0) return []
+  const { system, prompt } = buildSynthesisPrompt(articles, rubric, strategy)
+  const generate = deps.generate ?? (deps.model ? defaultGenerate(deps.model) : null)
+  if (!generate) throw new Error('synthesizeClaims: provide deps.generate or deps.model')
+
+  let out: ClaimOut
+  try {
+    out = await generate({ system, prompt })
+  } catch (e) {
+    console.error(`orquestra: gdelt claim synthesis failed — ${e instanceof Error ? e.message : String(e)}`)
+    return []
+  }
+
+  const cands: CandidatePod[] = []
+  for (const c of out.claims) {
+    if (c.importance < strategy.minImportance) continue
+    const sources = [...c.sources].sort()
+    const primary = sources[0] ?? ''
+    const canonicalKey = createHash('sha256').update(`geo:${datanetId}:${primary}`).digest('hex').slice(0, 16)
+    cands.push({
+      canonicalKey,
+      podName: c.claim,
+      podDescription: `Verdict: ${c.verdict} (${c.confidence}/10). ${c.rationale} Source: ${primary}`,
+      dataset: {
+        kind: 'geopolitical-claim', schema_version: 1,
+        claim: c.claim, verdict: c.verdict, confidence: c.confidence,
+        timeframe: c.timeframe, rationale: c.rationale,
+        sources: sources.map((u) => ({ url: u })),
+      },
+      selfScore: c.importance,
+    })
+  }
+  return cands
 }
 
 /** Pure: build the (system, prompt) for the batch claim-synthesis call. Exposed for testing. */
