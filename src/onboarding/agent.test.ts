@@ -1,7 +1,7 @@
 // src/onboarding/agent.test.ts
 import { describe, it, expect, vi } from 'vitest'
 import { MockLanguageModelV1 } from 'ai/test'
-import { runConversationalOnboarding, buildOnboardingTools, type OnboardingAgentDeps } from './agent.js'
+import { runConversationalOnboarding, buildOnboardingTools, SYSTEM, type OnboardingAgentDeps } from './agent.js'
 import type { Prompter } from './types.js'
 
 const validAnswers = {
@@ -75,5 +75,26 @@ describe('onboarding tools', () => {
     const res = await tools.get_wallet_balance.execute({}, { toolCallId: 'e', messages: [] } as never)
     expect((res as { error?: string }).error).toMatch(/MISSING_ADDRESS/)
     expect((res as { hint?: string }).hint).toMatch(/REPPO_PRIVATE_KEY/)
+  })
+})
+
+describe('onboarding strategy elicitation', () => {
+  it('the system prompt guides eliciting per-datanet mint strategy (focus/angle)', () => {
+    expect(SYSTEM.toLowerCase()).toContain('focus')
+    expect(SYSTEM.toLowerCase()).toContain('angle')
+    expect(SYSTEM.toLowerCase()).toContain('strategy')
+  })
+
+  it('finalize captures adapterParams and they survive validation', async () => {
+    const captured: unknown[] = []
+    const tools = buildOnboardingTools(deps(null as unknown as OnboardingAgentDeps['model']), (a) => captured.push(a))
+    const ans = {
+      ...validAnswers,
+      datanets: [{ id: '2', vote: true, mint: true, strictness: 'balanced' as const, adapter: 'gdelt',
+        adapterParams: { focus: 'Middle East', angle: 'contrarian', topN: 4, minImportance: 7 } }],
+    }
+    const res = await tools.finalize.execute(ans, { toolCallId: 'a', messages: [] } as never)
+    expect(res).toMatchObject({ saved: true })
+    expect((captured[0] as { datanets: { adapterParams?: { focus?: string } }[] }).datanets[0].adapterParams?.focus).toBe('Middle East')
   })
 })
