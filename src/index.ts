@@ -1,6 +1,6 @@
 // src/index.ts
-import { resolve } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { resolve, join } from 'node:path'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { loadConfig } from './config/load.js'
 import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
@@ -15,6 +15,7 @@ import { WalletExecutor } from './wallet/executor.js'
 import { defaultReppoCli } from './reppo/cli.js'
 import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
+import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
 import { createLlmScorer } from './voter/score.js'
 import { candidateScoreInput } from './minter/score.js'
@@ -84,14 +85,21 @@ async function start(): Promise<void> {
   const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const apiKey = process.env.LLM_API_KEY ?? ''
   const model = resolveModel(provider, apiKey)
-  const scorer = createLlmScorer(model)
+  const strategyBrief = (() => {
+    try { return readFileSync(join(DATA_DIR, 'strategy-notes.md'), 'utf-8') } catch { return '' }
+  })()
+  const scorer = createLlmScorer(model, { brief: strategyBrief })
+  const strategyFor = (id: string): Record<string, unknown> => {
+    const p = (config.datanets[id] as { adapterParams?: Record<string, unknown> }).adapterParams ?? {}
+    return { brief: strategyBrief, ...p }
+  }
   // One shared BudgetLedger instance: the executor reserves/records spend on it,
   // and runCycle calls startCycle on it — the single source of budget truth.
   const ledger = new BudgetLedger(DATA_DIR, config.budget)
   const executor = new WalletExecutor(defaultReppoCli, ledger)
   const dedup = new DedupState(DATA_DIR)
   // Adapter registry — add new adapters here; routing is by adapter id from config.
-  const adapters = [createHyperliquidAdapter()]
+  const adapters = [createHyperliquidAdapter(), createGdeltAdapter({ model })]
 
   if (config.stake.lockReppo > 0) {
     // Idempotent: the veREPPO lock is one-time. If the wallet already holds veREPPO
@@ -182,6 +190,8 @@ async function start(): Promise<void> {
       try { appendActivity(DATA_DIR, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
     },
     recordClaim: (key) => dedup.recordClaim(key),
+    strategyFor,
+    getExistingPodNames: async (id) => (await listPodsJson(id, { all: true }).catch(() => [])).map((p) => p.name).filter(Boolean),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length

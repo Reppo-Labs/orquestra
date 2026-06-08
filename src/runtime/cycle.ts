@@ -30,6 +30,10 @@ export interface CycleDeps {
   seenClaims(): Promise<Set<string>>
   recordActivity(entry: ActivityEntry): void
   recordClaim(key: string): void
+  /** per-datanet operator strategy passed to the adapter (e.g. gdelt focus/angle/brief). */
+  strategyFor?(datanetId: string): Record<string, unknown>
+  /** existing on-chain pod names for a datanet (novelty dedup backstop). */
+  getExistingPodNames?(datanetId: string): Promise<string[]>
 }
 
 export interface DatanetReport {
@@ -86,7 +90,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if (policy.mint && policy.adapter && rubric.canMint) {
         const adapter = deps.getAdapter(policy.adapter)
         if (adapter) {
-          const candidates = await adapter.discover({ datanetId, rubric, topN: deps.topN })
+          const candidates = await adapter.discover({
+            datanetId, rubric, topN: deps.topN,
+            strategy: deps.strategyFor?.(datanetId),
+            existingPodNames: (await deps.getExistingPodNames?.(datanetId)) ?? [],
+          })
           const seenKeys = await deps.seenKeysFor(datanetId)
           const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
           const intents = await selectMints(datanetId, candidates, rubric, {
