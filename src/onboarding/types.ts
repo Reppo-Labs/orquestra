@@ -1,12 +1,20 @@
 // src/onboarding/types.ts
 import type { StrictnessLevel } from '../config/schema.js'
 
+export interface AdapterParams {
+  focus?: string
+  angle?: string
+  topN?: number
+  minImportance?: number
+}
+
 export interface DatanetChoice {
   id: string
   vote: boolean
   mint: boolean
   strictness: StrictnessLevel
   adapter?: string
+  adapterParams?: AdapterParams
 }
 
 export interface OnboardingAnswers {

@@ -11,6 +11,12 @@ export const OnboardingAnswersSchema = z.object({
     mint: z.boolean(),
     strictness: Strictness,
     adapter: z.string().optional(),
+    adapterParams: z.object({
+      focus: z.string(),
+      angle: z.string(),
+      topN: z.number().int().positive(),
+      minImportance: z.number().int().min(1).max(10),
+    }).partial().optional(),
   })),
   lockReppo: z.number().nonnegative(),
   lockDurationDays: z.number().int().positive(),

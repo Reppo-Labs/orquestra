@@ -19,3 +19,20 @@ describe('OnboardingAnswersSchema / validateAnswers', () => {
     if (!bad.ok) expect(bad.error).toMatch(/horizon|number|positive|greater/i)
   })
 })
+
+describe('OnboardingAnswersSchema adapterParams', () => {
+  const base = {
+    datanets: [{ id: '2', vote: true, mint: true, strictness: 'balanced' as const, adapter: 'gdelt',
+      adapterParams: { focus: 'Middle East', angle: 'contrarian', topN: 4, minImportance: 7 } }],
+    lockReppo: 500, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
+    mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'n',
+  }
+  it('accepts a datanet choice with adapterParams', () => {
+    const parsed = OnboardingAnswersSchema.parse(base)
+    expect(parsed.datanets[0].adapterParams?.focus).toBe('Middle East')
+  })
+  it('accepts a datanet choice WITHOUT adapterParams (optional)', () => {
+    const { adapterParams, ...d } = base.datanets[0]
+    expect(OnboardingAnswersSchema.parse({ ...base, datanets: [d] }).datanets[0].adapterParams).toBeUndefined()
+  })
+})
