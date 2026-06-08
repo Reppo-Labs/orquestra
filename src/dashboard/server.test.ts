@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startDashboard, type DashboardHandle } from './server.js'
 import { appendActivity } from './activityLog.js'
+import { writeEarnStatus } from './earnStatus.js'
 
 let dir: string
 let handle: DashboardHandle
@@ -47,6 +48,14 @@ describe('dashboard server', () => {
     expect(r.body).not.toMatch(/PRIVATE_KEY|inf_|0x[a-fA-F0-9]{64}/)
     expect(JSON.parse(r.body)).toHaveProperty('cadenceHours')
   })
+  it('/api/earn returns the persisted earn status', async () => {
+    writeEarnStatus(dir, { ts: 't', mintedPods: 1, claimedReppo: 0, claimableReppo: 5, totalUpVotes: 2, totalDownVotes: 0, pods: [], earning: true })
+    const r = await get('/api/earn')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    expect(body).toMatchObject({ mintedPods: 1, claimableReppo: 5, earning: true })
+  })
+
   it('unknown path → 404', async () => {
     expect((await get('/nope')).status).toBe(404)
   })
