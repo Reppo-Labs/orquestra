@@ -17,6 +17,7 @@ const DatanetPolicy = z
     mint: z.boolean().default(false),
     strictness: Strictness.default('balanced'),
     adapter: z.string().optional(),
+    adapterParams: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
 
