@@ -46,3 +46,17 @@ describe('StrategyConfig claim fields', () => {
     expect(StrategyConfigSchema.parse({ ...valid, claimEmissions: false }).claimEmissions).toBe(false)
   })
 })
+
+describe('StrategyConfig adapterParams', () => {
+  it('accepts optional adapterParams on a datanet policy', () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...valid,
+      datanets: { '2': { vote: true, mint: true, strictness: 'balanced', adapter: 'gdelt', adapterParams: { focus: 'ME', angle: 'contrarian', brief: 'b', topN: 5, minImportance: 7 } } },
+    })
+    const p = cfg.datanets['2'] as { adapterParams?: { focus?: string } }
+    expect(p.adapterParams?.focus).toBe('ME')
+  })
+  it('datanets without adapterParams still parse', () => {
+    expect(StrategyConfigSchema.parse(valid).datanets['9'].strictness).toBe('conservative')
+  })
+})
