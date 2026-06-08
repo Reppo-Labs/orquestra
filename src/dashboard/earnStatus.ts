@@ -44,6 +44,21 @@ export interface EarnSummary {
   earning: boolean
 }
 
+/** Select OUR pods from the full datanet pod list by matching against the mint
+ *  names we recorded. Needed because the on-chain `creator` field comes back empty,
+ *  so the CLI's "own pods" filter returns nothing. Tolerates on-chain name truncation
+ *  by matching when one name is a prefix of the other (≥12 shared chars). */
+export function selectOurPods(allPods: OwnPodVote[], ourPodNames: string[]): OwnPodVote[] {
+  const ours = ourPodNames.map((n) => n.trim()).filter((n) => n !== '')
+  const matches = (podName: string, ourName: string): boolean => {
+    const a = podName.trim(), b = ourName
+    if (a === b) return true
+    const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+    return short.length >= 12 && long.startsWith(short)
+  }
+  return allPods.filter((p) => ours.some((o) => matches(p.name, o)))
+}
+
 /** Pure: roll up the earn-test signal from local activity + a live emissions-due
  *  query + on-chain pod vote tallies. */
 export function earnSummary(activity: ActivityEntry[], emissionsDue: EmissionsDue, ownPodVotes: OwnPodVote[]): EarnSummary {
