@@ -26,14 +26,16 @@ export function parseOwnPodVotes(raw: unknown): OwnPodVote[] {
     .filter((p) => p.podId !== '')
 }
 
-/** Live: our own pods (no --all = this wallet's) with current vote tallies. */
-export async function queryOwnPodVotes(datanetId: string): Promise<OwnPodVote[]> {
-  const { stdout } = await execFileAsync('reppo', withRpcUrl(['list', 'pods', '--datanet', datanetId, '--json']), {
-    env: reppoEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
+/** Live: ALL pods on a datanet with current vote tallies. Uses --all and matches our
+ *  pods by recorded mint name (see selectOurPods), because the on-chain `creator` field
+ *  is empty so the CLI's "own pods" filter returns nothing. */
+export async function queryDatanetPodVotes(datanetId: string): Promise<OwnPodVote[]> {
+  const { stdout } = await execFileAsync('reppo', withRpcUrl(['list', 'pods', '--datanet', datanetId, '--all', '--json']), {
+    env: reppoEnv(), timeout: 90_000, maxBuffer: 64 * 1024 * 1024,
   })
   try {
     return parseOwnPodVotes(JSON.parse(stdout))
   } catch {
-    throw new Error(`queryOwnPodVotes: bad reppo output: ${stdout.slice(0, 200)}`)
+    throw new Error(`queryDatanetPodVotes: bad reppo output: ${stdout.slice(0, 200)}`)
   }
 }

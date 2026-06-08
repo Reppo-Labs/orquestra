@@ -30,8 +30,8 @@ import { queryEpochJson } from './reppo/queryEpoch.js'
 import { startDashboard } from './dashboard/server.js'
 import { backfillActivityLog } from './dashboard/backfill.js'
 import { readActivity } from './dashboard/activityLog.js'
-import { earnSummary, formatEarnStatus, writeEarnStatus, type OwnPodVote } from './dashboard/earnStatus.js'
-import { queryOwnPodVotes } from './reppo/queryOwnPods.js'
+import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from './dashboard/earnStatus.js'
+import { queryDatanetPodVotes } from './reppo/queryOwnPods.js'
 
 async function fetchPodContent(url: string): Promise<string> {
   const ctrl = new AbortController()
@@ -222,9 +222,14 @@ async function start(): Promise<void> {
       const snap = readSnapshot(DATA_DIR)
       const activity = readActivity(DATA_DIR, { limit: 100_000 })
       const mintDatanets = Object.entries(config.datanets).filter(([k, d]) => k !== '*' && d.mint).map(([k]) => k)
+      // On-chain `creator` is empty on our pods, so identify ours by the mint names we
+      // recorded, matched against the full datanet pod list.
+      const ourNames = activity
+        .filter((e) => e.kind === 'mint' && e.status === 'executed' && e.cycleId !== 'backfill' && e.podName)
+        .map((e) => e.podName as string)
       const votes: OwnPodVote[] = []
       for (const id of mintDatanets) {
-        try { votes.push(...(await queryOwnPodVotes(id))) } catch (e) { console.error(`orquestra: earn own-pods query failed for datanet ${id}: ${(e as Error).message}`) }
+        try { votes.push(...selectOurPods(await queryDatanetPodVotes(id), ourNames)) } catch (e) { console.error(`orquestra: earn pod-votes query failed for datanet ${id}: ${(e as Error).message}`) }
       }
       const summary = earnSummary(activity, snap?.emissionsDue ?? { totalReppo: 0, pods: [] }, votes)
       writeEarnStatus(DATA_DIR, { ...summary, ts: new Date().toISOString() })

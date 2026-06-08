@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { earnSummary, formatEarnStatus, writeEarnStatus, readEarnStatus, type OwnPodVote } from './earnStatus.js'
+import { earnSummary, formatEarnStatus, writeEarnStatus, readEarnStatus, selectOurPods, type OwnPodVote } from './earnStatus.js'
 import type { ActivityEntry } from './activityLog.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
 
@@ -49,6 +49,25 @@ describe('formatEarnStatus', () => {
   it('renders the "too early" verdict when nothing yet', () => {
     const out = formatEarnStatus(earnSummary([mint()], due(0), []))
     expect(out).toMatch(/too early/)
+  })
+})
+
+describe('selectOurPods (creator is empty on-chain → match by our recorded mint names)', () => {
+  const all: OwnPodVote[] = [
+    { podId: '764', name: 'HL perps, 0x3dd4..7a81: 17 trades', validityEpoch: '102', upVotes: 0, downVotes: 2227 },
+    { podId: '700', name: 'Someone else pod', validityEpoch: '102', upVotes: 999, downVotes: 0 },
+    { podId: '825', name: 'HL perps 172s, 0x3200..c407: 1152 trades (BTC/ETH/', validityEpoch: '103', upVotes: 5, downVotes: 0 }, // on-chain TRUNCATED
+  ]
+  it('matches our pods by exact recorded name', () => {
+    const ours = selectOurPods(all, ['HL perps, 0x3dd4..7a81: 17 trades'])
+    expect(ours.map((p) => p.podId)).toEqual(['764'])
+  })
+  it('tolerates on-chain name truncation (our full name vs truncated chain name)', () => {
+    const ours = selectOurPods(all, ['HL perps 172s, 0x3200..c407: 1152 trades (BTC/ETH/SOL)'])
+    expect(ours.map((p) => p.podId)).toEqual(['825'])
+  })
+  it('does not match unrelated pods', () => {
+    expect(selectOurPods(all, ['HL perps, 0x3dd4..7a81: 17 trades'])).not.toContainEqual(expect.objectContaining({ podId: '700' }))
   })
 })
 
