@@ -18,6 +18,10 @@ export interface AdapterContext {
   rubric: DatanetRubric
   /** how many top wallets / items to pull (adapter-specific budget). */
   topN: number
+  /** optional per-operator strategy params (e.g. gdelt focus/angle/brief). Adapter-specific. */
+  strategy?: Record<string, unknown>
+  /** names of pods already on-chain for this datanet, for novelty dedup. */
+  existingPodNames?: string[]
 }
 
 /** A pluggable per-datanet data source. The reference impl is `hyperliquid`. */
