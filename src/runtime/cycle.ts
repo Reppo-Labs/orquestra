@@ -34,6 +34,9 @@ export interface CycleDeps {
   strategyFor?(datanetId: string): Record<string, unknown>
   /** existing on-chain pod names for a datanet (novelty dedup backstop). */
   getExistingPodNames?(datanetId: string): Promise<string[]>
+  /** subnet UUIDs the wallet already has access to (one-time grant cache). */
+  grantedSubnets?(): Promise<Set<string>>
+  recordGrant?(subnetId: string): void
 }
 
 export interface DatanetReport {
@@ -66,6 +69,24 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // never aborts the whole cycle or the other datanets.
     try {
       const rubric = await deps.getRubric(datanetId)
+
+      // Subnet access is a one-time prerequisite for both voting and minting. Grant it
+      // once per subnet (cached) before either. A datanet whose metadata predates the
+      // subnet model (empty subnetUuid) can't be granted and is left to proceed/fail
+      // naturally. A failed grant doesn't abort the datanet — the vote/mint that needs
+      // it will surface the error.
+      if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
+        const granted = await deps.grantedSubnets()
+        if (!granted.has(rubric.subnetUuid)) {
+          const gr = await deps.executor.executeGrantAccess(rubric.subnetUuid)
+          if (gr.status === 'executed') {
+            deps.recordGrant(rubric.subnetUuid)
+            console.error(`orquestra: datanet ${datanetId} — granted subnet access (${rubric.subnetUuid})`)
+          } else {
+            console.error(`orquestra: datanet ${datanetId} — grant-access ${gr.status}: ${gr.detail ?? ''} — vote/mint may fail until access is granted`)
+          }
+        }
+      }
 
       if (policy.vote && rubric.canVote) {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)

@@ -24,6 +24,18 @@ export class WalletExecutor {
     }
   }
 
+  /** One-time per-subnet access grant (prerequisite for voting/minting). Like lock(),
+   *  this is infrequent setup and not budget-gated; gas is negligible. */
+  async executeGrantAccess(subnetId: string): Promise<ExecResult> {
+    try {
+      const r = await this.cli.grantAccess(subnetId)
+      if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
+    } catch (e) {
+      return { ok: false, status: 'error', detail: (e as Error).message }
+    }
+  }
+
   async executeVote(intent: VoteIntent): Promise<ExecResult> {
     const res = this.ledger.reserveVote(VOTE_GAS_EST_ETH)
     if (!res) return { ok: false, status: 'refused-budget', detail: 'vote budget/rate exhausted' }

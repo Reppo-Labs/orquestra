@@ -6,9 +6,12 @@ import { join } from 'node:path'
 // claimed on-chain by (pod, epoch) alone (the CLI takes only --pod --epoch), and a pod
 // belongs to exactly one datanet, so the datanet dimension is redundant and would risk
 // a re-claim if the CLI's datanetId ever shifted between versions.
-interface Shape { votedPodIds: Record<string, string[]>; mintedKeys: Record<string, string[]>; claimedKeys: string[] }
+// grantedSubnets is a FLAT set of subnet UUIDs (not datanet-scoped): subnet access is
+// granted to the wallet per-subnet, and a subnet maps 1:1 to a datanet, so the datanet
+// dimension is redundant. Prevents re-granting (a one-time on-chain setup) every cycle.
+interface Shape { votedPodIds: Record<string, string[]>; mintedKeys: Record<string, string[]>; claimedKeys: string[]; grantedSubnets: string[] }
 const FILE = 'vote-state.json'
-const fresh = (): Shape => ({ votedPodIds: {}, mintedKeys: {}, claimedKeys: [] })
+const fresh = (): Shape => ({ votedPodIds: {}, mintedKeys: {}, claimedKeys: [], grantedSubnets: [] })
 
 /** Persisted dedup state: which pods we've voted on + which dataset keys we've
  *  minted, per datanet. Prevents re-voting (gas/power waste) + re-minting. */
@@ -24,6 +27,7 @@ export class DedupState {
         mintedKeys: parsed.mintedKeys ?? {},
         // tolerate a legacy/absent value: only accept a flat array, else start empty
         claimedKeys: Array.isArray(parsed.claimedKeys) ? parsed.claimedKeys : [],
+        grantedSubnets: Array.isArray(parsed.grantedSubnets) ? parsed.grantedSubnets : [],
       }
     } catch {
       this.state = fresh() // corrupt → start empty (worst case a re-vote attempt, which the chain dedups by epoch)
@@ -35,6 +39,16 @@ export class DedupState {
   recordMint(datanetId: string, key: string): void { this.add(this.state.mintedKeys, datanetId, key) }
   /** Flat (podId:epoch) claim set — see note on Shape; not datanet-scoped. */
   getClaimedKeys(): string[] { return this.state.claimedKeys }
+  /** Flat set of subnet UUIDs the wallet has been granted access to. */
+  getGrantedSubnets(): string[] { return this.state.grantedSubnets }
+  recordGrant(subnetId: string): void {
+    const set = new Set(this.state.grantedSubnets); set.add(subnetId); this.state.grantedSubnets = [...set]
+    try {
+      this.save()
+    } catch (e) {
+      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
+    }
+  }
   recordClaim(key: string): void {
     const set = new Set(this.state.claimedKeys); set.add(key); this.state.claimedKeys = [...set]
     try {

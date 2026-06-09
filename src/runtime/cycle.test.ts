@@ -73,6 +73,40 @@ describe('runCycle', () => {
     expect(report.datanets.find((r) => r.datanetId === '2')!.mints).toEqual([])
   })
 
+  it('grants subnet access once before voting/minting and caches it (no re-grant for a shared subnet)', async () => {
+    const granted = new Set<string>()
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xgrant' }))
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => granted,
+      recordGrant: (id: string) => { granted.add(id) },
+    })
+    await runCycle(config, 'cycle-grant', d)
+    // both datanets resolve to subnetUuid 'cm-test-9' → granted on the first, cached for the second
+    expect(executeGrantAccess).toHaveBeenCalledWith('cm-test-9')
+    expect(executeGrantAccess).toHaveBeenCalledTimes(1)
+    expect(granted.has('cm-test-9')).toBe(true)
+  })
+
+  it('skips grant when the subnet is already granted', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xgrant' }))
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set(['cm-test-9']),
+      recordGrant: vi.fn(),
+    })
+    await runCycle(config, 'cycle-grant2', d)
+    expect(executeGrantAccess).not.toHaveBeenCalled()
+  })
+
   it('skips voting when rubric.canVote is false and minting when canMint is false', async () => {
     const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: false, canMint: false })) })
     const report = await runCycle(config, 'c2', d)
