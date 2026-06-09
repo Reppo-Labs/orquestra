@@ -38,6 +38,16 @@ describe('activityLog', () => {
     expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
   })
 
+  it('serves repeat reads from cache and picks up appends (cache invalidated by size/mtime)', () => {
+    appendActivity(dir, entry({ podId: '1' }))
+    expect(readActivity(dir, { limit: 10 })).toHaveLength(1)
+    // cached read with a different limit still slices correctly
+    appendActivity(dir, entry({ podId: '2' }))
+    appendActivity(dir, entry({ podId: '3' }))
+    expect(readActivity(dir, { limit: 2 }).map((r) => r.podId)).toEqual(['3', '2'])
+    expect(readActivity(dir, { limit: 10 })).toHaveLength(3) // append seen, full list intact
+  })
+
   it('round-trips a skip entry (kind skip, status skipped, reason)', () => {
     appendActivity(dir, {
       ts: '2026-06-09T00:00:00.000Z', cycleId: 'c1', kind: 'skip', datanetId: '2',

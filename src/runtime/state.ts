@@ -49,6 +49,15 @@ export class DedupState {
       console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
     }
   }
+  /** Evict a stale grant-cache entry (on-chain access disagreed with the cache). */
+  removeGrant(subnetId: string): void {
+    const set = new Set(this.state.grantedSubnets); set.delete(subnetId); this.state.grantedSubnets = [...set]
+    try {
+      this.save()
+    } catch (e) {
+      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
+    }
+  }
   recordClaim(key: string): void {
     const set = new Set(this.state.claimedKeys); set.add(key); this.state.claimedKeys = [...set]
     try {

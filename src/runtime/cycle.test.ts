@@ -223,6 +223,50 @@ describe('runCycle', () => {
     expect(noSubnet.getPodsAndFilter).toHaveBeenCalled()
   })
 
+  it('records a skip activity entry when a datanet fails (rubric error) so the dashboard sees it', async () => {
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => {
+        if (id === '2') throw new Error('RPC rate limit')
+        return rubric({ datanetId: id })
+      }),
+    })
+    await runCycle(config, 'c-err', d)
+    const skips = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => c[0] as { kind: string; datanetId: string; reason?: string })
+      .filter((e) => e.kind === 'skip')
+    expect(skips).toHaveLength(1)
+    expect(skips[0].datanetId).toBe('2')
+    expect(skips[0].reason).toMatch(/datanet error: RPC rate limit/)
+  })
+
+  it('records a permanently-failing CANNOT_VOTE_FOR_OWN_POD vote as voted (never retried)', async () => {
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: false, status: 'error', detail: 'reppo vote failed — {"error":{"code":"CANNOT_VOTE_FOR_OWN_POD","hint":"Publishers cannot vote on their own pods."}}' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(config, 'c-own', d)
+    expect(d.recordVote).toHaveBeenCalledWith('9', 'p1') // permanent error → dedup so it stops retrying
+  })
+
+  it('evicts the granted-subnet cache when a vote fails VOTER_LACKS_SUBNET_ACCESS despite the cache', async () => {
+    const revokeGrant = vi.fn()
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: false, status: 'error', detail: '{"error":{"code":"VOTER_LACKS_SUBNET_ACCESS"}}' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess: vi.fn(),
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set(['9', '2']), // cache says granted — stale
+      recordGrant: vi.fn(),
+      revokeGrant,
+    })
+    await runCycle(config, 'c-stale', d)
+    expect(revokeGrant).toHaveBeenCalledWith('9') // evicted → next cycle re-attempts the grant
+    expect(d.recordVote).not.toHaveBeenCalled()   // NOT recorded as voted — retried after re-grant
+  })
+
   it('records dedup ONLY on executed — refused AND errored are not recorded (so retries are not blocked)', async () => {
     const refused = deps({
       executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn(async () => ({ ok: false, status: 'refused-budget' })) } as unknown as CycleDeps['executor'],
