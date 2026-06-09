@@ -1,9 +1,6 @@
 // src/reppo/queryVotingPower.ts
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { reppoEnv, withRpcUrl } from './exec.js'
+import { runReppoStdout } from './exec.js'
 
-const execFileAsync = promisify(execFile)
 
 export interface VotingPower { power: number; lockupCount: number }
 
@@ -20,8 +17,6 @@ export function parseVotingPower(raw: unknown): VotingPower {
 }
 
 export async function queryVotingPowerJson(): Promise<VotingPower> {
-  const { stdout } = await execFileAsync('reppo', withRpcUrl(['query', 'voting-power', '--json']), {
-    env: reppoEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
-  })
+  const stdout = await runReppoStdout(['query', 'voting-power', '--json'])
   try { return parseVotingPower(JSON.parse(stdout)) } catch { throw new Error(`queryVotingPowerJson: bad reppo output: ${stdout.slice(0, 200)}`) }
 }

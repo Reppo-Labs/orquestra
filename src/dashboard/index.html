@@ -49,6 +49,8 @@
 <script>
 const fmt = (n) => (n === undefined || n === null) ? '—' : (Math.round(n * 10000) / 10000).toLocaleString()
 const sign = (n) => n > 0 ? 'pos' : n < 0 ? 'neg' : ''
+// HTML-escape every interpolation of network/CLI-derived text before innerHTML.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
 async function load() {
   const [pnlRes, act, cfg, earn, health] = await Promise.all([
     fetch('/api/pnl').then(r => r.json()),
@@ -74,7 +76,6 @@ async function load() {
   ]
   document.getElementById('cards').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')
   // Cycle health: per-datanet outcome counts + dominant error code
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
   const hRows = (health?.datanets ?? [])
   const kc = (c) => `${c.executed}/${c.refused}/${c.error}`
   document.querySelector('#healthTable tbody').innerHTML = hRows.length
@@ -101,8 +102,9 @@ async function load() {
     return `<div class="card"><div class="k">${k}</div><div class="v">${fmt(spent)} / ${maxLabel}</div><div class="bar ${pct >= 80 ? 'hot' : ''}"><div style="width:${pct}%"></div></div></div>`
   }).join('')
   const em = snap ? snap.emissionsDue.pods : []
+  // podId/datanetId/epoch are String()-coerced from CLI/network JSON → escape them.
   document.querySelector('#emTable tbody').innerHTML = em.length
-    ? em.map(e => `<tr><td>${e.podId}</td><td>${e.datanetId}</td><td>${e.epoch}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
+    ? em.map(e => `<tr><td>${esc(e.podId)}</td><td>${esc(e.datanetId)}</td><td>${esc(e.epoch)}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">none — all claimed</td></tr>'
   window._activity = act
   renderActivity()
@@ -111,18 +113,17 @@ function renderActivity() {
   // every field below is network-derived (LLM reasons, pod names, CLI errors) —
   // ALL of it goes through esc() before innerHTML. pill class + tx href are
   // allowlisted by shape instead (CSS class / URL context, escaping isn't enough).
-  const esc2 = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
   const kind = document.getElementById('kind').value
   const rows = (window._activity || []).filter(r => !kind || r.kind === kind)
   const detail = (r) => r.kind === 'vote'
-      ? (r.direction ? `${esc2(r.direction)} · conv ${esc2(r.conviction)} · ${esc2(r.reason ?? '')}` : esc2(r.detail || '—'))
-    : r.kind === 'mint' ? esc2(r.podName ?? r.canonicalKey ?? '')
-    : r.kind === 'skip' ? esc2(r.reason ?? '—')
-    : `epoch ${esc2(r.epoch)} · ${fmt(r.reppoClaimed)} REPPO`
+      ? (r.direction ? `${esc(r.direction)} · conv ${esc(r.conviction)} · ${esc(r.reason ?? '')}` : esc(r.detail || '—'))
+    : r.kind === 'mint' ? esc(r.podName ?? r.canonicalKey ?? '')
+    : r.kind === 'skip' ? esc(r.reason ?? '—')
+    : `epoch ${esc(r.epoch)} · ${fmt(r.reppoClaimed)} REPPO`
   const tx = (r) => /^0x[0-9a-fA-F]{1,64}$/.test(r.txHash ?? '') ? `<a href="https://basescan.org/tx/${r.txHash}" target="_blank">${r.txHash.slice(0,8)}…</a>` : ''
   const pillClass = (r) => r.kind === 'vote' ? (r.direction === 'up' || r.direction === 'down' ? r.direction : 'vote') : r.kind
   document.querySelector('#actTable tbody').innerHTML = rows.length
-    ? rows.map(r => `<tr><td>${new Date(r.ts).toLocaleTimeString()}</td><td><span class="pill ${esc2(pillClass(r))}">${esc2(r.kind)}</span></td><td>${esc2(r.datanetId)}</td><td>${esc2(r.podId ?? r.canonicalKey ?? '')}</td><td>${detail(r)}</td><td class="${r.status === 'executed' ? '' : 'err'}">${esc2(r.status)}</td><td>${tx(r)}</td></tr>`).join('')
+    ? rows.map(r => `<tr><td>${new Date(r.ts).toLocaleTimeString()}</td><td><span class="pill ${esc(pillClass(r))}">${esc(r.kind)}</span></td><td>${esc(r.datanetId)}</td><td>${esc(r.podId ?? r.canonicalKey ?? '')}</td><td>${detail(r)}</td><td class="${r.status === 'executed' ? '' : 'err'}">${esc(r.status)}</td><td>${tx(r)}</td></tr>`).join('')
     : '<tr><td colspan="7" class="muted">no activity yet</td></tr>'
 }
 document.getElementById('kind').addEventListener('change', renderActivity)

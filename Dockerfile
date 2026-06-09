@@ -15,16 +15,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-ENV ORQUESTRA_DATA_DIR=/data
-VOLUME /data
-# Run as the unprivileged node user (ships with the base image). /data must be
-# writable by it — `docker run -v` host dirs may need a one-time `chown -R 1000`.
+ENV ORQUESTRA_DATA_DIR=/data DASHBOARD_PORT=7070
+# Ownership BEFORE `VOLUME /data` — filesystem changes after a VOLUME declaration
+# are discarded by some builders (kaniko, buildah, legacy). With this ordering the
+# anonymous-volume case is owned by `node`; a host bind-mount may still need a
+# one-time `chown -R 1000` on the host dir.
 RUN mkdir -p /data && chown -R node:node /data /app
+VOLUME /data
+# Run as the unprivileged node user (ships with the base image).
 USER node
-# Read-only dashboard (see DASHBOARD_PORT). Expose to localhost with `-p 127.0.0.1:7070:7070`.
+# Read-only dashboard. Expose to localhost with `-p 127.0.0.1:7070:7070`.
 EXPOSE 7070
 # Liveness: the dashboard serves /api/health whenever the node process is up.
+# Honors DASHBOARD_PORT so a custom port still passes the probe.
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \
-  CMD curl -fsS http://127.0.0.1:7070/api/health > /dev/null || exit 1
+  CMD curl -fsS "http://127.0.0.1:${DASHBOARD_PORT}/api/health" > /dev/null || exit 1
 # First-run configure requires -it AND valid LLM_* env vars (onboarding is conversational).
 ENTRYPOINT ["node", "dist/index.js"]

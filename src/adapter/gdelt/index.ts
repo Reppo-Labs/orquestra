@@ -10,14 +10,26 @@ export interface GdeltDeps {
   fetchEvents?: (q: GdeltQuery) => Promise<GeoArticle[]>
   generate?: (args: { system: string; prompt: string }) => Promise<{ claims: unknown[] }>
   defaults?: Partial<GdeltStrategy> & { timespanHours?: number; maxRecords?: number; query?: string }
+  /** Don't hit GDELT more than once per this interval, regardless of cycle cadence.
+   *  GDELT throttles per-IP; at sub-hour cadences a per-cycle fetch trips its limit.
+   *  Default 30 min. The adapter instance persists across cycles, so the last-fetch
+   *  time lives in its closure. */
+  minFetchIntervalMs?: number
+  /** injectable clock for tests. */
+  now?: () => number
 }
 
 const STRATEGY_DEFAULTS: GdeltStrategy = { focus: 'global geopolitical flashpoints', angle: 'balanced', brief: '', topN: 8, minImportance: 7 }
+const DEFAULT_MIN_FETCH_INTERVAL_MS = 30 * 60_000
 
 /** GDELT source adapter (id "gdelt") — reusable across news/claims datanets; personalized
  *  per (datanet, operator) via ctx.strategy. */
 export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
   const fetchEvents = deps.fetchEvents ?? fetchGeoEvents
+  const minInterval = deps.minFetchIntervalMs ?? DEFAULT_MIN_FETCH_INTERVAL_MS
+  const now = deps.now ?? (() => Date.now())
+  // last fetch time per query string (different datanets/foci throttle independently).
+  const lastFetchAt = new Map<string, number>()
   return {
     id: 'gdelt',
     matches(_datanetId: string, _rubric: unknown): boolean {
@@ -35,6 +47,16 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
         timespanHours: deps.defaults?.timespanHours ?? 24,
         maxRecords: deps.defaults?.maxRecords ?? 75,
       }
+      // Throttle guard: skip the fetch if we hit this same query within minInterval.
+      // GDELT rate-limits per IP; at a low cadence one fetch per cycle is fine, at a
+      // high cadence this prevents a 429 storm. Skipping just defers mint discovery.
+      const last = lastFetchAt.get(q.query)
+      const t = now()
+      if (last !== undefined && t - last < minInterval) {
+        console.error(`orquestra: gdelt fetch skipped for "${q.query}" — throttled (last fetch ${Math.round((t - last) / 1000)}s ago, min ${Math.round(minInterval / 1000)}s)`)
+        return []
+      }
+      lastFetchAt.set(q.query, t)
       // A fetch failure (GDELT 429 rate limit, network blip) means no candidates THIS
       // cycle — it must not throw into runCycle and mark the whole datanet errored
       // (votes already executed would be reported as a datanet failure). Next cycle

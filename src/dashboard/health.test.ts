@@ -63,4 +63,15 @@ describe('buildHealth', () => {
   it('handles an empty log', () => {
     expect(buildHealth([])).toEqual({ entriesScanned: 0, datanets: [] })
   })
+
+  it('windowing: ignores entries older than sinceMs while keeping newer ones', () => {
+    const now = Date.parse('2026-06-09T12:00:00.000Z')
+    const report = buildHealth([
+      e({ ts: '2026-06-09T11:00:00.000Z', kind: 'vote', status: 'executed', txHash: '0x1' }), // 1h old → in
+      e({ ts: '2026-06-01T00:00:00.000Z', kind: 'vote', status: 'error', detail: LACKS_ACCESS }), // 8d old → out
+    ], { sinceMs: now - 7 * 24 * 3600_000 })
+    const d2 = report.datanets.find((d) => d.datanetId === '2')!
+    expect(d2.votes).toEqual({ executed: 1, refused: 0, error: 0 })
+    expect(report.entriesScanned).toBe(1)
+  })
 })

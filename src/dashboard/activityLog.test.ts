@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appendActivity, readActivity, type ActivityEntry } from './activityLog.js'
@@ -36,6 +36,16 @@ describe('activityLog', () => {
     appendFileSync(join(dir, 'activity-log.jsonl'), '{"ts":"x","kind":"vote"') // no newline, invalid
     const rows = readActivity(dir, { limit: 10 })
     expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
+  })
+
+  it('rotates the log to .old once it exceeds maxBytes (history preserved, live file fresh)', () => {
+    appendActivity(dir, entry({ podId: 'old1' }))
+    appendActivity(dir, entry({ podId: 'old2' }), { maxBytes: 10 }) // file already > 10 bytes → rotates first
+    const live = readActivity(dir, { limit: 10 })
+    expect(live.map((r) => r.podId)).toEqual(['old2']) // fresh file holds only the new entry
+    expect(existsSync(join(dir, 'activity-log.jsonl.old'))).toBe(true)
+    const archived = readFileSync(join(dir, 'activity-log.jsonl.old'), 'utf-8')
+    expect(archived).toContain('old1')
   })
 
   it('redacts rpc-url keys from detail/reason at append time', () => {

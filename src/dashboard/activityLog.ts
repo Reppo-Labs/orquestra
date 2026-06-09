@@ -1,7 +1,7 @@
 // src/dashboard/activityLog.ts
-import { appendFileSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { appendFileSync, readFileSync, existsSync, statSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { redactSecrets } from '../reppo/redact.js'
+import { redactSecrets } from '../util/redact.js'
 
 export interface ActivityEntry {
   ts: string
@@ -23,17 +23,30 @@ export interface ActivityEntry {
 }
 
 const FILE = 'activity-log.jsonl'
+/** Rotate the log once it exceeds this. At a low cadence the file grows slowly,
+ *  but it is otherwise unbounded — cap it so disk and parse cost stay finite.
+ *  One generation of history is retained as `.jsonl.old`. */
+const DEFAULT_MAX_BYTES = 32 * 1024 * 1024 // 32 MiB ≈ hundreds of thousands of entries
 
-/** Append one entry as a single JSON line. Crash-safe: one line per action.
- *  detail/reason are redacted as defense-in-depth: error messages can carry CLI
- *  command lines (incl. --rpc-url keys) from paths that bypass the cli.ts fold. */
-export function appendActivity(dataDir: string, entry: ActivityEntry): void {
-  const safe: ActivityEntry = {
+function redactEntry(entry: ActivityEntry): ActivityEntry {
+  return {
     ...entry,
     ...(entry.detail !== undefined ? { detail: redactSecrets(entry.detail) } : {}),
     ...(entry.reason !== undefined ? { reason: redactSecrets(entry.reason) } : {}),
   }
-  appendFileSync(join(dataDir, FILE), JSON.stringify(safe) + '\n')
+}
+
+/** Append one entry as a single JSON line. Crash-safe: one line per action.
+ *  detail/reason are redacted as defense-in-depth: error messages can carry CLI
+ *  command lines (incl. --rpc-url keys) from paths that bypass the cli.ts fold.
+ *  Rotates the file to `<file>.old` once it exceeds maxBytes (history retained). */
+export function appendActivity(dataDir: string, entry: ActivityEntry, opts: { maxBytes?: number } = {}): void {
+  const path = join(dataDir, FILE)
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
+  if (existsSync(path) && statSync(path).size > maxBytes) {
+    renameSync(path, path + '.old') // single generation; next rotation overwrites it
+  }
+  appendFileSync(path, JSON.stringify(redactEntry(entry)) + '\n')
 }
 
 // Parse cache keyed by file path: the dashboard polls /api/pnl + /api/health every
@@ -53,7 +66,9 @@ export function readActivity(dataDir: string, opts: { limit: number }): Activity
   const lines = readFileSync(path, 'utf-8').split('\n').filter((l) => l.trim() !== '')
   const out: ActivityEntry[] = []
   for (const line of lines) {
-    try { out.push(JSON.parse(line) as ActivityEntry) } catch { /* skip torn/invalid line */ }
+    // Redact on read too: lines appended before redaction existed (or by a future
+    // path that forgets) are sanitized before they reach the dashboard.
+    try { out.push(redactEntry(JSON.parse(line) as ActivityEntry)) } catch { /* skip torn/invalid line */ }
   }
   out.reverse()
   parseCache.set(path, { size: st.size, mtimeMs: st.mtimeMs, entries: out })

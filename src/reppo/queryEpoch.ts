@@ -1,9 +1,6 @@
 // src/reppo/queryEpoch.ts
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { reppoEnv, withRpcUrl } from './exec.js'
+import { runReppoStdout } from './exec.js'
 
-const execFileAsync = promisify(execFile)
 
 export interface EpochInfo {
   epoch: number
@@ -27,8 +24,6 @@ export function parseEpoch(raw: unknown): EpochInfo {
 
 /** Authoritative current on-chain epoch via the reppo CLI (read from the contracts). */
 export async function queryEpochJson(): Promise<EpochInfo> {
-  const { stdout } = await execFileAsync('reppo', withRpcUrl(['query', 'epoch', '--json']), {
-    env: reppoEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
-  })
+  const stdout = await runReppoStdout(['query', 'epoch', '--json'])
   try { return parseEpoch(JSON.parse(stdout)) } catch { throw new Error(`queryEpochJson: bad reppo output: ${stdout.slice(0, 200)}`) }
 }

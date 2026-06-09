@@ -1,9 +1,6 @@
 // src/reppo/queryEmissionsDue.ts
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { reppoEnv, withRpcUrl } from './exec.js'
+import { runReppoStdout } from './exec.js'
 
-const execFileAsync = promisify(execFile)
 
 export interface ClaimableEmission { podId: string; datanetId: string; epoch: number; reppo: number }
 export interface EmissionsDue { totalReppo: number; pods: ClaimableEmission[] }
@@ -36,8 +33,6 @@ export function parseEmissionsDue(raw: unknown): EmissionsDue {
 
 /** Live unclaimed emissions across our pods via the reppo CLI. */
 export async function queryEmissionsDueJson(): Promise<EmissionsDue> {
-  const { stdout } = await execFileAsync('reppo', withRpcUrl(['query', 'emissions-due', '--json']), {
-    env: reppoEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
-  })
+  const stdout = await runReppoStdout(['query', 'emissions-due', '--json'])
   try { return parseEmissionsDue(JSON.parse(stdout)) } catch { throw new Error(`queryEmissionsDueJson: bad reppo output: ${stdout.slice(0, 200)}`) }
 }

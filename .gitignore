@@ -10,6 +10,9 @@ data/
 # error lines echo CLI command output. Never commit operational data.
 orquestra-data/
 *.key
+# Local dashboard screenshots / browser-automation artifacts
+.playwright-mcp/
+orquestra-dashboard*.png
 # OS / editor
 .DS_Store
 .idea/

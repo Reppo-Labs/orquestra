@@ -24,7 +24,7 @@ export interface ReppoCli {
   grantAccess(datanetId: string): Promise<ChainResult>
 }
 
-import { redactSecrets } from './redact.js'
+import { redactSecrets } from '../util/redact.js'
 
 let warnedNoGas = false
 /** test hook: reset the warn-once latch. */
