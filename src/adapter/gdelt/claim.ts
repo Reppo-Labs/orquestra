@@ -5,7 +5,7 @@ import { z } from 'zod'
 import type { GeoArticle } from './gdelt.js'
 import type { DatanetRubric } from '../../rubric/types.js'
 import type { CandidatePod } from '../types.js'
-import { clampPodName } from '../podName.js'
+import { clampPodName, POD_DESC_MAX } from '../podName.js'
 
 /** Per-operator strategy that personalizes claim synthesis. */
 export interface GdeltStrategy {
@@ -82,7 +82,9 @@ export async function synthesizeClaims(
     cands.push({
       canonicalKey,
       podName: clampPodName(c.title ?? c.claim),
-      podDescription: `Verdict: ${c.verdict} (${c.confidence}/10). ${c.rationale} Source: ${primary}`,
+      // CLI caps --pod-description at 200 chars; the dataset below carries the full
+      // rationale + all sources, so clamping the on-chain summary loses nothing.
+      podDescription: clampPodName(`Verdict: ${c.verdict} (${c.confidence}/10). ${c.rationale} Source: ${primary}`, POD_DESC_MAX),
       dataset: {
         kind: 'geopolitical-claim', schema_version: 1,
         claim: c.claim, verdict: c.verdict, confidence: c.confidence,

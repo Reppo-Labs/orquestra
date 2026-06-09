@@ -52,6 +52,17 @@ describe('synthesizeClaims', () => {
     const cands = await synthesizeClaims(arts, r, '2', s, { generate: g })
     expect(cands[0].podName).toBe('US blacklists BYD and NIO over military links')
   })
+  it('clamps the assembled podDescription to the CLI 200-char limit (long rationale + url)', async () => {
+    const g = async () => ({ claims: [{
+      claim: 'Oil stays below $100 through Q3',
+      verdict: 'likely' as const, confidence: 7, importance: 9,
+      rationale: 'Multiple energy-market sources align on sub-$100 oil, falling pump prices, and record flows; the durability warning is analyst opinion, inherently probabilistic, and several desks expect continued softness. '.repeat(2),
+      sources: ['https://example.com/featured/portland-local-news/content/2026-06-09-lower-crude-oil-prices-bring-gas-prices-down/'],
+    }] })
+    const cands = await synthesizeClaims(arts, r, '2', s, { generate: g })
+    expect(cands[0].podDescription.length).toBeLessThanOrEqual(200)
+    expect(cands[0].podDescription).toMatch(/^Verdict: likely/)
+  })
   it('falls back to the clamped claim when the model omits the title', async () => {
     const longClaim = 'The US has added major Chinese firms including BYD and NIO to a military blacklist prompting formal objection from Beijing'
     const g = async () => ({ claims: [{

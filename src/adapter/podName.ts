@@ -3,6 +3,9 @@
 /** The reppo CLI rejects `--pod-name` longer than this (INVALID_POD_NAME). */
 export const POD_NAME_MAX = 50
 
+/** The reppo CLI rejects `--pod-description` longer than this (INVALID_POD_DESCRIPTION). */
+export const POD_DESC_MAX = 200
+
 /** Clamp a pod name to the CLI limit. Cuts at a word boundary when one exists
  *  in the back half of the budget (avoids mid-word chops); otherwise hard-cuts.
  *  No ellipsis — the CLI limit counts characters and the full text survives in
