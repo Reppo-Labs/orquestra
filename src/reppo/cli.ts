@@ -23,10 +23,22 @@ export interface ReppoCli {
 }
 
 async function run(args: string[]): Promise<ChainResult> {
-  const { stdout } = await execFileAsync('reppo', withRpcUrl([...args, '--json']), {
-    env: reppoEnv(),
-    timeout: 120_000,
-  })
+  let stdout: string
+  try {
+    ({ stdout } = await execFileAsync('reppo', withRpcUrl([...args, '--json']), {
+      env: reppoEnv(),
+      timeout: 120_000,
+    }))
+  } catch (e) {
+    // execFile rejects with an error carrying `stdout`/`stderr`, but its `.message` is just
+    // "Command failed: <cmd>" — so a reppo failure written to stderr (e.g. vote errors)
+    // surfaces as a BLANK reason. Fold both streams into the thrown message so the activity
+    // log records the real cause instead of an empty "Command failed".
+    const err = e as { message?: string; stdout?: string; stderr?: string }
+    const head = (err.message ?? String(e)).split('\n')[0]
+    const body = [err.stdout, err.stderr].map((s) => (s ?? '').toString().trim()).filter(Boolean).join(' | ')
+    throw new Error(body ? `${head} — ${body}` : head)
+  }
   const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
   if (j.gasEth === undefined) {
     console.warn('reppo CLI returned no gasEth; recording 0 — gas caps may under-count')
