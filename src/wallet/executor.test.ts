@@ -182,6 +182,14 @@ describe('WalletExecutor', () => {
     expect(r.status).toBe('error')
     expect(r.detail).toMatch(/VOTER_LACKS_SUBNET_ACCESS/)
   })
+
+  it('executeGrantAccess treats ACCESS_ALREADY_GRANTED as executed (so it caches, not re-pays)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => { throw new Error('Command failed — {"error":{"code":"ACCESS_ALREADY_GRANTED"}}') })
+    const r = await new WalletExecutor(cli, new BudgetLedger(dir, caps)).executeGrantAccess('9')
+    expect(r.status).toBe('executed')
+    expect(r.detail).toBe('already granted')
+  })
 })
 
 const CLAIM_CAPS: typeof caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 }

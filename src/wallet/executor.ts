@@ -32,7 +32,11 @@ export class WalletExecutor {
       if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
-      return { ok: false, status: 'error', detail: (e as Error).message }
+      const detail = (e as Error).message
+      // Already having access is success, not failure — report executed so the caller
+      // caches it and stops re-attempting (and re-paying) the grant every cycle.
+      if (/ACCESS_ALREADY_GRANTED/.test(detail)) return { ok: true, status: 'executed', detail: 'already granted' }
+      return { ok: false, status: 'error', detail }
     }
   }
 
