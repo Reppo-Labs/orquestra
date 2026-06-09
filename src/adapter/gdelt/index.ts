@@ -35,7 +35,17 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
         timespanHours: deps.defaults?.timespanHours ?? 24,
         maxRecords: deps.defaults?.maxRecords ?? 75,
       }
-      const articles = await fetchEvents(q)
+      // A fetch failure (GDELT 429 rate limit, network blip) means no candidates THIS
+      // cycle — it must not throw into runCycle and mark the whole datanet errored
+      // (votes already executed would be reported as a datanet failure). Next cycle
+      // retries naturally.
+      let articles: GeoArticle[]
+      try {
+        articles = await fetchEvents(q)
+      } catch (e) {
+        console.error(`orquestra: gdelt fetch failed (skipping mint discovery this cycle) — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
+        return []
+      }
       if (articles.length === 0) return []
       const cands = await synthesizeClaims(articles, ctx.rubric, ctx.datanetId, strategy, {
         model: deps.model,

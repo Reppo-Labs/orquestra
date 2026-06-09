@@ -31,6 +31,10 @@ describe('createGdeltAdapter', () => {
     const a = createGdeltAdapter({ fetchEvents: async () => [], generate: gen })
     expect(await a.discover({ datanetId: '2', rubric, topN: 5, strategy })).toEqual([])
   })
+  it('GDELT fetch failure (e.g. 429 rate limit) → [] this cycle, no throw into the cycle', async () => {
+    const a = createGdeltAdapter({ fetchEvents: async () => { throw new Error('curl: (22) The requested URL returned error: 429') }, generate: gen })
+    await expect(a.discover({ datanetId: '2', rubric, topN: 5, strategy })).resolves.toEqual([])
+  })
   it('sanitizes the free-text focus into a valid GDELT query (no commas/slashes)', async () => {
     let seenQuery = ''
     const fetchEvents = vi.fn(async (q: { query: string }) => { seenQuery = q.query; return articles })

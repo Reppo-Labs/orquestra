@@ -24,6 +24,8 @@ export interface ReppoCli {
   grantAccess(datanetId: string): Promise<ChainResult>
 }
 
+let warnedNoGas = false
+
 async function run(args: string[]): Promise<ChainResult> {
   let stdout: string
   try {
@@ -42,8 +44,11 @@ async function run(args: string[]): Promise<ChainResult> {
     throw new Error(body ? `${head} — ${body}` : head)
   }
   const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
-  if (j.gasEth === undefined) {
-    console.warn('reppo CLI returned no gasEth; recording 0 — gas caps may under-count')
+  if (j.gasEth === undefined && !warnedNoGas) {
+    // reppo CLI 0.8.0 reports only txHash (no gas field at all) — structural, not
+    // per-call, so warn once instead of spamming every transaction.
+    warnedNoGas = true
+    console.warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
   }
   return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0) }
 }
