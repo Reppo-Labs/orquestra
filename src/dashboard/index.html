@@ -20,6 +20,9 @@
   .mint { background: #1c2a3a; color: #6fb3e8; } .claim { background: #2a2440; color: #b39ae5; }
   .vote { background: #1c2230; color: #9aa7bd; }
   .err { color: #e5707e; } select { background: #121620; color: #d7dce5; border: 1px solid #1c2230; border-radius: 6px; padding: 4px; }
+  .bar { background: #1c2230; border-radius: 4px; height: 8px; overflow: hidden; margin-top: 6px; }
+  .bar > div { background: #6fb3e8; height: 100%; } .bar.hot > div { background: #e5707e; }
+  .skipreason { color: #c9a86a; font-size: 12px; }
   a { color: #6fb3e8; }
 </style>
 </head>
@@ -31,10 +34,15 @@
 <main>
   <div id="earnBanner" class="muted" style="margin-bottom:16px"></div>
   <div class="cards" id="cards"></div>
+  <h2 style="font-size:15px">Cycle health</h2>
+  <table id="healthTable"><thead><tr><th>Datanet</th><th>Votes ✓/⊘/✗</th><th>Mints ✓/⊘/✗</th><th>Skips</th><th>Top error</th></tr></thead><tbody></tbody></table>
+  <div id="idle" style="margin-bottom:24px"></div>
+  <h2 style="font-size:15px">Budget burn</h2>
+  <div class="cards" id="budget"></div>
   <h2 style="font-size:15px">Claimable emissions</h2>
   <table id="emTable"><thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>REPPO</th></tr></thead><tbody></tbody></table>
   <h2 style="font-size:15px">Activity
-    <select id="kind"><option value="">all</option><option>vote</option><option>mint</option><option>claim</option></select>
+    <select id="kind"><option value="">all</option><option>vote</option><option>mint</option><option>claim</option><option>skip</option></select>
   </h2>
   <table id="actTable"><thead><tr><th>Time</th><th>Kind</th><th>Datanet</th><th>Pod</th><th>Detail</th><th>Status</th><th>Tx</th></tr></thead><tbody></tbody></table>
 </main>
@@ -42,11 +50,12 @@
 const fmt = (n) => (n === undefined || n === null) ? '—' : (Math.round(n * 10000) / 10000).toLocaleString()
 const sign = (n) => n > 0 ? 'pos' : n < 0 ? 'neg' : ''
 async function load() {
-  const [pnlRes, act, cfg, earn] = await Promise.all([
+  const [pnlRes, act, cfg, earn, health] = await Promise.all([
     fetch('/api/pnl').then(r => r.json()),
     fetch('/api/activity').then(r => r.json()),
     fetch('/api/config').then(r => r.json()),
     fetch('/api/earn').then(r => r.json()).catch(() => null),
+    fetch('/api/health').then(r => r.json()).catch(() => null),
   ])
   const p = pnlRes.pnl, snap = pnlRes.snapshot
   document.getElementById('earnBanner').textContent = earn
@@ -64,6 +73,30 @@ async function load() {
     ['REPPO bal', snap ? fmt(snap.balance.reppo) : '—'], ['veREPPO', snap ? fmt(snap.balance.veReppo) : '—'],
   ]
   document.getElementById('cards').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')
+  // Cycle health: per-datanet outcome counts + dominant error code
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
+  const hRows = (health?.datanets ?? [])
+  const kc = (c) => `${c.executed}/${c.refused}/${c.error}`
+  document.querySelector('#healthTable tbody').innerHTML = hRows.length
+    ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="muted">no activity yet</td></tr>'
+  // Idle datanets: why a configured datanet is doing nothing
+  const idle = hRows.filter(d => d.lastSkipReason)
+  document.getElementById('idle').innerHTML = idle
+    .map(d => `<div class="skipreason">datanet ${esc(d.datanetId)} idle — ${esc(d.lastSkipReason)}</div>`).join('')
+  // Budget burn vs caps (current window, from the cycle snapshot)
+  const b = snap?.budget, caps = b?.caps
+  const bars = b ? [
+    ['Vote gas (ETH)', b.voteGasSpentEth, caps.voteGasEthMax],
+    ['Mint REPPO', b.mintReppoSpent, caps.mintReppoMax],
+    ['Mint gas (ETH)', b.mintGasSpentEth, caps.mintGasEthMax],
+    ['Claim gas (ETH)', b.claimGasSpentEth, caps.claimGasEthMax],
+    ['Grant REPPO', b.grantReppoSpent ?? 0, caps.grantReppoMax ?? 0],
+  ] : []
+  document.getElementById('budget').innerHTML = bars.map(([k, spent, max]) => {
+    const pct = max > 0 ? Math.min(100, Math.round(100 * spent / max)) : 0
+    return `<div class="card"><div class="k">${k}</div><div class="v">${fmt(spent)} / ${fmt(max)}</div><div class="bar ${pct >= 80 ? 'hot' : ''}"><div style="width:${pct}%"></div></div></div>`
+  }).join('')
   const em = snap ? snap.emissionsDue.pods : []
   document.querySelector('#emTable tbody').innerHTML = em.length
     ? em.map(e => `<tr><td>${e.podId}</td><td>${e.datanetId}</td><td>${e.epoch}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
