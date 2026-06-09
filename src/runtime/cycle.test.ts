@@ -73,6 +73,41 @@ describe('runCycle', () => {
     expect(report.datanets.find((r) => r.datanetId === '2')!.mints).toEqual([])
   })
 
+  it('grants subnet access once before voting/minting and caches it (no re-grant for a shared subnet)', async () => {
+    const granted = new Set<string>()
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xgrant' }))
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => granted,
+      recordGrant: (id: string) => { granted.add(id) },
+    })
+    await runCycle(config, 'cycle-grant', d)
+    // grant-access is keyed by datanet id; datanets 9 and 2 are distinct → one grant each
+    expect(executeGrantAccess).toHaveBeenCalledWith('9')
+    expect(executeGrantAccess).toHaveBeenCalledWith('2')
+    expect(executeGrantAccess).toHaveBeenCalledTimes(2)
+    expect(granted.has('9') && granted.has('2')).toBe(true)
+  })
+
+  it('skips grant when the subnet is already granted', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xgrant' }))
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set(['9', '2']),
+      recordGrant: vi.fn(),
+    })
+    await runCycle(config, 'cycle-grant2', d)
+    expect(executeGrantAccess).not.toHaveBeenCalled()
+  })
+
   it('skips voting when rubric.canVote is false and minting when canMint is false', async () => {
     const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: false, canMint: false })) })
     const report = await runCycle(config, 'c2', d)

@@ -9,6 +9,8 @@ export interface BudgetCaps {
   mintReppoMax: number
   mintGasEthMax: number
   claimGasEthMax: number
+  /** Cumulative REPPO allowed for one-time subnet-access grants. 0 = grants disabled. */
+  grantReppoMax: number
 }
 
 export interface LedgerState {
@@ -18,6 +20,7 @@ export interface LedgerState {
   mintReppoSpent: number // cumulative
   mintGasSpentEth: number // cumulative
   claimGasSpentEth: number // cumulative
+  grantReppoSpent: number // cumulative REPPO spent on subnet-access grants
 }
 
 export interface VoteReservation {
@@ -34,6 +37,11 @@ export interface MintReservation {
 export interface ClaimReservation {
   kind: 'claim'
   estGasEth: number
+}
+
+export interface GrantReservation {
+  kind: 'grant'
+  estReppo: number
 }
 
 /** Thrown when the persisted ledger file exists but is corrupt or invalid.
@@ -56,10 +64,11 @@ const LedgerSchema = z.object({
   mintReppoSpent: nonNegativeFinite,
   mintGasSpentEth: nonNegativeFinite,
   claimGasSpentEth: nonNegativeFinite.default(0),
+  grantReppoSpent: nonNegativeFinite.default(0),
 })
 
 const fresh = (): LedgerState => ({
-  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0,
+  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, grantReppoSpent: 0,
 })
 
 /** Persisted per-pool budget enforcement. The ONLY authority on whether an
@@ -183,6 +192,25 @@ export class BudgetLedger {
   /** Roll back the reservation when signing fails. */
   releaseClaim(res: ClaimReservation): void {
     this._state.claimGasSpentEth = Math.max(0, this._state.claimGasSpentEth - res.estGasEth)
+    this.save()
+  }
+
+  canGrant(estReppo: number): boolean {
+    return this._state.grantReppoSpent + estReppo <= this.caps.grantReppoMax
+  }
+
+  /** Debit and persist BEFORE signing. Returns null if over the grant REPPO cap (no
+   *  debit). With the default cap of 0 this always refuses — grants are opt-in. */
+  reserveGrant(estReppo: number): GrantReservation | null {
+    if (!this.canGrant(estReppo)) return null
+    this._state.grantReppoSpent += estReppo
+    this.save()
+    return { kind: 'grant', estReppo }
+  }
+
+  /** Roll back the reservation when signing fails (or access was already granted). */
+  releaseGrant(res: GrantReservation): void {
+    this._state.grantReppoSpent = Math.max(0, this._state.grantReppoSpent - res.estReppo)
     this.save()
   }
 

@@ -4,12 +4,19 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import type { LanguageModel } from 'ai'
 
-export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus'
+export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtuals'
 
 /** Surplus Intelligence — an OpenAI-compatible discounted-inference marketplace
  *  (https://www.surplusintelligence.ai). Bearer `inf_…` API key. The OpenAI
  *  client appends `/chat/completions` to this base URL. */
 const SURPLUS_BASE_URL = 'https://www.surplusintelligence.ai/api/inference/v1'
+
+/** Virtuals — an OpenAI-compatible inference gateway (https://compute.virtuals.io).
+ *  Bearer `acp-…` (ACP) key; the OpenAI client appends `/chat/completions` to this
+ *  base URL. Settles via the Agent Commerce Protocol (no per-call USDC), so it
+ *  sidesteps marketplace USDC minimums. Model slugs are bare (e.g. `claude-opus-4-8`);
+ *  list them at GET /v1/models. */
+const VIRTUALS_BASE_URL = 'https://compute.virtuals.io/v1'
 
 /** Resolve a model from any supported provider + the user's API key.
  *  "Optimize for inference" = the node runs its OWN inference on the user's
@@ -22,6 +29,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   openai: 'gpt-5.2',
   google: 'gemini-3-pro',
   surplus: 'claude-opus-4.8',
+  virtuals: 'claude-opus-4-8',
 }
 
 export function resolveModel(provider: LlmProvider, apiKey: string, model?: string): LanguageModel {
@@ -34,6 +42,9 @@ export function resolveModel(provider: LlmProvider, apiKey: string, model?: stri
       return createGoogleGenerativeAI({ apiKey })(model ?? DEFAULT_MODEL.google)
     case 'surplus':
       return createOpenAI({ apiKey, baseURL: SURPLUS_BASE_URL })(model ?? DEFAULT_MODEL.surplus)
+    case 'virtuals':
+      // OpenAI-compatible: Bearer acp- key, POSTs to /v1/chat/completions.
+      return createOpenAI({ apiKey, baseURL: VIRTUALS_BASE_URL })(model ?? DEFAULT_MODEL.virtuals)
     default: {
       const _exhaustive: never = provider
       throw new Error(`unknown LLM provider: ${String(_exhaustive)}`)

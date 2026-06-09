@@ -8,7 +8,7 @@ import { WalletExecutor } from './executor.js'
 import type { ReppoCli } from '../reppo/cli.js'
 import type { VoteIntent, MintIntent, ClaimIntent } from './intents.js'
 
-const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 2, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.05 }
+const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 2, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.05, grantReppoMax: 500 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-exec-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
@@ -18,6 +18,7 @@ const fakeCli = (): ReppoCli => ({
   vote: vi.fn(async () => ({ txHash: '0xvote', gasEth: 0.001 })),
   mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0.01 })),
   claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0.0009 })),
+  grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0.0005 })),
 })
 const voteIntent = (podId: string): VoteIntent => ({ kind: 'vote', datanetId: '9', podId, direction: 'up', conviction: 9, reason: 'aligned' })
 const mintIntent = (key: string, est = 0): MintIntent => ({ kind: 'mint', datanetId: '9', subnetUuid: 'cm-subnet-9', canonicalKey: key, podName: 'p', podDescription: 'd', datasetPath: '/tmp/x.json', estReppoCost: est })
@@ -87,6 +88,7 @@ describe('WalletExecutor', () => {
       }),
       mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0 })),
       claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0 })),
+      grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0 })),
     }
 
     const ex = new WalletExecutor(cli, ledger)
@@ -108,6 +110,7 @@ describe('WalletExecutor', () => {
         return { txHash: '0xmint', gasEth: 0.01 }
       }),
       claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0 })),
+      grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0 })),
     }
 
     const ex = new WalletExecutor(cli, ledger)
@@ -163,9 +166,50 @@ describe('WalletExecutor', () => {
     expect(r.detail).toBe('no txHash')
     expect(ledger.state.mintReppoSpent).toBe(0)
   })
+
+  it('executeGrantAccess returns executed and passes the subnet id', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const r = await new WalletExecutor(cli, ledger).executeGrantAccess('cm-subnet-9')
+    expect(r.status).toBe('executed')
+    expect(r.txHash).toBe('0xgrant')
+    expect(cli.grantAccess).toHaveBeenCalledWith('cm-subnet-9')
+  })
+
+  it('executeGrantAccess returns error when the CLI throws (no access yet)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => { throw new Error('VOTER_LACKS_SUBNET_ACCESS') })
+    const r = await new WalletExecutor(cli, new BudgetLedger(dir, caps)).executeGrantAccess('cm-subnet-9')
+    expect(r.status).toBe('error')
+    expect(r.detail).toMatch(/VOTER_LACKS_SUBNET_ACCESS/)
+  })
+
+  it('executeGrantAccess treats ACCESS_ALREADY_GRANTED as executed (so it caches, not re-pays)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => { throw new Error('Command failed — {"error":{"code":"ACCESS_ALREADY_GRANTED"}}') })
+    const r = await new WalletExecutor(cli, new BudgetLedger(dir, caps)).executeGrantAccess('9')
+    expect(r.status).toBe('executed')
+    expect(r.detail).toBe('already granted')
+  })
+
+  it('executeGrantAccess refuses (no CLI call) when grantReppoMax is 0 — grants are opt-in', async () => {
+    const cli = fakeCli()
+    const ledger = new BudgetLedger(dir, { ...caps, grantReppoMax: 0 })
+    const r = await new WalletExecutor(cli, ledger).executeGrantAccess('9')
+    expect(r.status).toBe('refused-budget')
+    expect(cli.grantAccess).not.toHaveBeenCalled()
+  })
+
+  it('executeGrantAccess releases the REPPO reservation when the grant fails (no spend leaks)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => { throw new Error('INSUFFICIENT_REPPO_BALANCE') })
+    const ledger = new BudgetLedger(dir, caps)
+    const r = await new WalletExecutor(cli, ledger).executeGrantAccess('9')
+    expect(r.status).toBe('error')
+    expect(ledger.state.grantReppoSpent).toBeCloseTo(0)
+  })
 })
 
-const CLAIM_CAPS: typeof caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 }
+const CLAIM_CAPS: typeof caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05, grantReppoMax: 500 }
 const claimIntent = (over: Partial<ClaimIntent> = {}): ClaimIntent => ({ kind: 'claim', datanetId: '9', podId: '1', epoch: 101, reppoDue: 12.5, idempotencyKey: 'claim-1-101', ...over })
 
 const fakeClaimCli = (over: Partial<ReppoCli> = {}): ReppoCli => ({
@@ -173,6 +217,7 @@ const fakeClaimCli = (over: Partial<ReppoCli> = {}): ReppoCli => ({
   vote: async () => ({ txHash: '0xvote', gasEth: 0.001 }),
   mintPod: async () => ({ txHash: '0xmint', gasEth: 0.01 }),
   claimEmissions: async () => ({ txHash: '0xclaim', gasEth: 0.0009 }),
+  grantAccess: async () => ({ txHash: '0xgrant', gasEth: 0.0005 }),
   ...over,
 })
 

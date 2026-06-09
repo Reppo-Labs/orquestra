@@ -192,6 +192,8 @@ async function start(): Promise<void> {
     recordClaim: (key) => dedup.recordClaim(key),
     strategyFor,
     getExistingPodNames: async (id) => (await listPodsJson(id, { all: true }).catch(() => [])).map((p) => p.name).filter(Boolean),
+    grantedSubnets: async () => new Set(dedup.getGrantedSubnets()),
+    recordGrant: (id) => dedup.recordGrant(id),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length

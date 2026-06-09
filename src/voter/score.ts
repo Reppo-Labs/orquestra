@@ -6,7 +6,10 @@ import type { DatanetRubric } from '../rubric/types.js'
 
 const ScoreSchema = z.object({
   score: z.number().int().min(1).max(10),
-  reason: z.string().max(280),
+  // Generous cap: capable models routinely write ~280+ char reasons, and an over-tight
+  // bound made every score fail validation ("response did not match schema"). The reason
+  // is only logged, so a roomy limit just prevents pathological runaway.
+  reason: z.string().max(600),
 })
 
 /** Pure: build the (system, prompt) the voter scores a pod with. brief = optional
@@ -29,13 +32,14 @@ export function createLlmScorer(model: LanguageModel, opts: { brief?: string } =
   return {
     async scorePod(pod: VoterPod, rubric: DatanetRubric): Promise<PodScore> {
       const { system, prompt } = buildVotePrompt(pod, rubric, opts.brief ?? '')
-      // `mode: 'json'` is the most compatible structured-output mode for OpenAI-
-      // compatible providers (e.g. Surplus) that don't support strict json_schema.
+      // `mode: 'tool'` (tool-calling structured output) is supported across Anthropic
+      // (incl. the Anthropic-compatible Virtuals gateway), OpenAI, and Google — unlike
+      // `json` mode, which Anthropic does not support.
       // Retry once on a non-conforming response (transient "did not match schema").
       let lastErr: unknown
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const { object } = await generateObject({ model, schema: ScoreSchema, mode: 'json', system, prompt })
+          const { object } = await generateObject({ model, schema: ScoreSchema, mode: 'tool', system, prompt })
           return object
         } catch (e) { lastErr = e }
       }
