@@ -1,6 +1,6 @@
 // src/adapter/gdelt/index.ts
 import type { LanguageModel } from 'ai'
-import { fetchGeoEvents, type GeoArticle, type GdeltQuery } from './gdelt.js'
+import { fetchGeoEvents, buildGdeltQuery, type GeoArticle, type GdeltQuery } from './gdelt.js'
 import { synthesizeClaims, type GdeltStrategy } from './claim.js'
 import { filterNovel } from './dedup.js'
 import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
@@ -31,7 +31,7 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
         topN: s?.topN ?? deps.defaults?.topN ?? ctx.topN ?? STRATEGY_DEFAULTS.topN,
       }
       const q: GdeltQuery = {
-        query: deps.defaults?.query ?? strategy.focus,
+        query: deps.defaults?.query ?? buildGdeltQuery(strategy.focus),
         timespanHours: deps.defaults?.timespanHours ?? 24,
         maxRecords: deps.defaults?.maxRecords ?? 75,
       }

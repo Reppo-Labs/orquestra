@@ -23,6 +23,20 @@ export function parseGdelt(raw: unknown): GeoArticle[] {
     .filter((a) => a.url !== '')
 }
 
+/** Pure: turn a human-readable focus ("Middle East conflict, Taiwan/China tensions, …")
+ *  into a valid GDELT query. GDELT rejects commas/slashes/dashes in unquoted keywords, so we
+ *  split the focus into phrases, strip every non-alphanumeric char to spaces, quote multi-word
+ *  phrases, and OR them. Empty/garbage focus falls back to a safe default. */
+export function buildGdeltQuery(focus: string): string {
+  const phrases = focus
+    .split(/,| and /i)
+    .map((p) => p.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter((p) => p.length > 0)
+  if (phrases.length === 0) return 'geopolitics'
+  const terms = phrases.map((p) => (p.includes(' ') ? `"${p}"` : p))
+  return terms.length === 1 ? terms[0] : `(${terms.join(' OR ')})`
+}
+
 export interface GdeltQuery { query: string; timespanHours: number; maxRecords: number }
 
 /** Live: fetch recent geopolitical articles from GDELT DOC 2.0 (no auth, curl). */
