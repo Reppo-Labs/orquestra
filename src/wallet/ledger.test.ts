@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BudgetLedger, LedgerCorruptError, type BudgetCaps } from './ledger.js'
 
-const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 3, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.01 }
+const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 3, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.01, grantReppoMax: 500 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-led-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
@@ -197,8 +197,24 @@ describe('BudgetLedger', () => {
 })
 
 const CAPS: BudgetCaps = {
-  voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.01,
+  voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.01, grantReppoMax: 500,
 }
+
+describe('BudgetLedger grant REPPO cap', () => {
+  it('refuses a grant when grantReppoMax is 0 (opt-in default)', () => {
+    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 0 })
+    expect(l.reserveGrant(200)).toBeNull()
+  })
+  it('reserves within the cap, then refuses once exhausted; release rolls back', () => {
+    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 250 })
+    const r = l.reserveGrant(200)
+    expect(r).not.toBeNull()
+    expect(l.state.grantReppoSpent).toBe(200)
+    expect(l.reserveGrant(200)).toBeNull() // 200 + 200 > 250
+    l.releaseGrant(r!)
+    expect(l.state.grantReppoSpent).toBe(0)
+  })
+})
 
 describe('BudgetLedger claim gas cap', () => {
   it('reserves, reconciles to actual, and persists claimGasSpentEth', () => {

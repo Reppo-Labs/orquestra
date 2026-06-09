@@ -7,6 +7,10 @@ import type { VoteIntent, MintIntent, ClaimIntent, ExecResult } from './intents.
 const VOTE_GAS_EST_ETH = 0.003
 const MINT_GAS_EST_ETH = 0.02
 const CLAIM_GAS_EST_ETH = 0.003
+// Conservative per-grant REPPO estimate (observed fees: 100-200 REPPO). The CLI doesn't
+// report the exact fee, so we reserve this and keep it as spent on success (over-count,
+// never under-count — matches the gas-reservation philosophy).
+const GRANT_REPPO_EST = 200
 
 /** The only component that signs. Each public method reserves budget BEFORE
  *  signing (fail-closed), then reconciles to actual gas on success or
@@ -27,14 +31,20 @@ export class WalletExecutor {
   /** One-time per-subnet access grant (prerequisite for voting/minting). Like lock(),
    *  this is infrequent setup and not budget-gated; gas is negligible. */
   async executeGrantAccess(datanetId: string): Promise<ExecResult> {
+    // Budget-gated: with the default grantReppoMax of 0 this refuses, so the node never
+    // pays grant fees unless the operator opts in. Bounds REPPO exposure to the cap.
+    const res = this.ledger.reserveGrant(GRANT_REPPO_EST)
+    if (!res) return { ok: false, status: 'refused-budget', detail: 'grant REPPO budget exhausted (set budget.grantReppoMax to enable subnet-access grants)' }
     try {
       const r = await this.cli.grantAccess(datanetId)
-      if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
+      if (!r.txHash) { this.ledger.releaseGrant(res); return { ok: false, status: 'error', detail: 'no txHash' } }
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       const detail = (e as Error).message
+      // No REPPO leaves the wallet on any failure path → release the reservation.
+      this.ledger.releaseGrant(res)
       // Already having access is success, not failure — report executed so the caller
-      // caches it and stops re-attempting (and re-paying) the grant every cycle.
+      // caches it and stops re-attempting the grant every cycle (no fee was charged).
       if (/ACCESS_ALREADY_GRANTED/.test(detail)) return { ok: true, status: 'executed', detail: 'already granted' }
       return { ok: false, status: 'error', detail }
     }

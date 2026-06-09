@@ -8,7 +8,7 @@ import { WalletExecutor } from './executor.js'
 import type { ReppoCli } from '../reppo/cli.js'
 import type { VoteIntent, MintIntent, ClaimIntent } from './intents.js'
 
-const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 2, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.05 }
+const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 2, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.05, grantReppoMax: 500 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-exec-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
@@ -190,9 +190,26 @@ describe('WalletExecutor', () => {
     expect(r.status).toBe('executed')
     expect(r.detail).toBe('already granted')
   })
+
+  it('executeGrantAccess refuses (no CLI call) when grantReppoMax is 0 — grants are opt-in', async () => {
+    const cli = fakeCli()
+    const ledger = new BudgetLedger(dir, { ...caps, grantReppoMax: 0 })
+    const r = await new WalletExecutor(cli, ledger).executeGrantAccess('9')
+    expect(r.status).toBe('refused-budget')
+    expect(cli.grantAccess).not.toHaveBeenCalled()
+  })
+
+  it('executeGrantAccess releases the REPPO reservation when the grant fails (no spend leaks)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => { throw new Error('INSUFFICIENT_REPPO_BALANCE') })
+    const ledger = new BudgetLedger(dir, caps)
+    const r = await new WalletExecutor(cli, ledger).executeGrantAccess('9')
+    expect(r.status).toBe('error')
+    expect(ledger.state.grantReppoSpent).toBeCloseTo(0)
+  })
 })
 
-const CLAIM_CAPS: typeof caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 }
+const CLAIM_CAPS: typeof caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05, grantReppoMax: 500 }
 const claimIntent = (over: Partial<ClaimIntent> = {}): ClaimIntent => ({ kind: 'claim', datanetId: '9', podId: '1', epoch: 101, reppoDue: 12.5, idempotencyKey: 'claim-1-101', ...over })
 
 const fakeClaimCli = (over: Partial<ReppoCli> = {}): ReppoCli => ({
