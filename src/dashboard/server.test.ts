@@ -56,6 +56,22 @@ describe('dashboard server', () => {
     expect(body).toMatchObject({ mintedPods: 1, claimableReppo: 5, earning: true })
   })
 
+  it('/api/health aggregates activity into per-datanet counts', async () => {
+    appendActivity(dir, {
+      ts: 't2', cycleId: 'c2', kind: 'skip', datanetId: '2',
+      reason: 'subnet access not granted (grant-access refused-budget: grant REPPO budget exhausted)',
+      status: 'skipped',
+    })
+    const r = await get('/api/health')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    const d9 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '9')
+    expect(d9.votes.executed).toBe(1)
+    const d2 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '2')
+    expect(d2.skips).toBe(1)
+    expect(d2.lastSkipReason).toMatch(/subnet access not granted/)
+  })
+
   it('unknown path → 404', async () => {
     expect((await get('/nope')).status).toBe(404)
   })
