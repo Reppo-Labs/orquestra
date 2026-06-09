@@ -37,6 +37,8 @@ export interface CycleDeps {
   /** subnet UUIDs the wallet already has access to (one-time grant cache). */
   grantedSubnets?(): Promise<Set<string>>
   recordGrant?(subnetId: string): void
+  /** evict a stale grant-cache entry (e.g. wallet changed → on-chain access gone). */
+  revokeGrant?(subnetId: string): void
 }
 
 export interface DatanetReport {
@@ -113,7 +115,20 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // means the tx never submitted — recording it would PERMANENTLY block a
           // legitimate retry. The idempotency key (vote-<pod>-<dir>) guards the rare
           // landed-but-unconfirmed case on retry, and the chain rejects a duplicate vote.
+          // Exception: CANNOT_VOTE_FOR_OWN_POD is PERMANENT (we minted the pod; the
+          // own-pods query missed it) — retrying burns a vote attempt every cycle
+          // forever, so record it as voted. (Observed live: pod 925 on datanet 9.)
           if (r.status === 'executed') deps.recordVote(datanetId, intent.podId)
+          else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
+            console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
+            deps.recordVote(datanetId, intent.podId)
+          }
+          // A VOTER_LACKS_SUBNET_ACCESS error while the grant cache says granted means
+          // the cache is STALE (wallet changed, datanet access model changed). Evict so
+          // the next cycle re-attempts the grant instead of failing forever.
+          if (r.status === 'error' && /VOTER_LACKS_SUBNET_ACCESS/.test(r.detail ?? '')) {
+            deps.revokeGrant?.(datanetId)
+          }
           deps.recordActivity({
             ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
             podId: intent.podId, direction: intent.direction, conviction: intent.conviction, reason: intent.reason,
@@ -163,6 +178,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
       console.error(`orquestra: datanet ${datanetId} skipped — ${error}`)
+      // Record the failure as a skip activity entry too: without it the dashboard's
+      // health/idle panels can't tell "erroring every cycle" from "quietly fine".
+      deps.recordActivity({
+        ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+        reason: `datanet error: ${error}`, status: 'skipped',
+      })
       datanets.push({ datanetId, votes, mints, error })
     }
   }

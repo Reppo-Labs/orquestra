@@ -194,6 +194,7 @@ async function start(): Promise<void> {
     getExistingPodNames: async (id) => (await listPodsJson(id, { all: true }).catch(() => [])).map((p) => p.name).filter(Boolean),
     grantedSubnets: async () => new Set(dedup.getGrantedSubnets()),
     recordGrant: (id) => dedup.recordGrant(id),
+    revokeGrant: (id) => dedup.removeGrant(id),
   }
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length

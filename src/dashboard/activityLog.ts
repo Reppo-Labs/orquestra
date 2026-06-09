@@ -1,5 +1,5 @@
 // src/dashboard/activityLog.ts
-import { appendFileSync, readFileSync, existsSync } from 'node:fs'
+import { appendFileSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface ActivityEntry {
@@ -28,15 +28,26 @@ export function appendActivity(dataDir: string, entry: ActivityEntry): void {
   appendFileSync(join(dataDir, FILE), JSON.stringify(entry) + '\n')
 }
 
+// Parse cache keyed by file path: the dashboard polls /api/pnl + /api/health every
+// 30s and each re-parsed the whole (ever-growing) JSONL. The file is append-only,
+// so (size, mtime) identity means the parsed entries are still valid.
+const parseCache = new Map<string, { size: number; mtimeMs: number; entries: ActivityEntry[] }>()
+
 /** Read the most recent `limit` entries, newest-first. Skips unparseable lines
- *  (e.g. a torn final line from a crash). Missing file → []. */
+ *  (e.g. a torn final line from a crash). Missing file → []. Repeat reads of an
+ *  unchanged file are served from an in-process cache. */
 export function readActivity(dataDir: string, opts: { limit: number }): ActivityEntry[] {
   const path = join(dataDir, FILE)
   if (!existsSync(path)) return []
+  const st = statSync(path)
+  const hit = parseCache.get(path)
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.entries.slice(0, opts.limit)
   const lines = readFileSync(path, 'utf-8').split('\n').filter((l) => l.trim() !== '')
   const out: ActivityEntry[] = []
   for (const line of lines) {
     try { out.push(JSON.parse(line) as ActivityEntry) } catch { /* skip torn/invalid line */ }
   }
-  return out.reverse().slice(0, opts.limit)
+  out.reverse()
+  parseCache.set(path, { size: st.size, mtimeMs: st.mtimeMs, entries: out })
+  return out.slice(0, opts.limit)
 }
