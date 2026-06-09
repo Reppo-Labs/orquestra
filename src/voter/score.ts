@@ -29,13 +29,14 @@ export function createLlmScorer(model: LanguageModel, opts: { brief?: string } =
   return {
     async scorePod(pod: VoterPod, rubric: DatanetRubric): Promise<PodScore> {
       const { system, prompt } = buildVotePrompt(pod, rubric, opts.brief ?? '')
-      // `mode: 'json'` is the most compatible structured-output mode for OpenAI-
-      // compatible providers (e.g. Surplus) that don't support strict json_schema.
+      // `mode: 'tool'` (tool-calling structured output) is supported across Anthropic
+      // (incl. the Anthropic-compatible Virtuals gateway), OpenAI, and Google — unlike
+      // `json` mode, which Anthropic does not support.
       // Retry once on a non-conforming response (transient "did not match schema").
       let lastErr: unknown
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const { object } = await generateObject({ model, schema: ScoreSchema, mode: 'json', system, prompt })
+          const { object } = await generateObject({ model, schema: ScoreSchema, mode: 'tool', system, prompt })
           return object
         } catch (e) { lastErr = e }
       }

@@ -35,7 +35,9 @@ const defaultGenerate = (model: LanguageModel) => async ({ system, prompt }: { s
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { object } = await generateObject({ model, schema: ClaimSchema, mode: 'json', system, prompt })
+      // `mode: 'tool'` works across Anthropic (incl. the Virtuals gateway), OpenAI, and
+      // Google; Anthropic does not support `json` mode.
+      const { object } = await generateObject({ model, schema: ClaimSchema, mode: 'tool', system, prompt })
       return object
     } catch (e) { lastErr = e }
   }
