@@ -37,10 +37,10 @@ export const StrategyConfigSchema = z
       // Defaulted (not required) so configs written before this cap existed still load.
       claimGasEthMax: z.number().nonnegative().default(0.05),
       // Cumulative REPPO the node may spend on one-time subnet-access grants (fee is
-      // 100-200 REPPO each). Default 0 = grants DISABLED (opt-in): the node won't pay
-      // grant fees unless the operator sets a budget, so it can't drain REPPO meant for
-      // minting. Defaulted so pre-existing configs still load.
-      grantReppoMax: z.number().nonnegative().default(0),
+      // 100-200 REPPO each). Unset = no cap: enabling a datanet (vote/mint) IS the
+      // consent to pay its grant fee, so joined datanets get access automatically.
+      // Set a number to bound total grant spend (0 disables grants entirely).
+      grantReppoMax: z.number().nonnegative().optional(),
     }),
     claimEmissions: z.boolean().default(true),
     datanets: z.record(z.string(), DatanetPolicy),
