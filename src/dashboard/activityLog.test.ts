@@ -37,4 +37,15 @@ describe('activityLog', () => {
     const rows = readActivity(dir, { limit: 10 })
     expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
   })
+
+  it('round-trips a skip entry (kind skip, status skipped, reason)', () => {
+    appendActivity(dir, {
+      ts: '2026-06-09T00:00:00.000Z', cycleId: 'c1', kind: 'skip', datanetId: '2',
+      reason: 'subnet access not granted (grant-access refused-budget: grant REPPO budget exhausted)',
+      status: 'skipped',
+    })
+    const out = readActivity(dir, { limit: 10 })
+    expect(out[0]).toMatchObject({ kind: 'skip', datanetId: '2', status: 'skipped' })
+    expect(out[0].reason).toMatch(/subnet access not granted/)
+  })
 })

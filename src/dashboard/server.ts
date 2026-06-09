@@ -8,6 +8,7 @@ import { readActivity } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
+import { buildHealth } from './health.js'
 
 const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
 
@@ -21,7 +22,9 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     const c = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
-      claimEmissions: c.claimEmissions, datanets: c.datanets, notes: c.notes,
+      // raw file may omit the key; the schema defaults it to true — mirror that here
+      // so the header doesn't claim "claim off" for a node that IS claiming.
+      claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
     }
   } catch { return {} }
 }
@@ -41,6 +44,8 @@ function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): voi
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
     if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
     if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
+    if (url === '/api/health') { json(res, 200, buildHealth(readActivity(dataDir, { limit: 5000 }))); return }
+    if (url === '/favicon.ico') { res.writeHead(204); res.end(); return }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
       const activity = readActivity(dataDir, { limit: 5000 })

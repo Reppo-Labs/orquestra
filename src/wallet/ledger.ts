@@ -10,7 +10,10 @@ export interface BudgetCaps {
   mintGasEthMax: number
   claimGasEthMax: number
   /** Cumulative REPPO allowed for one-time subnet-access grants. 0 = grants disabled. */
-  grantReppoMax: number
+  /** Cumulative cap on subnet-access grant fees. undefined = no cap: joining a
+   *  datanet (vote/mint enabled in config) is the consent to pay its grant fee.
+   *  Set a number to bound total grant spend (0 disables grants entirely). */
+  grantReppoMax?: number
 }
 
 export interface LedgerState {
@@ -196,11 +199,12 @@ export class BudgetLedger {
   }
 
   canGrant(estReppo: number): boolean {
+    if (this.caps.grantReppoMax === undefined) return true // no cap: datanet membership is the consent
     return this._state.grantReppoSpent + estReppo <= this.caps.grantReppoMax
   }
 
-  /** Debit and persist BEFORE signing. Returns null if over the grant REPPO cap (no
-   *  debit). With the default cap of 0 this always refuses — grants are opt-in. */
+  /** Debit and persist BEFORE signing. Returns null if over the explicit grant REPPO
+   *  cap (no debit). Unset cap always allows; spend is still tracked in the ledger. */
   reserveGrant(estReppo: number): GrantReservation | null {
     if (!this.canGrant(estReppo)) return null
     this._state.grantReppoSpent += estReppo

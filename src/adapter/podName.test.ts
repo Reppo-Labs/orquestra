@@ -1,0 +1,24 @@
+import { describe, it, expect } from 'vitest'
+import { clampPodName, POD_NAME_MAX } from './podName.js'
+
+describe('clampPodName', () => {
+  it('passes short names through unchanged', () => {
+    expect(clampPodName('HL perps, 0x9984..95ba: 9 trades')).toBe('HL perps, 0x9984..95ba: 9 trades')
+  })
+
+  it('clamps the real 144-char live failure to ≤50 at a word boundary', () => {
+    const long = "The US has added major Chinese firms including BYD and NIO to a 'Chinese military companies' blacklist, prompting formal objection from Beijing."
+    const out = clampPodName(long)
+    expect(out.length).toBeLessThanOrEqual(POD_NAME_MAX)
+    expect(out).toBe('The US has added major Chinese firms including')
+  })
+
+  it('hard-cuts a name with no usable word boundary', () => {
+    const out = clampPodName('x'.repeat(120))
+    expect(out).toBe('x'.repeat(50))
+  })
+
+  it('normalizes whitespace before measuring', () => {
+    expect(clampPodName('  a   b  ')).toBe('a b')
+  })
+})

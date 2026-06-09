@@ -152,6 +152,77 @@ describe('runCycle', () => {
     expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
 
+  it('skips vote AND mint when subnet access is required and the grant is refused (no scoring waste)', async () => {
+    const executeGrantAccess = vi.fn(async () => ({
+      ok: false as const, status: 'refused-budget' as const,
+      detail: 'grant REPPO budget exhausted (set budget.grantReppoMax to enable subnet-access grants)',
+    }))
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+    })
+    const report = await runCycle(config, 'cycle-skip', d)
+
+    // the expensive paths were never entered
+    expect(d.getPodsAndFilter).not.toHaveBeenCalled()
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+
+    // the skip is visible in the report and the activity log
+    const d9 = report.datanets.find((r) => r.datanetId === '9')!
+    expect(d9.skipped).toMatch(/subnet access not granted/)
+    const skips = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => c[0] as { kind: string; datanetId: string; status: string; reason?: string })
+      .filter((e) => e.kind === 'skip')
+    expect(skips.length).toBe(2) // datanets 9 and 2, one entry each per cycle
+    expect(skips[0].status).toBe('skipped')
+    expect(skips[0].reason).toMatch(/grant-access refused-budget/)
+  })
+
+  it('does not skip when access is already granted, when the grant succeeds, or when the rubric has no subnetUuid', async () => {
+    // already granted → proceeds
+    const granted = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess: vi.fn(),
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set(['9', '2']),
+      recordGrant: vi.fn(),
+    })
+    let report = await runCycle(config, 'g1', granted)
+    expect(report.datanets.every((r) => r.skipped === undefined)).toBe(true)
+    expect(granted.getPodsAndFilter).toHaveBeenCalled()
+
+    // grant succeeds this cycle → proceeds immediately
+    const grantsNow = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess: vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' })),
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+    })
+    report = await runCycle(config, 'g2', grantsNow)
+    expect(report.datanets.every((r) => r.skipped === undefined)).toBe(true)
+
+    // no subnetUuid (pre-subnet metadata) → gate not applicable, proceeds
+    const noSubnet = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: '' })),
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+    })
+    report = await runCycle(config, 'g3', noSubnet)
+    expect(report.datanets.every((r) => r.skipped === undefined)).toBe(true)
+    expect(noSubnet.getPodsAndFilter).toHaveBeenCalled()
+  })
+
   it('records dedup ONLY on executed — refused AND errored are not recorded (so retries are not blocked)', async () => {
     const refused = deps({
       executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn(async () => ({ ok: false, status: 'refused-budget' })) } as unknown as CycleDeps['executor'],

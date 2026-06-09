@@ -42,6 +42,37 @@ describe('synthesizeClaims', () => {
     const b = await synthesizeClaims(arts, r, '9', s, { generate: g2 })
     expect(a[0].canonicalKey).toBe(b[0].canonicalKey)   // same claim, different source URL → same key
   })
+  it('uses the LLM short title as podName, clamped to 50 chars', async () => {
+    const g = async () => ({ claims: [{
+      claim: 'A long falsifiable claim that would blow past the CLI pod-name limit if used directly as the name',
+      title: 'US blacklists BYD and NIO over military links',
+      verdict: 'credible' as const, confidence: 8, importance: 9,
+      rationale: 'r', sources: ['https://ex.com/a'],
+    }] })
+    const cands = await synthesizeClaims(arts, r, '2', s, { generate: g })
+    expect(cands[0].podName).toBe('US blacklists BYD and NIO over military links')
+  })
+  it('clamps the assembled podDescription to the CLI 200-char limit (long rationale + url)', async () => {
+    const g = async () => ({ claims: [{
+      claim: 'Oil stays below $100 through Q3',
+      verdict: 'likely' as const, confidence: 7, importance: 9,
+      rationale: 'Multiple energy-market sources align on sub-$100 oil, falling pump prices, and record flows; the durability warning is analyst opinion, inherently probabilistic, and several desks expect continued softness. '.repeat(2),
+      sources: ['https://example.com/featured/portland-local-news/content/2026-06-09-lower-crude-oil-prices-bring-gas-prices-down/'],
+    }] })
+    const cands = await synthesizeClaims(arts, r, '2', s, { generate: g })
+    expect(cands[0].podDescription.length).toBeLessThanOrEqual(200)
+    expect(cands[0].podDescription).toMatch(/^Verdict: likely/)
+  })
+  it('falls back to the clamped claim when the model omits the title', async () => {
+    const longClaim = 'The US has added major Chinese firms including BYD and NIO to a military blacklist prompting formal objection from Beijing'
+    const g = async () => ({ claims: [{
+      claim: longClaim, verdict: 'credible' as const, confidence: 8, importance: 9,
+      rationale: 'r', sources: ['https://ex.com/a'],
+    }] })
+    const cands = await synthesizeClaims(arts, r, '2', s, { generate: g })
+    expect(cands[0].podName.length).toBeLessThanOrEqual(50)
+    expect(longClaim.startsWith(cands[0].podName)).toBe(true)
+  })
   it('two distinct claims citing the SAME source get distinct keys (no collision)', async () => {
     const g = async () => ({ claims: [
       { claim: 'Ceasefire holds through June', verdict: 'credible' as const, confidence: 7, importance: 8, rationale: 'r', sources: ['https://ex.com/a'] },

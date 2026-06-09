@@ -49,6 +49,24 @@ describe('selectMints (minScore 7)', () => {
     expect(intents).toEqual([]); expect(calls).toBe(0)
   })
 
+  it('clamps an over-long candidate podName to 50 chars in the intent', async () => {
+    const long = cand('klong')
+    long.podName = 'A '.repeat(60) + 'end' // 123 chars
+    const intents = await selectMints('9', [long], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ klong: 9 }) })
+    expect(intents).toHaveLength(1)
+    expect(intents[0].podName.length).toBeLessThanOrEqual(50)
+  })
+
+  it('clamps an over-long candidate podDescription to 200 chars in the intent', async () => {
+    const long = cand('kdesc')
+    long.podDescription = 'Verdict: likely (7/10). ' + 'word '.repeat(70) + 'Source: https://example.com/a' // ~400 chars
+    const intents = await selectMints('9', [long], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ kdesc: 9 }) })
+    expect(intents).toHaveLength(1)
+    expect(intents[0].podDescription.length).toBeLessThanOrEqual(200)
+  })
+
   it('carries the score onto selfScore and dedups within the same batch', async () => {
     const intents = await selectMints('9', [cand('a'), cand('a')], rubric,
       { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ a: 8 }) })

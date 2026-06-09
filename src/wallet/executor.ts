@@ -31,10 +31,10 @@ export class WalletExecutor {
   /** One-time per-subnet access grant (prerequisite for voting/minting). Like lock(),
    *  this is infrequent setup and not budget-gated; gas is negligible. */
   async executeGrantAccess(datanetId: string): Promise<ExecResult> {
-    // Budget-gated: with the default grantReppoMax of 0 this refuses, so the node never
-    // pays grant fees unless the operator opts in. Bounds REPPO exposure to the cap.
+    // Budget-gated only when the operator set an explicit grantReppoMax; unset = no cap
+    // (joining a datanet is the consent to pay its one-time grant fee).
     const res = this.ledger.reserveGrant(GRANT_REPPO_EST)
-    if (!res) return { ok: false, status: 'refused-budget', detail: 'grant REPPO budget exhausted (set budget.grantReppoMax to enable subnet-access grants)' }
+    if (!res) return { ok: false, status: 'refused-budget', detail: 'grant REPPO budget exhausted (raise or unset budget.grantReppoMax to allow subnet-access grants)' }
     try {
       const r = await this.cli.grantAccess(datanetId)
       if (!r.txHash) { this.ledger.releaseGrant(res); return { ok: false, status: 'error', detail: 'no txHash' } }
@@ -84,7 +84,13 @@ export class WalletExecutor {
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseMint(res)
-      return { ok: false, status: 'error', detail: (e as Error).message }
+      let detail = (e as Error).message
+      // 0x5dd58b8b = TransferAmountExceedsBalance() (cast 4byte): the wallet lacks
+      // liquid REPPO for the mint fee. Decode it so the activity log says why.
+      if (/UNKNOWN_REVERT_0x5dd58b8b/.test(detail)) {
+        detail += ' — decoded: TransferAmountExceedsBalance(): wallet lacks liquid REPPO for the mint fee'
+      }
+      return { ok: false, status: 'error', detail }
     }
   }
 

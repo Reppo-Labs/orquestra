@@ -201,9 +201,16 @@ const CAPS: BudgetCaps = {
 }
 
 describe('BudgetLedger grant REPPO cap', () => {
-  it('refuses a grant when grantReppoMax is 0 (opt-in default)', () => {
+  it('refuses a grant when grantReppoMax is explicitly 0', () => {
     const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 0 })
     expect(l.reserveGrant(200)).toBeNull()
+  })
+  it('allows grants (still tracked) when grantReppoMax is unset — joining a datanet is the consent', () => {
+    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: undefined })
+    const r = l.reserveGrant(200)
+    expect(r).not.toBeNull()
+    expect(l.state.grantReppoSpent).toBe(200)
+    expect(l.reserveGrant(200)).not.toBeNull() // no cap → never refuses
   })
   it('reserves within the cap, then refuses once exhausted; release rolls back', () => {
     const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 250 })
