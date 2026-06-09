@@ -142,6 +142,17 @@ describe('WalletExecutor', () => {
     expect(ledger.state.mintGasSpentEth).toBeCloseTo(0)
   })
 
+  it('decodes the 0x5dd58b8b mint revert into a readable hint', async () => {
+    const cli = fakeCli()
+    ;(cli.mintPod as any) = vi.fn(async () => { throw new Error('mint-pod tx failed: UNKNOWN_REVERT_0x5dd58b8b') })
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeMint(mintIntent('k1', 50))
+    expect(r.status).toBe('error')
+    expect(r.detail).toMatch(/TransferAmountExceedsBalance/)
+    expect(r.detail).toMatch(/lacks liquid REPPO/)
+  })
+
   // --- empty txHash: treat as error and release reservation ---
 
   it('empty txHash on vote returns status=error and releases reservation', async () => {

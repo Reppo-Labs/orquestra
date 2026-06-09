@@ -84,7 +84,13 @@ export class WalletExecutor {
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseMint(res)
-      return { ok: false, status: 'error', detail: (e as Error).message }
+      let detail = (e as Error).message
+      // 0x5dd58b8b = TransferAmountExceedsBalance() (cast 4byte): the wallet lacks
+      // liquid REPPO for the mint fee. Decode it so the activity log says why.
+      if (/UNKNOWN_REVERT_0x5dd58b8b/.test(detail)) {
+        detail += ' — decoded: TransferAmountExceedsBalance(): wallet lacks liquid REPPO for the mint fee'
+      }
+      return { ok: false, status: 'error', detail }
     }
   }
 
