@@ -113,6 +113,7 @@ function renderActivity() {
   const detail = (r) => r.kind === 'vote'
       ? (r.direction ? `${r.direction} · conv ${r.conviction} · ${r.reason ?? ''}` : (r.detail || '—'))
     : r.kind === 'mint' ? (r.podName ?? r.canonicalKey ?? '')
+    : r.kind === 'skip' ? (r.reason ?? '—')
     : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
   const tx = (r) => r.txHash ? `<a href="https://basescan.org/tx/${r.txHash}" target="_blank">${r.txHash.slice(0,8)}…</a>` : ''
   const pillClass = (r) => r.kind === 'vote' ? (r.direction || 'vote') : r.kind

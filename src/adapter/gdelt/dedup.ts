@@ -16,7 +16,13 @@ function overlap(a: string, b: string): number {
 }
 
 /** Backstop dedup: drop a candidate whose claim substantially overlaps (>= threshold
- *  overlap coefficient) any existing on-chain pod name. Heuristic, deterministic, LLM-free. */
+ *  overlap coefficient) any existing on-chain pod name. Heuristic, deterministic, LLM-free.
+ *  Compares the dataset CLAIM (full text, the unit canonicalKey hashes), not podName —
+ *  podName is now a short headline whose few significant words make the coefficient noisy. */
 export function filterNovel(candidates: CandidatePod[], existingPodNames: string[], threshold = 0.5): CandidatePod[] {
-  return candidates.filter((c) => !existingPodNames.some((e) => overlap(c.podName, e) >= threshold))
+  const textOf = (c: CandidatePod): string => {
+    const claim = (c.dataset as { claim?: unknown } | undefined)?.claim
+    return typeof claim === 'string' && claim.length > 0 ? claim : c.podName
+  }
+  return candidates.filter((c) => !existingPodNames.some((e) => overlap(textOf(c), e) >= threshold))
 }
