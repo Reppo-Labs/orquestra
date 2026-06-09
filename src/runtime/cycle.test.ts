@@ -86,10 +86,11 @@ describe('runCycle', () => {
       recordGrant: (id: string) => { granted.add(id) },
     })
     await runCycle(config, 'cycle-grant', d)
-    // both datanets resolve to subnetUuid 'cm-test-9' → granted on the first, cached for the second
-    expect(executeGrantAccess).toHaveBeenCalledWith('cm-test-9')
-    expect(executeGrantAccess).toHaveBeenCalledTimes(1)
-    expect(granted.has('cm-test-9')).toBe(true)
+    // grant-access is keyed by datanet id; datanets 9 and 2 are distinct → one grant each
+    expect(executeGrantAccess).toHaveBeenCalledWith('9')
+    expect(executeGrantAccess).toHaveBeenCalledWith('2')
+    expect(executeGrantAccess).toHaveBeenCalledTimes(2)
+    expect(granted.has('9') && granted.has('2')).toBe(true)
   })
 
   it('skips grant when the subnet is already granted', async () => {
@@ -100,7 +101,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set(['cm-test-9']),
+      grantedSubnets: async () => new Set(['9', '2']),
       recordGrant: vi.fn(),
     })
     await runCycle(config, 'cycle-grant2', d)

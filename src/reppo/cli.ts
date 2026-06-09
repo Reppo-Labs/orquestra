@@ -20,8 +20,8 @@ export interface ReppoCli {
   vote(args: VoteArgs): Promise<ChainResult>
   mintPod(args: MintArgs): Promise<ChainResult>
   claimEmissions(args: ClaimEmissionsArgs): Promise<ChainResult>
-  /** One-time per-subnet access grant — prerequisite for voting/minting on a datanet. */
-  grantAccess(subnetId: string): Promise<ChainResult>
+  /** One-time access grant — prerequisite for voting/minting. Keyed by the integer datanet id. */
+  grantAccess(datanetId: string): Promise<ChainResult>
 }
 
 async function run(args: string[]): Promise<ChainResult> {
@@ -57,5 +57,5 @@ export const defaultReppoCli: ReppoCli = {
   vote: (a) => run(['vote', '--pod', a.podId, a.direction === 'up' ? '--like' : '--dislike', '--votes', String(a.votes), '--idempotency-key', a.idempotencyKey]),
   mintPod: (a) => run(['mint-pod', '--datanet', a.datanetId, '--subnet-uuid', a.subnetUuid, '--pod-name', a.podName, '--pod-description', a.podDescription, '--dataset', a.datasetPath, '--idempotency-key', a.idempotencyKey, '--agree-to-terms']),
   claimEmissions: (a) => run(['claim-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
-  grantAccess: (subnetId) => run(['grant-access', '--datanet', subnetId]),
+  grantAccess: (datanetId) => run(['grant-access', '--datanet', datanetId]),
 }

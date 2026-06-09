@@ -75,13 +75,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // subnet model (empty subnetUuid) can't be granted and is left to proceed/fail
       // naturally. A failed grant doesn't abort the datanet — the vote/mint that needs
       // it will surface the error.
+      // grant-access is keyed by the INTEGER datanet id (the `--datanet <id>` arg), NOT the
+      // subnet uuid; subnetUuid presence just signals the datanet uses the access model.
       if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
         const granted = await deps.grantedSubnets()
-        if (!granted.has(rubric.subnetUuid)) {
-          const gr = await deps.executor.executeGrantAccess(rubric.subnetUuid)
+        if (!granted.has(datanetId)) {
+          const gr = await deps.executor.executeGrantAccess(datanetId)
           if (gr.status === 'executed') {
-            deps.recordGrant(rubric.subnetUuid)
-            console.error(`orquestra: datanet ${datanetId} — granted subnet access (${rubric.subnetUuid})`)
+            deps.recordGrant(datanetId)
+            console.error(`orquestra: datanet ${datanetId} — granted access`)
           } else {
             console.error(`orquestra: datanet ${datanetId} — grant-access ${gr.status}: ${gr.detail ?? ''} — vote/mint may fail until access is granted`)
           }

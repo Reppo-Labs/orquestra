@@ -26,9 +26,9 @@ export class WalletExecutor {
 
   /** One-time per-subnet access grant (prerequisite for voting/minting). Like lock(),
    *  this is infrequent setup and not budget-gated; gas is negligible. */
-  async executeGrantAccess(subnetId: string): Promise<ExecResult> {
+  async executeGrantAccess(datanetId: string): Promise<ExecResult> {
     try {
-      const r = await this.cli.grantAccess(subnetId)
+      const r = await this.cli.grantAccess(datanetId)
       if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
