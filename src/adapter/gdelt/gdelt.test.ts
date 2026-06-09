@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseGdelt, buildGdeltQuery } from './gdelt.js'
+import { parseGdelt, buildGdeltQuery, withRetry } from './gdelt.js'
 
 const raw = JSON.parse(readFileSync(join(__dirname, '../../../test/fixtures/gdelt-doc.json'), 'utf-8'))
 
@@ -30,5 +30,35 @@ describe('parseGdelt', () => {
   it('returns [] on malformed input', () => {
     expect(parseGdelt({})).toEqual([])
     expect(parseGdelt(null)).toEqual([])
+  })
+})
+
+describe('withRetry', () => {
+  const noSleep = async () => {}
+
+  it('returns immediately on first success (no sleep)', async () => {
+    let slept = 0
+    const r = await withRetry(async () => 'ok', [10, 20], async () => { slept++ })
+    expect(r).toBe('ok')
+    expect(slept).toBe(0)
+  })
+
+  it('retries after each delay then succeeds', async () => {
+    const sleeps: number[] = []
+    let calls = 0
+    const r = await withRetry(
+      async () => { if (++calls < 3) throw new Error('429'); return 'ok' },
+      [15_000, 45_000],
+      async (ms) => { sleeps.push(ms) },
+    )
+    expect(r).toBe('ok')
+    expect(calls).toBe(3)
+    expect(sleeps).toEqual([15_000, 45_000])
+  })
+
+  it('throws the last error once delays are exhausted', async () => {
+    let calls = 0
+    await expect(withRetry(async () => { calls++; throw new Error(`fail ${calls}`) }, [1, 1], noSleep))
+      .rejects.toThrow('fail 3')
   })
 })

@@ -39,12 +39,34 @@ export function buildGdeltQuery(focus: string): string {
 
 export interface GdeltQuery { query: string; timespanHours: number; maxRecords: number }
 
-/** Live: fetch recent geopolitical articles from GDELT DOC 2.0 (no auth, curl). */
+/** Run fn, retrying after each delay on failure. GDELT throttles per-IP ("one request
+ *  every 5 seconds", with longer penalty windows) — a couple of spaced retries usually
+ *  outlives a transient 429 without giving up the whole 1h cycle. Exposed for testing. */
+export async function withRetry<T>(fn: () => Promise<T>, delaysMs: number[], sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<T> {
+  let lastErr: unknown
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      lastErr = e
+      if (attempt >= delaysMs.length) throw lastErr
+      await sleep(delaysMs[attempt])
+    }
+  }
+}
+
+/** Live: fetch recent geopolitical articles from GDELT DOC 2.0 (no auth, curl).
+ *  Retries at 15s/60s/180s: GDELT's per-IP throttle escalates from a 5s spacing rule
+ *  to multi-minute penalty windows (observed live), and on a 1h cadence waiting up to
+ *  ~4 min beats losing the cycle's whole mint discovery. */
 export async function fetchGeoEvents(q: GdeltQuery): Promise<GeoArticle[]> {
   const url =
     `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(q.query)}` +
     `&mode=ArtList&maxrecords=${q.maxRecords}&timespan=${q.timespanHours}h&sort=DateDesc&format=json`
-  const { stdout } = await execFileAsync('curl', ['-fsS', '--max-time', '60', url], { maxBuffer: 64 * 1024 * 1024 })
+  const { stdout } = await withRetry(
+    () => execFileAsync('curl', ['-fsS', '--max-time', '60', url], { maxBuffer: 64 * 1024 * 1024 }),
+    [15_000, 60_000, 180_000],
+  )
   try {
     return parseGdelt(JSON.parse(stdout))
   } catch {
