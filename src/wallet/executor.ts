@@ -28,7 +28,7 @@ export class WalletExecutor {
     const res = this.ledger.reserveVote(VOTE_GAS_EST_ETH)
     if (!res) return { ok: false, status: 'refused-budget', detail: 'vote budget/rate exhausted' }
     try {
-      const r = await this.cli.vote({ podId: intent.podId, direction: intent.direction, idempotencyKey: `vote-${intent.podId}-${intent.direction}` })
+      const r = await this.cli.vote({ podId: intent.podId, direction: intent.direction, votes: Math.max(1, Math.round(intent.conviction)), idempotencyKey: `vote-${intent.podId}-${intent.direction}` })
       if (!r.txHash) {
         this.ledger.releaseVote(res)
         return { ok: false, status: 'error', detail: 'no txHash' }
