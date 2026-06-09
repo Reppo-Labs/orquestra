@@ -2,6 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CandidatePod, CandidateScorer } from '../adapter/types.js'
+import { clampPodName } from '../adapter/podName.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { MintIntent } from '../wallet/intents.js'
 
@@ -39,7 +40,7 @@ export async function selectMints(
     writeFileSync(datasetPath, JSON.stringify(c.dataset))
     intents.push({
       kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
-      podName: c.podName, podDescription: c.podDescription, datasetPath,
+      podName: clampPodName(c.podName), podDescription: c.podDescription, datasetPath,
       estReppoCost: opts.estReppoCost ?? 0, selfScore: score,
     })
   }
