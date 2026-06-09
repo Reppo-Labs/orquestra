@@ -13,9 +13,9 @@ describe('resolveModel', () => {
     expect(resolveModel('surplus', 'inf_test', 'claude-opus-4.8')).toBeTruthy()
   })
 
-  it('resolves virtuals (Anthropic-compatible gateway) with the acp- key + model override', () => {
+  it('resolves virtuals (OpenAI-compatible gateway) with the acp- key + model override', () => {
     expect(resolveModel('virtuals', 'acp-test')).toBeTruthy()
-    expect(resolveModel('virtuals', 'acp-test', 'anthropic/claude-sonnet-4-5')).toBeTruthy()
+    expect(resolveModel('virtuals', 'acp-test', 'claude-opus-4-8')).toBeTruthy()
   })
 
   it('throws on an unknown provider', () => {

@@ -11,10 +11,11 @@ export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtu
  *  client appends `/chat/completions` to this base URL. */
 const SURPLUS_BASE_URL = 'https://www.surplusintelligence.ai/api/inference/v1'
 
-/** Virtuals — an Anthropic-compatible inference gateway (https://compute.virtuals.io).
- *  Uses an ACP `acp-…` key; the Anthropic client sends it as `x-api-key` plus
- *  `anthropic-version`, and appends `/messages` to this base URL. Settles via the
- *  Agent Commerce Protocol (no per-call USDC), so it sidesteps marketplace USDC minimums. */
+/** Virtuals — an OpenAI-compatible inference gateway (https://compute.virtuals.io).
+ *  Bearer `acp-…` (ACP) key; the OpenAI client appends `/chat/completions` to this
+ *  base URL. Settles via the Agent Commerce Protocol (no per-call USDC), so it
+ *  sidesteps marketplace USDC minimums. Model slugs are bare (e.g. `claude-opus-4-8`);
+ *  list them at GET /v1/models. */
 const VIRTUALS_BASE_URL = 'https://compute.virtuals.io/v1'
 
 /** Resolve a model from any supported provider + the user's API key.
@@ -28,7 +29,7 @@ const DEFAULT_MODEL: Record<LlmProvider, string> = {
   openai: 'gpt-5.2',
   google: 'gemini-3-pro',
   surplus: 'claude-opus-4.8',
-  virtuals: 'anthropic/claude-sonnet-4-5',
+  virtuals: 'claude-opus-4-8',
 }
 
 export function resolveModel(provider: LlmProvider, apiKey: string, model?: string): LanguageModel {
@@ -42,8 +43,8 @@ export function resolveModel(provider: LlmProvider, apiKey: string, model?: stri
     case 'surplus':
       return createOpenAI({ apiKey, baseURL: SURPLUS_BASE_URL })(model ?? DEFAULT_MODEL.surplus)
     case 'virtuals':
-      // Anthropic-compatible: createAnthropic sends the acp- key as x-api-key + anthropic-version.
-      return createAnthropic({ apiKey, baseURL: VIRTUALS_BASE_URL })(model ?? DEFAULT_MODEL.virtuals)
+      // OpenAI-compatible: Bearer acp- key, POSTs to /v1/chat/completions.
+      return createOpenAI({ apiKey, baseURL: VIRTUALS_BASE_URL })(model ?? DEFAULT_MODEL.virtuals)
     default: {
       const _exhaustive: never = provider
       throw new Error(`unknown LLM provider: ${String(_exhaustive)}`)
