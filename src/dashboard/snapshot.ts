@@ -12,6 +12,8 @@ export interface SnapshotBudget {
   mintGasSpentEth: number
   voteGasSpentEth: number
   claimGasSpentEth: number
+  /** optional: snapshots written before subnet-access grants existed omit it. */
+  grantReppoSpent?: number
   caps: BudgetCaps
 }
 export interface Snapshot {

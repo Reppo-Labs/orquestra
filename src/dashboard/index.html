@@ -80,8 +80,9 @@ async function load() {
   document.querySelector('#healthTable tbody').innerHTML = hRows.length
     ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
     : '<tr><td colspan="5" class="muted">no activity yet</td></tr>'
-  // Idle datanets: why a configured datanet is doing nothing
-  const idle = hRows.filter(d => d.lastSkipReason)
+  // Idle datanets: why a configured datanet is doing nothing RIGHT NOW (newest entry
+  // is a skip) — a stale skip reason from before activity resumed must not show.
+  const idle = hRows.filter(d => d.idle && d.lastSkipReason)
   document.getElementById('idle').innerHTML = idle
     .map(d => `<div class="skipreason">datanet ${esc(d.datanetId)} idle — ${esc(d.lastSkipReason)}</div>`).join('')
   // Budget burn vs caps (current window, from the cycle snapshot)
@@ -91,11 +92,13 @@ async function load() {
     ['Mint REPPO', b.mintReppoSpent, caps.mintReppoMax],
     ['Mint gas (ETH)', b.mintGasSpentEth, caps.mintGasEthMax],
     ['Claim gas (ETH)', b.claimGasSpentEth, caps.claimGasEthMax],
-    ['Grant REPPO', b.grantReppoSpent ?? 0, caps.grantReppoMax ?? 0],
+    // grantReppoMax unset = no cap (datanet membership is the consent) → show ∞
+    ['Grant REPPO', b.grantReppoSpent ?? 0, caps.grantReppoMax],
   ] : []
   document.getElementById('budget').innerHTML = bars.map(([k, spent, max]) => {
     const pct = max > 0 ? Math.min(100, Math.round(100 * spent / max)) : 0
-    return `<div class="card"><div class="k">${k}</div><div class="v">${fmt(spent)} / ${fmt(max)}</div><div class="bar ${pct >= 80 ? 'hot' : ''}"><div style="width:${pct}%"></div></div></div>`
+    const maxLabel = (max === undefined || max === null) ? '∞' : fmt(max)
+    return `<div class="card"><div class="k">${k}</div><div class="v">${fmt(spent)} / ${maxLabel}</div><div class="bar ${pct >= 80 ? 'hot' : ''}"><div style="width:${pct}%"></div></div></div>`
   }).join('')
   const em = snap ? snap.emissionsDue.pods : []
   document.querySelector('#emTable tbody').innerHTML = em.length

@@ -47,6 +47,17 @@ describe('buildHealth', () => {
     const d2 = report.datanets.find((d) => d.datanetId === '2')!
     expect(d2.skips).toBe(2)
     expect(d2.lastSkipReason).toBe('newest reason')
+    expect(d2.idle).toBe(true) // newest entry is a skip → currently idle
+  })
+
+  it('idle is false once activity resumes after a skip (stale reasons must not show as idle)', () => {
+    const report = buildHealth([
+      e({ kind: 'vote', status: 'executed', txHash: '0x1' }),            // newest: a real vote
+      e({ kind: 'skip', status: 'skipped', reason: 'old skip reason' }), // older skip
+    ])
+    const d2 = report.datanets.find((d) => d.datanetId === '2')!
+    expect(d2.idle).toBe(false)
+    expect(d2.lastSkipReason).toBe('old skip reason') // history retained, just not "idle"
   })
 
   it('handles an empty log', () => {

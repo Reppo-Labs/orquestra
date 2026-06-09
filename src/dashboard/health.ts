@@ -12,6 +12,9 @@ export interface DatanetHealth {
   topErrors: { code: string; count: number }[]
   /** most recent skip reason (the newest entry wins). */
   lastSkipReason?: string
+  /** true when the datanet's NEWEST entry is a skip — i.e. it is idle right now.
+   *  A skip followed by later activity is history, not current idleness. */
+  idle: boolean
 }
 export interface HealthReport { entriesScanned: number; datanets: DatanetHealth[] }
 
@@ -32,11 +35,14 @@ export function buildHealth(entries: ActivityEntry[]): HealthReport {
   const errCounts = new Map<string, Map<string, number>>()
   const net = (id: string): DatanetHealth => {
     let n = nets.get(id)
-    if (!n) { n = { datanetId: id, votes: counts(), mints: counts(), claims: counts(), skips: 0, topErrors: [] }; nets.set(id, n) }
+    if (!n) { n = { datanetId: id, votes: counts(), mints: counts(), claims: counts(), skips: 0, topErrors: [], idle: false }; nets.set(id, n) }
     return n
   }
+  const seen = new Set<string>()
   for (const e of entries) {
     const n = net(e.datanetId)
+    // entries are newest-first: the first entry seen per datanet is its current state.
+    if (!seen.has(e.datanetId)) { seen.add(e.datanetId); n.idle = e.kind === 'skip' }
     if (e.kind === 'skip') {
       n.skips++
       if (n.lastSkipReason === undefined) n.lastSkipReason = e.reason // first seen = newest

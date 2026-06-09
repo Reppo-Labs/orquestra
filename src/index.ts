@@ -213,6 +213,7 @@ async function start(): Promise<void> {
         mintGasSpentEth: ledger.state.mintGasSpentEth,
         voteGasSpentEth: ledger.state.voteGasSpentEth,
         claimGasSpentEth: ledger.state.claimGasSpentEth,
+        grantReppoSpent: ledger.state.grantReppoSpent,
         caps: config.budget,
       }
       const snap = await collectSnapshot(DATA_DIR, cycleId, {
