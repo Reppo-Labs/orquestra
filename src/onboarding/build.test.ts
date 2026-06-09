@@ -29,3 +29,20 @@ describe('buildStrategyConfig', () => {
     expect(() => buildStrategyConfig({ ...answers(), horizonDays: -1 })).toThrow()
   })
 })
+
+describe('buildStrategyConfig adapterParams', () => {
+  it('writes adapterParams onto the datanet policy when present', () => {
+    const a = answers()
+    a.datanets[0].adapter = 'gdelt'
+    a.datanets[0].adapterParams = { focus: 'Taiwan', angle: 'risk', topN: 4, minImportance: 7 }
+    const cfg = buildStrategyConfig(a)
+    const p = cfg.datanets[a.datanets[0].id] as { adapterParams?: { focus?: string } }
+    expect(p.adapterParams?.focus).toBe('Taiwan')
+  })
+  it('omits adapterParams when not provided', () => {
+    const a = answers()
+    const cfg = buildStrategyConfig(a)
+    const p = cfg.datanets[a.datanets[1].id] as { adapterParams?: unknown }
+    expect(p.adapterParams).toBeUndefined()
+  })
+})
