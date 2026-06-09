@@ -5,7 +5,7 @@ import { join } from 'node:path'
 export interface ActivityEntry {
   ts: string
   cycleId: string
-  kind: 'vote' | 'mint' | 'claim'
+  kind: 'vote' | 'mint' | 'claim' | 'skip'
   datanetId: string
   podId?: string
   direction?: 'up' | 'down'
@@ -15,7 +15,7 @@ export interface ActivityEntry {
   podName?: string
   epoch?: number
   reppoClaimed?: number
-  status: 'executed' | 'refused-budget' | 'error'
+  status: 'executed' | 'refused-budget' | 'error' | 'skipped'
   txHash?: string
   gasEth?: number
   detail?: string
