@@ -45,6 +45,8 @@ export interface DatanetReport {
   mints: ExecResult[]
   /** set when this datanet was skipped due to an error (rubric unavailable, RPC failure, …). */
   error?: string
+  /** set when vote/mint were intentionally skipped (e.g. subnet access not granted). */
+  skipped?: string
 }
 export interface CycleReport {
   datanets: DatanetReport[]
@@ -73,10 +75,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Subnet access is a one-time prerequisite for both voting and minting. Grant it
       // once per subnet (cached) before either. A datanet whose metadata predates the
       // subnet model (empty subnetUuid) can't be granted and is left to proceed/fail
-      // naturally. A failed grant doesn't abort the datanet — the vote/mint that needs
-      // it will surface the error.
+      // naturally.
       // grant-access is keyed by the INTEGER datanet id (the `--datanet <id>` arg), NOT the
       // subnet uuid; subnetUuid presence just signals the datanet uses the access model.
+      // Without access every vote/mint reverts on-chain (VOTER_LACKS_SUBNET_ACCESS) — but
+      // only AFTER paying for pod fetching and LLM scoring. So a failed/refused grant
+      // skips the datanet for this cycle instead of proceeding; it resumes automatically
+      // the cycle after a grant succeeds (e.g. operator raises budget.grantReppoMax).
       if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
         const granted = await deps.grantedSubnets()
         if (!granted.has(datanetId)) {
@@ -85,7 +90,14 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             deps.recordGrant(datanetId)
             console.error(`orquestra: datanet ${datanetId} — granted access`)
           } else {
-            console.error(`orquestra: datanet ${datanetId} — grant-access ${gr.status}: ${gr.detail ?? ''} — vote/mint may fail until access is granted`)
+            const skipped = `subnet access not granted (grant-access ${gr.status}: ${gr.detail ?? ''})`
+            console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
+            deps.recordActivity({
+              ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+              reason: skipped, status: 'skipped',
+            })
+            datanets.push({ datanetId, votes, mints, skipped })
+            continue
           }
         }
       }
