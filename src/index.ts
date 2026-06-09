@@ -6,6 +6,7 @@ import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
 import { listDatanetsJson } from './reppo/listDatanets.js'
+import { checkReppoVersion } from './reppo/version.js'
 import { queryBalanceJson } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } from './reppo/agent.js'
 import { terminalPrompter } from './runtime/prompter.js'
@@ -79,6 +80,7 @@ async function onboard(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  await checkReppoVersion() // warn-only preflight: old CLI fails every vote/mint cryptically
   if (needsOnboarding(DATA_DIR)) await onboard()
   const config: StrategyConfig = loadConfig(DATA_DIR)
 
