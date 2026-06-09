@@ -108,17 +108,21 @@ async function load() {
   renderActivity()
 }
 function renderActivity() {
+  // every field below is network-derived (LLM reasons, pod names, CLI errors) —
+  // ALL of it goes through esc() before innerHTML. pill class + tx href are
+  // allowlisted by shape instead (CSS class / URL context, escaping isn't enough).
+  const esc2 = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
   const kind = document.getElementById('kind').value
   const rows = (window._activity || []).filter(r => !kind || r.kind === kind)
   const detail = (r) => r.kind === 'vote'
-      ? (r.direction ? `${r.direction} · conv ${r.conviction} · ${r.reason ?? ''}` : (r.detail || '—'))
-    : r.kind === 'mint' ? (r.podName ?? r.canonicalKey ?? '')
-    : r.kind === 'skip' ? (r.reason ?? '—')
-    : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
-  const tx = (r) => r.txHash ? `<a href="https://basescan.org/tx/${r.txHash}" target="_blank">${r.txHash.slice(0,8)}…</a>` : ''
-  const pillClass = (r) => r.kind === 'vote' ? (r.direction || 'vote') : r.kind
+      ? (r.direction ? `${esc2(r.direction)} · conv ${esc2(r.conviction)} · ${esc2(r.reason ?? '')}` : esc2(r.detail || '—'))
+    : r.kind === 'mint' ? esc2(r.podName ?? r.canonicalKey ?? '')
+    : r.kind === 'skip' ? esc2(r.reason ?? '—')
+    : `epoch ${esc2(r.epoch)} · ${fmt(r.reppoClaimed)} REPPO`
+  const tx = (r) => /^0x[0-9a-fA-F]{1,64}$/.test(r.txHash ?? '') ? `<a href="https://basescan.org/tx/${r.txHash}" target="_blank">${r.txHash.slice(0,8)}…</a>` : ''
+  const pillClass = (r) => r.kind === 'vote' ? (r.direction === 'up' || r.direction === 'down' ? r.direction : 'vote') : r.kind
   document.querySelector('#actTable tbody').innerHTML = rows.length
-    ? rows.map(r => `<tr><td>${new Date(r.ts).toLocaleTimeString()}</td><td><span class="pill ${pillClass(r)}">${r.kind}</span></td><td>${r.datanetId}</td><td>${r.podId ?? r.canonicalKey ?? ''}</td><td>${detail(r)}</td><td class="${r.status === 'executed' ? '' : 'err'}">${r.status}</td><td>${tx(r)}</td></tr>`).join('')
+    ? rows.map(r => `<tr><td>${new Date(r.ts).toLocaleTimeString()}</td><td><span class="pill ${esc2(pillClass(r))}">${esc2(r.kind)}</span></td><td>${esc2(r.datanetId)}</td><td>${esc2(r.podId ?? r.canonicalKey ?? '')}</td><td>${detail(r)}</td><td class="${r.status === 'executed' ? '' : 'err'}">${esc2(r.status)}</td><td>${tx(r)}</td></tr>`).join('')
     : '<tr><td colspan="7" class="muted">no activity yet</td></tr>'
 }
 document.getElementById('kind').addEventListener('change', renderActivity)

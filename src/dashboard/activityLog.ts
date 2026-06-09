@@ -1,6 +1,7 @@
 // src/dashboard/activityLog.ts
 import { appendFileSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { redactSecrets } from '../reppo/redact.js'
 
 export interface ActivityEntry {
   ts: string
@@ -23,9 +24,16 @@ export interface ActivityEntry {
 
 const FILE = 'activity-log.jsonl'
 
-/** Append one entry as a single JSON line. Crash-safe: one line per action. */
+/** Append one entry as a single JSON line. Crash-safe: one line per action.
+ *  detail/reason are redacted as defense-in-depth: error messages can carry CLI
+ *  command lines (incl. --rpc-url keys) from paths that bypass the cli.ts fold. */
 export function appendActivity(dataDir: string, entry: ActivityEntry): void {
-  appendFileSync(join(dataDir, FILE), JSON.stringify(entry) + '\n')
+  const safe: ActivityEntry = {
+    ...entry,
+    ...(entry.detail !== undefined ? { detail: redactSecrets(entry.detail) } : {}),
+    ...(entry.reason !== undefined ? { reason: redactSecrets(entry.reason) } : {}),
+  }
+  appendFileSync(join(dataDir, FILE), JSON.stringify(safe) + '\n')
 }
 
 // Parse cache keyed by file path: the dashboard polls /api/pnl + /api/health every

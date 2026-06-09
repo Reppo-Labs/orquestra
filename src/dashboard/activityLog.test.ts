@@ -38,6 +38,16 @@ describe('activityLog', () => {
     expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
   })
 
+  it('redacts rpc-url keys from detail/reason at append time', () => {
+    appendActivity(dir, entry({
+      status: 'error',
+      detail: 'Command failed: reppo vote --pod 1 --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123 — {"error":{"code":"X"}}',
+    }))
+    const [row] = readActivity(dir, { limit: 1 })
+    expect(row.detail).not.toContain('SECRET123')
+    expect(row.detail).toContain('--rpc-url <redacted>')
+  })
+
   it('serves repeat reads from cache and picks up appends (cache invalidated by size/mtime)', () => {
     appendActivity(dir, entry({ podId: '1' }))
     expect(readActivity(dir, { limit: 10 })).toHaveLength(1)

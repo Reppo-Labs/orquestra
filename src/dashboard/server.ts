@@ -26,7 +26,12 @@ function safeConfig(dataDir: string): Record<string, unknown> {
       // so the header doesn't claim "claim off" for a node that IS claiming.
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
     }
-  } catch { return {} }
+  } catch (e) {
+    // surfaced (once per request) instead of silently empty: a malformed config
+    // otherwise renders a blank header with no trace anywhere.
+    console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
+    return {}
+  }
 }
 
 function json(res: ServerResponse, code: number, body: unknown): void {

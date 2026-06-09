@@ -1,0 +1,88 @@
+{
+  "horizonDays": 7,
+  "cadenceHours": 1,
+  "stake": {
+    "lockReppo": 234.4,
+    "lockDurationDays": 7
+  },
+  "budget": {
+    "voteGasEthMax": 0.02,
+    "voteRateMaxPerCycle": 13,
+    "mintReppoMax": 50,
+    "mintGasEthMax": 0.01
+  },
+  "datanets": {
+    "2": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "4": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "5": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "6": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "8": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "9": {
+      "vote": true,
+      "mint": true,
+      "strictness": "balanced",
+      "adapter": "hyperliquid"
+    },
+    "10": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "11": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "13": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "14": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "15": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "16": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "17": {
+      "vote": true,
+      "mint": false,
+      "strictness": "balanced"
+    },
+    "*": {
+      "vote": false,
+      "mint": false,
+      "strictness": "balanced"
+    }
+  },
+  "notes": "Example strategy. Adjust datanets/budget to your own wallet and risk tolerance."
+}

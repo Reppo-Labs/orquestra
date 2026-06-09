@@ -21,4 +21,10 @@ describe('clampPodName', () => {
   it('normalizes whitespace before measuring', () => {
     expect(clampPodName('  a   b  ')).toBe('a b')
   })
+
+  it('strips leading dashes so a hostile name cannot be parsed as a CLI flag', () => {
+    expect(clampPodName('--dataset /etc/passwd')).toBe('dataset /etc/passwd')
+    expect(clampPodName('-rf everything')).toBe('rf everything')
+    expect(clampPodName('US-China tensions rise')).toBe('US-China tensions rise') // interior dashes fine
+  })
 })

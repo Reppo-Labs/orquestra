@@ -24,6 +24,8 @@ export interface ReppoCli {
   grantAccess(datanetId: string): Promise<ChainResult>
 }
 
+import { redactSecrets } from './redact.js'
+
 let warnedNoGas = false
 
 async function run(args: string[]): Promise<ChainResult> {
@@ -41,7 +43,10 @@ async function run(args: string[]): Promise<ChainResult> {
     const err = e as { message?: string; stdout?: string; stderr?: string }
     const head = (err.message ?? String(e)).split('\n')[0]
     const body = [err.stdout, err.stderr].map((s) => (s ?? '').toString().trim()).filter(Boolean).join(' | ')
-    throw new Error(body ? `${head} — ${body}` : head)
+    // The head is execFile's "Command failed: <full command line>" — which includes
+    // `--rpc-url https://...v2/<api-key>`. Redact before the message escapes to
+    // logs/activity-log/dashboard.
+    throw new Error(redactSecrets(body ? `${head} — ${body}` : head))
   }
   const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
   if (j.gasEth === undefined && !warnedNoGas) {
