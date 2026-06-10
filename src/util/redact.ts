@@ -26,7 +26,15 @@ const URL_QUERY_KEY = /([?&](?:api[_-]?key|apikey|auth|access[_-]?token|token|ke
  *  they are legitimate, public, forensically-useful output, and the node never
  *  passes a private key on a CLI argv (it goes via env), so a private key never
  *  reaches this folded-command-line path. Redaction targets KEYS, which have
- *  distinguishing shapes (provider URLs, bearer/JWT, inf_/acp_ prefixes). */
+ *  distinguishing shapes (provider URLs, bearer/JWT, inf_/acp_ prefixes).
+ *
+ *  Defense-in-depth, not a complete filter. The node's actual RPC path is
+ *  `--rpc-url <url>`, fully redacted by the flag rule below regardless of URL
+ *  shape. These extra patterns catch a credentialed URL echoed by the upstream
+ *  CLI in a non-flag form. Known residual gaps (all require RFC-violating or
+ *  exotic input AND the CLI echoing it): a basic-auth password with a raw `/`,
+ *  and a query-string key under a non-standard parameter name. Rotate keys; do
+ *  not rely on redaction as the sole control. */
 export function redactSecrets(s: string): string {
   return s
     // value following an --rpc-url flag (any provider)
