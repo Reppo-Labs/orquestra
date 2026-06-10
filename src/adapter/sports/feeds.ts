@@ -21,8 +21,10 @@ export const DEFAULT_FEEDS = [
 
 const decode = (s: string): string =>
   s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").trim()
+    // &amp; LAST — decoding it first double-decodes "&amp;lt;" into "<".
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&').trim()
 
 const field = (block: string, tag: string): string => {
   const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i'))
@@ -39,10 +41,12 @@ export function parseRss(xml: string): FeedItem[] {
     const block = m[1]
     const link = field(block, 'link')
     if (!link) continue
+    // lookahead for the type guard so attribute ORDER doesn't matter
+    // (<enclosure type="image/…" url="…"> is as common as the reverse).
     const image =
       block.match(/<media:content[^>]*url="([^"]+)"/i)?.[1] ??
       block.match(/<media:thumbnail[^>]*url="([^"]+)"/i)?.[1] ??
-      block.match(/<enclosure[^>]*url="([^"]+)"[^>]*type="image\//i)?.[1] ?? ''
+      block.match(/<enclosure(?=[^>]*type="image\/)[^>]*url="([^"]+)"/i)?.[1] ?? ''
     out.push({ title: field(block, 'title'), link, description: field(block, 'description'), pubDate: field(block, 'pubDate'), image })
   }
   return out

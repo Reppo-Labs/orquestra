@@ -31,6 +31,19 @@ describe('parseRss', () => {
     expect(parseRss('<html>not a feed</html>')).toEqual([])
     expect(parseRss('')).toEqual([])
   })
+
+  it('decodes &amp;lt; without double-decoding (entity order) + enclosure type-before-url', () => {
+    const item =
+      '<rss><channel><item>' +
+      '<title>A &amp;lt;tag&amp;gt; in text &amp; more</title>' +
+      '<link>https://ex.com/order</link><description>d</description>' +
+      '<pubDate>' + fresh + '</pubDate>' +
+      '<enclosure type="image/jpeg" url="https://ex.com/img/order.jpg" length="1"/>' +
+      '</item></channel></rss>'
+    const [it0] = parseRss(item)
+    expect(it0.title).toBe('A &lt;tag&gt; in text & more')
+    expect(it0.image).toBe('https://ex.com/img/order.jpg')
+  })
 })
 
 describe('freshItems', () => {

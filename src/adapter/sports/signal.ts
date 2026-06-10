@@ -72,7 +72,9 @@ export async function synthesizeSignals(
   for (const s of out.signals) {
     if (s.signal < strategy.minSignal) continue
     // Hallucination guard: the take must be attributable to one of OUR items.
-    const src = byLink.get(s.sourceLink)
+    // trim the lookup: a model sometimes echoes the URL with trailing whitespace/newline,
+    // which would wrongly fail the guard and drop a legitimate take.
+    const src = byLink.get(s.sourceLink.trim())
     if (!src) continue
     // Key on the TAKE (the unit of dedup), normalized — stable across feed churn.
     const normTake = s.take.trim().toLowerCase().replace(/\s+/g, ' ')
