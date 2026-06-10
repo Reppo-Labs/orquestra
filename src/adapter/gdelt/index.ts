@@ -2,7 +2,7 @@
 import type { LanguageModel } from 'ai'
 import { fetchGeoEvents, buildGdeltQuery, type GeoArticle, type GdeltQuery } from './gdelt.js'
 import { synthesizeClaims, type GdeltStrategy } from './claim.js'
-import { filterNovel } from './dedup.js'
+import { filterNovel } from '../dedup.js'
 import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
 
 export interface GdeltDeps {

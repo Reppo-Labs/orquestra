@@ -18,6 +18,7 @@ import { defaultReppoCli } from './reppo/cli.js'
 import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
+import { createSportsAdapter } from './adapter/sports/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
 import { createLlmScorer } from './voter/score.js'
 import { DedupState } from './runtime/state.js'
@@ -118,7 +119,7 @@ async function start(): Promise<void> {
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.
-    adapters: [createHyperliquidAdapter(), createGdeltAdapter({ model })],
+    adapters: [createHyperliquidAdapter(), createGdeltAdapter({ model }), createSportsAdapter({ model })],
     strategyBrief,
   }
 

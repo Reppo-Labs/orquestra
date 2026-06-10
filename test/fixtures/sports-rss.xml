@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+<channel><title>Fixture Sports Feed</title>
+<item><title><![CDATA[Why the Celtics' defense falls apart without Porzingis]]></title><link>https://ex.com/celtics-defense</link><description><![CDATA[Beat writer breaks down rim-protection numbers & rotations.]]></description><pubDate>FRESH_DATE</pubDate><media:content url="https://ex.com/img/celtics.jpg" type="image/jpeg"/></item>
+<item><title>Arsenal&#39;s midfield gamble will decide the title race</title><link>https://ex.com/arsenal-midfield</link><description>Analyst argues the double-pivot is a feature, not a bug.</description><pubDate>FRESH_DATE</pubDate><enclosure url="https://ex.com/img/arsenal.png" type="image/png" length="1"/></item>
+<item><title>Thumbnail variant item</title><link>https://ex.com/thumb</link><description>d</description><pubDate>FRESH_DATE</pubDate><media:thumbnail url="https://ex.com/img/thumb.jpg"/></item>
+<item><title>No link — malformed, must be dropped</title><description>d</description><pubDate>FRESH_DATE</pubDate></item>
+<item><title>Stale item beyond maxAge</title><link>https://ex.com/stale</link><description>d</description><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item>
+</channel></rss>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { filterNovel } from './dedup.js'
-import type { CandidatePod } from '../types.js'
+import type { CandidatePod } from './types.js'
 
 const cand = (name: string): CandidatePod => ({ canonicalKey: name, podName: name, podDescription: '', dataset: {} })
 
@@ -31,5 +31,13 @@ describe('filterNovel', () => {
     // existing pod about the SAME event, named with the old full-claim style
     const existing = ['The US added BYD and NIO to a military companies blacklist prompting objection']
     expect(filterNovel([c], existing)).toEqual([]) // claim overlaps → dropped
+  })
+  it('dedups on dataset.take for sports candidates (same fallback chain as claim)', () => {
+    const c: CandidatePod = {
+      canonicalKey: 'k', podName: 'Short title', podDescription: '',
+      dataset: { take: 'The Celtics defense collapses without Porzingis protecting the rim' },
+    }
+    const existing = ['Celtics defense collapses without Porzingis rim protection']
+    expect(filterNovel([c], existing)).toEqual([]) // take overlaps → dropped
   })
 })
