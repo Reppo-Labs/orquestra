@@ -1,9 +1,6 @@
 // src/reppo/listDatanets.ts
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { reppoEnv, withRpcUrl } from './exec.js'
+import { runReppoStdout } from './exec.js'
 
-const execFileAsync = promisify(execFile)
 
 export interface DatanetSummary {
   id: string
@@ -39,9 +36,7 @@ export function parseDatanetList(raw: unknown): DatanetSummary[] {
 
 /** Live catalog via the reppo CLI. */
 export async function listDatanetsJson(): Promise<DatanetSummary[]> {
-  const { stdout } = await execFileAsync('reppo', withRpcUrl(['list', 'datanets', '--status', 'ACTIVE', '--json']), {
-    env: reppoEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024,
-  })
+  const stdout = await runReppoStdout(['list', 'datanets', '--status', 'ACTIVE', '--json'])
   try {
     return parseDatanetList(JSON.parse(stdout))
   } catch {

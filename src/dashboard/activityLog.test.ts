@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appendActivity, readActivity, type ActivityEntry } from './activityLog.js'
@@ -36,6 +36,26 @@ describe('activityLog', () => {
     appendFileSync(join(dir, 'activity-log.jsonl'), '{"ts":"x","kind":"vote"') // no newline, invalid
     const rows = readActivity(dir, { limit: 10 })
     expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
+  })
+
+  it('rotates the live file at maxBytes but readActivity still spans the archive (history preserved)', () => {
+    appendActivity(dir, entry({ podId: 'old1' }))
+    appendActivity(dir, entry({ podId: 'old2' }), { maxBytes: 10 }) // file already > 10 bytes → rotates first
+    // live file now holds only old2; old1 is in .old
+    expect(existsSync(join(dir, 'activity-log.jsonl.old'))).toBe(true)
+    expect(readFileSync(join(dir, 'activity-log.jsonl'), 'utf-8')).not.toContain('old1')
+    // readActivity spans both, newest-first: live (old2) then archived (old1)
+    expect(readActivity(dir, { limit: 10 }).map((r) => r.podId)).toEqual(['old2', 'old1'])
+  })
+
+  it('redacts rpc-url keys from detail/reason at append time', () => {
+    appendActivity(dir, entry({
+      status: 'error',
+      detail: 'Command failed: reppo vote --pod 1 --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123 — {"error":{"code":"X"}}',
+    }))
+    const [row] = readActivity(dir, { limit: 1 })
+    expect(row.detail).not.toContain('SECRET123')
+    expect(row.detail).toContain('--rpc-url <redacted>')
   })
 
   it('serves repeat reads from cache and picks up appends (cache invalidated by size/mtime)', () => {

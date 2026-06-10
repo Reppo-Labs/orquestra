@@ -28,9 +28,23 @@ export function extractErrorCode(detail?: string): string {
 
 const counts = (): KindCounts => ({ executed: 0, refused: 0, error: 0 })
 
+export interface HealthOpts {
+  /** epoch ms; entries with ts older than this are excluded. Keeps the panel a
+   *  RECENT-health view — at low cadences a fixed entry count spans hours, at
+   *  high cadences months, so the window is time-based, not count-based. */
+  sinceMs?: number
+}
+
 /** Aggregate activity (newest-first, as readActivity returns) into per-datanet
  *  health: vote/mint/claim outcome counts, skip count + latest reason, top errors. */
-export function buildHealth(entries: ActivityEntry[]): HealthReport {
+export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): HealthReport {
+  if (opts.sinceMs !== undefined) {
+    const since = opts.sinceMs
+    entries = entries.filter((e) => {
+      const t = Date.parse(e.ts)
+      return Number.isNaN(t) || t >= since // unparseable ts stays in (tolerant-read style)
+    })
+  }
   const nets = new Map<string, DatanetHealth>()
   const errCounts = new Map<string, Map<string, number>>()
   const net = (id: string): DatanetHealth => {

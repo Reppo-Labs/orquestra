@@ -11,7 +11,13 @@ export const POD_DESC_MAX = 200
  *  No ellipsis — the CLI limit counts characters and the full text survives in
  *  the pod description. */
 export function clampPodName(name: string, max = POD_NAME_MAX): string {
-  const trimmed = name.trim().replace(/\s+/g, ' ')
+  // Strip ALL leading dashes/whitespace (one pass, to a fixpoint): a value
+  // beginning with `-` would be parsed as a flag by the CLI (argument injection),
+  // and names/descriptions are LLM/scrape-derived, i.e. untrusted. `/^[-\s]+/`
+  // also handles "- --dataset x" → "dataset x" which a single `-+` run missed.
+  const trimmed = name.replace(/^[-\s]+/, '').replace(/\s+/g, ' ').trim()
+  // An all-dash name collapses to '' — never emit an empty CLI arg.
+  if (trimmed === '') return 'untitled'
   if (trimmed.length <= max) return trimmed
   const cut = trimmed.slice(0, max)
   const lastSpace = cut.lastIndexOf(' ')

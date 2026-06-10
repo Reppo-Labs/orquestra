@@ -1,4 +1,5 @@
-// src/index.ts
+// src/index.ts — thin shell: env, service construction, argv dispatch, signals.
+// All cycle wiring lives in src/runtime/wiring.ts (unit-tested there).
 import { resolve, join } from 'node:path'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { loadConfig } from './config/load.js'
@@ -6,6 +7,7 @@ import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
 import { listDatanetsJson } from './reppo/listDatanets.js'
+import { checkReppoVersion } from './reppo/version.js'
 import { queryBalanceJson } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } from './reppo/agent.js'
 import { terminalPrompter } from './runtime/prompter.js'
@@ -18,35 +20,10 @@ import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
 import { createLlmScorer } from './voter/score.js'
-import { candidateScoreInput } from './minter/score.js'
-import { runCycle, type CycleDeps } from './runtime/cycle.js'
-import { listPodsJson, deriveCurrentEpoch } from './reppo/listPods.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
-import { appendActivity } from './dashboard/activityLog.js'
-import { collectSnapshot, writeSnapshot, readSnapshot, type SnapshotBudget } from './dashboard/snapshot.js'
-import { queryVotingPowerJson } from './reppo/queryVotingPower.js'
-import { queryEmissionsDueJson } from './reppo/queryEmissionsDue.js'
-import { queryEpochJson } from './reppo/queryEpoch.js'
+import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
 import { startDashboard } from './dashboard/server.js'
-import { backfillActivityLog } from './dashboard/backfill.js'
-import { readActivity } from './dashboard/activityLog.js'
-import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from './dashboard/earnStatus.js'
-import { queryDatanetPodVotes } from './reppo/queryOwnPods.js'
-
-async function fetchPodContent(url: string): Promise<string> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 15_000)
-  try {
-    const res = await fetch(url, { signal: ctrl.signal })
-    if (!res.ok) return ''
-    return (await res.text()).slice(0, 4000) // cap tokens
-  } catch {
-    return ''
-  } finally {
-    clearTimeout(t)
-  }
-}
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -78,29 +55,8 @@ async function onboard(): Promise<void> {
   }
 }
 
-async function start(): Promise<void> {
-  if (needsOnboarding(DATA_DIR)) await onboard()
-  const config: StrategyConfig = loadConfig(DATA_DIR)
-
-  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
-  const apiKey = process.env.LLM_API_KEY ?? ''
-  const model = resolveModel(provider, apiKey)
-  const strategyBrief = (() => {
-    try { return readFileSync(join(DATA_DIR, 'strategy-notes.md'), 'utf-8') } catch { return '' }
-  })()
-  const scorer = createLlmScorer(model, { brief: strategyBrief })
-  const strategyFor = (id: string): Record<string, unknown> => {
-    const p = (config.datanets[id] as { adapterParams?: Record<string, unknown> }).adapterParams ?? {}
-    return { brief: strategyBrief, ...p }
-  }
-  // One shared BudgetLedger instance: the executor reserves/records spend on it,
-  // and runCycle calls startCycle on it — the single source of budget truth.
-  const ledger = new BudgetLedger(DATA_DIR, config.budget)
-  const executor = new WalletExecutor(defaultReppoCli, ledger)
-  const dedup = new DedupState(DATA_DIR)
-  // Adapter registry — add new adapters here; routing is by adapter id from config.
-  const adapters = [createHyperliquidAdapter(), createGdeltAdapter({ model })]
-
+/** One-time idempotent setup: veREPPO lock + Reppo agent identity for minting. */
+async function setupNode(config: StrategyConfig, executor: WalletExecutor): Promise<void> {
   if (config.stake.lockReppo > 0) {
     // Idempotent: the veREPPO lock is one-time. If the wallet already holds veREPPO
     // (locked on a prior run), skip — re-locking would just error every restart.
@@ -113,19 +69,13 @@ async function start(): Promise<void> {
         durationSeconds: config.stake.lockDurationDays * 86400,
         idempotencyKey: `lock-${config.stake.lockReppo}-${config.stake.lockDurationDays}`,
       })
-      console.error(
-        `orquestra: veREPPO lock ${r.status}` +
-          (r.txHash ? ` (${r.txHash})` : '') +
-          (r.detail ? ` — ${r.detail}` : ''),
-      )
+      console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
     }
   }
 
   // Reppo agent identity for minting (reppo >=0.8.0 `mint-pod` requires REPPO_AGENT_ID).
-  // Idempotent like the veREPPO lock: operator-set env wins, else reuse the persisted
-  // agent.json, else register once and persist. Gated on minting being enabled so a
-  // voting-only node never registers. A failure here is non-fatal — voting still runs;
-  // mints will error visibly until an agent id is available.
+  // Idempotent like the lock: env wins, else persisted agent.json, else register once.
+  // Non-fatal on failure — voting still runs; mints error visibly until an id exists.
   const mintingEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
   try {
     const res = await ensureAgentId({
@@ -146,112 +96,37 @@ async function start(): Promise<void> {
   } catch (e) {
     console.error(`orquestra: agent registration failed — mints will error until REPPO_AGENT_ID is set (run \`reppo register-agent\`): ${(e as Error).message}`)
   }
+}
 
-  const deps: CycleDeps = {
-    dataDir: DATA_DIR,
-    topN: 12,
-    getRubric: (id) => getDatanetRubric(id),
-    getPodsAndFilter: async (id) => {
-      const pods = await listPodsJson(id, { all: true })
-      const own = await listPodsJson(id, { all: false })
-        .then((p) => p.map((x) => x.podId))
-        .catch((e) => {
-          console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
-          return [] as string[]
-        })
-      const currentEpoch = deriveCurrentEpoch(pods)
-      const voted = dedup.getVotedPodIds(id)
-      const ownSet = new Set(own), votedSet = new Set(voted)
-      for (const p of pods) {
-        const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
-        if (eligible && p.url) { const c = await fetchPodContent(p.url); if (c) p.description = `${p.name}\n\n${c}` }
-      }
-      return { pods, filter: { currentEpoch, ownPodIds: own, votedPodIds: voted } }
-    },
-    getAdapter: (id) => adapters.find((a) => a.id === id),
-    voteScorer: scorer,
-    candidateScorer: {
-      scoreCandidate: (c, r) => {
-        // Score the DATASET against the publisher spec, not just the summary line —
-        // otherwise every candidate scores low ("no trade detail / no verification")
-        // and nothing ever mints. See src/minter/score.ts.
-        const { name, description } = candidateScoreInput(c)
-        return scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
-      },
-    },
-    seenKeysFor: async (id) => new Set(dedup.getMintedKeys(id)),
-    executor,
-    ledger,
-    recordVote: (id, podId) => dedup.recordVote(id, podId),
-    recordMint: (id, key) => dedup.recordMint(id, key),
-    getEmissionsDue: async () => (await queryEmissionsDueJson()).pods,
-    seenClaims: async () => new Set(dedup.getClaimedKeys()),
-    recordActivity: (entry) => {
-      try { appendActivity(DATA_DIR, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
-    },
-    recordClaim: (key) => dedup.recordClaim(key),
-    strategyFor,
-    getExistingPodNames: async (id) => (await listPodsJson(id, { all: true }).catch(() => [])).map((p) => p.name).filter(Boolean),
-    grantedSubnets: async () => new Set(dedup.getGrantedSubnets()),
-    recordGrant: (id) => dedup.recordGrant(id),
-    revokeGrant: (id) => dedup.removeGrant(id),
+async function start(): Promise<void> {
+  await checkReppoVersion() // warn-only preflight: old CLI fails every vote/mint cryptically
+  if (needsOnboarding(DATA_DIR)) await onboard()
+  const config: StrategyConfig = loadConfig(DATA_DIR)
+
+  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
+  const model = resolveModel(provider, process.env.LLM_API_KEY ?? '')
+  const strategyBrief = (() => {
+    try { return readFileSync(join(DATA_DIR, 'strategy-notes.md'), 'utf-8') } catch { return '' }
+  })()
+  // One shared BudgetLedger instance: the executor reserves/records spend on it,
+  // and runCycle calls startCycle on it — the single source of budget truth.
+  const ledger = new BudgetLedger(DATA_DIR, config.budget)
+  const executor = new WalletExecutor(defaultReppoCli, ledger)
+  const wiring: CycleWiring = {
+    dataDir: DATA_DIR, config,
+    scorer: createLlmScorer(model, { brief: strategyBrief }),
+    ledger, executor,
+    dedup: new DedupState(DATA_DIR),
+    // Adapter registry — add new adapters here; routing is by adapter id from config.
+    adapters: [createHyperliquidAdapter(), createGdeltAdapter({ model })],
+    strategyBrief,
   }
+
+  await setupNode(config, executor)
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
-  const handle = startScheduler(config.cadenceHours, async () => {
-    const cycleId = new Date().toISOString()
-    const report = await runCycle(config, cycleId, deps)
-    const v = report.datanets.reduce((a, r) => a + r.votes.length, 0)
-    const m = report.datanets.reduce((a, r) => a + r.mints.length, 0)
-    const c = report.claims.length
-    console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints, ${c} claims executed`)
-
-    // Snapshot the on-chain view for the dashboard (best-effort; never throws into the loop).
-    try {
-      const budget: SnapshotBudget = {
-        mintReppoSpent: ledger.state.mintReppoSpent,
-        mintGasSpentEth: ledger.state.mintGasSpentEth,
-        voteGasSpentEth: ledger.state.voteGasSpentEth,
-        claimGasSpentEth: ledger.state.claimGasSpentEth,
-        grantReppoSpent: ledger.state.grantReppoSpent,
-        caps: config.budget,
-      }
-      const snap = await collectSnapshot(DATA_DIR, cycleId, {
-        balance: () => queryBalanceJson(),
-        votingPower: () => queryVotingPowerJson(),
-        emissionsDue: () => queryEmissionsDueJson(),
-        epoch: () => queryEpochJson(),
-        budget: () => budget,
-      })
-      writeSnapshot(DATA_DIR, snap)
-    } catch (e) {
-      console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)
-    }
-
-    // Earn-test report each cycle (the G1 signal — does minting actually pay?). Reuse the
-    // snapshot's emissions-due, add our pods' on-chain vote tallies (the leading signal),
-    // log it, and persist earn-status.json for the dashboard (/api/earn). Best-effort.
-    try {
-      const snap = readSnapshot(DATA_DIR)
-      const activity = readActivity(DATA_DIR, { limit: 100_000 })
-      const mintDatanets = Object.entries(config.datanets).filter(([k, d]) => k !== '*' && d.mint).map(([k]) => k)
-      // On-chain `creator` is empty on our pods, so identify ours by the mint names we
-      // recorded, matched against the full datanet pod list.
-      const ourNames = activity
-        .filter((e) => e.kind === 'mint' && e.status === 'executed' && e.cycleId !== 'backfill' && e.podName)
-        .map((e) => e.podName as string)
-      const votes: OwnPodVote[] = []
-      for (const id of mintDatanets) {
-        try { votes.push(...selectOurPods(await queryDatanetPodVotes(id), ourNames)) } catch (e) { console.error(`orquestra: earn pod-votes query failed for datanet ${id}: ${(e as Error).message}`) }
-      }
-      const summary = earnSummary(activity, snap?.emissionsDue ?? { totalReppo: 0, pods: [] }, votes)
-      writeEarnStatus(DATA_DIR, { ...summary, ts: new Date().toISOString() })
-      console.error(formatEarnStatus(summary))
-    } catch (e) {
-      console.error(`orquestra: earn-status update failed (non-fatal): ${(e as Error).message}`)
-    }
-  })
+  const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring)))
 
   const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
   const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
@@ -270,18 +145,8 @@ async function start(): Promise<void> {
   process.once('SIGTERM', () => shutdown('SIGTERM'))
 }
 
-/** One-time migration: surface pre-dashboard votes/mints in the activity log. */
-async function runBackfill(): Promise<void> {
-  const config = loadConfig(DATA_DIR)
-  const datanetIds = Object.keys(config.datanets).filter((k) => k !== '*')
-  const ts = new Date().toISOString()
-  const r = await backfillActivityLog(DATA_DIR, datanetIds, (id) => listPodsJson(id, { all: false }), ts)
-  if (r.skipped) console.error('orquestra: backfill skipped — activity log already has backfilled rows.')
-  else console.error(`orquestra: backfill complete — ${r.votes} votes, ${r.mints} mints written to activity-log.jsonl`)
-}
-
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : cmd === 'backfill' ? runBackfill : start
+const run = cmd === 'configure' ? onboard : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)

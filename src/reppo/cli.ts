@@ -24,7 +24,34 @@ export interface ReppoCli {
   grantAccess(datanetId: string): Promise<ChainResult>
 }
 
+import { redactSecrets } from '../util/redact.js'
+
 let warnedNoGas = false
+/** test hook: reset the warn-once latch. */
+export function resetWarnedNoGas(): void { warnedNoGas = false }
+
+/** Fold an execFile rejection into one redacted, cause-bearing Error.
+ *  execFile's `.message` is just "Command failed: <cmd>" — the real reppo error
+ *  is on stderr/stdout, so both streams are folded in; the command line itself
+ *  carries `--rpc-url https://...v2/<api-key>`, so the result is redacted. */
+export function foldExecError(e: unknown): Error {
+  const err = e as { message?: string; stdout?: string; stderr?: string }
+  const head = (err.message ?? String(e)).split('\n')[0]
+  const body = [err.stdout, err.stderr].map((s) => (s ?? '').toString().trim()).filter(Boolean).join(' | ')
+  return new Error(redactSecrets(body ? `${head} — ${body}` : head))
+}
+
+/** Parse a reppo --json stdout into a ChainResult. Warns once per process when
+ *  the CLI omits gasEth (reppo 0.8.0 reports only txHash) — structural, not
+ *  per-call, so it must not spam every transaction. */
+export function parseChainResult(stdout: string, warn: (m: string) => void = (m) => console.warn(m)): ChainResult {
+  const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
+  if (j.gasEth === undefined && !warnedNoGas) {
+    warnedNoGas = true
+    warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
+  }
+  return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0) }
+}
 
 async function run(args: string[]): Promise<ChainResult> {
   let stdout: string
@@ -34,23 +61,9 @@ async function run(args: string[]): Promise<ChainResult> {
       timeout: 120_000,
     }))
   } catch (e) {
-    // execFile rejects with an error carrying `stdout`/`stderr`, but its `.message` is just
-    // "Command failed: <cmd>" — so a reppo failure written to stderr (e.g. vote errors)
-    // surfaces as a BLANK reason. Fold both streams into the thrown message so the activity
-    // log records the real cause instead of an empty "Command failed".
-    const err = e as { message?: string; stdout?: string; stderr?: string }
-    const head = (err.message ?? String(e)).split('\n')[0]
-    const body = [err.stdout, err.stderr].map((s) => (s ?? '').toString().trim()).filter(Boolean).join(' | ')
-    throw new Error(body ? `${head} — ${body}` : head)
+    throw foldExecError(e)
   }
-  const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
-  if (j.gasEth === undefined && !warnedNoGas) {
-    // reppo CLI 0.8.0 reports only txHash (no gas field at all) — structural, not
-    // per-call, so warn once instead of spamming every transaction.
-    warnedNoGas = true
-    console.warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
-  }
-  return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0) }
+  return parseChainResult(stdout)
 }
 
 /** Default CLI-backed signer. Exact sub-flags (e.g. mint metadata flags, vote

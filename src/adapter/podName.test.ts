@@ -21,4 +21,22 @@ describe('clampPodName', () => {
   it('normalizes whitespace before measuring', () => {
     expect(clampPodName('  a   b  ')).toBe('a b')
   })
+
+  it('strips leading dashes so a hostile name cannot be parsed as a CLI flag', () => {
+    expect(clampPodName('--dataset /etc/passwd')).toBe('dataset /etc/passwd')
+    expect(clampPodName('-rf everything')).toBe('rf everything')
+    expect(clampPodName('US-China tensions rise')).toBe('US-China tensions rise') // interior dashes fine
+  })
+
+  it('strips to a fixpoint — a dash-space-flag prefix cannot survive (review finding)', () => {
+    expect(clampPodName('- --dataset /etc/passwd')).toBe('dataset /etc/passwd')
+    expect(clampPodName('-- - -x payload')).toBe('x payload')
+    expect(clampPodName('- --help')).toBe('help')
+  })
+
+  it('never emits an empty arg from an all-dash name (review finding)', () => {
+    expect(clampPodName('---')).toBe('untitled')
+    expect(clampPodName('-- ')).toBe('untitled')
+    expect(clampPodName('   ')).toBe('untitled')
+  })
 })

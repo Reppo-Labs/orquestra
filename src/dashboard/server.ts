@@ -26,7 +26,12 @@ function safeConfig(dataDir: string): Record<string, unknown> {
       // so the header doesn't claim "claim off" for a node that IS claiming.
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
     }
-  } catch { return {} }
+  } catch (e) {
+    // surfaced (once per request) instead of silently empty: a malformed config
+    // otherwise renders a blank header with no trace anywhere.
+    console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
+    return {}
+  }
 }
 
 function json(res: ServerResponse, code: number, body: unknown): void {
@@ -44,7 +49,9 @@ function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): voi
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
     if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
     if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
-    if (url === '/api/health') { json(res, 200, buildHealth(readActivity(dataDir, { limit: 5000 }))); return }
+    // 7-day window: "recent health", independent of cadence (a count-based window
+    // means hours at high cadence, months at low). 100k limit is a safety ceiling.
+    if (url === '/api/health') { json(res, 200, buildHealth(readActivity(dataDir, { limit: 100_000 }), { sinceMs: Date.now() - 7 * 24 * 3600_000 })); return }
     if (url === '/favicon.ico') { res.writeHead(204); res.end(); return }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
