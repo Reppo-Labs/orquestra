@@ -18,17 +18,17 @@ const defaultGetVersion = async (): Promise<string> => {
   return stdout.trim().split('\n')[0]
 }
 
-/** Extract the reppo CLI version from a `--version` banner. Prefers, in order:
- *  the token right after "reppo"/"cli" ("@reppo/cli 0.8.0", "reppo 0.7.0 (node
- *  20.1.0)" → 0.7.0), a `v`-tagged token ("reppo-cli v0.8.0"), else the FIRST
- *  dotted token. This dodges BOTH a build/date prefix and a runtime-version
- *  suffix (the last-token heuristic was fooled by "(node 20.1.0)"). */
+/** Extract the reppo CLI version from a `--version` banner. Prefers a `v`-tagged
+ *  token ("reppo-cli v0.8.0"), else the FIRST dotted token whose major version is
+ *  not year-shaped (< 1000). Filtering year/build tokens (2024.x) at the root
+ *  dodges BOTH a date prefix and one sitting next to the version, while the
+ *  first-match rule beats a trailing runtime suffix ("(node 20.1.0)"). No real
+ *  CLI carries a major version ≥ 1000. */
 function parseVersion(s: string): string | undefined {
-  return (
-    s.match(/(?:reppo|cli)[\s/@-]*v?(\d+\.\d+(?:\.\d+)?)/i)?.[1] ??
-    s.match(/\bv(\d+\.\d+(?:\.\d+)?)/i)?.[1] ??
-    s.match(/\d+\.\d+(?:\.\d+)?/)?.[0]
-  )
+  const vTagged = s.match(/\bv(\d+\.\d+(?:\.\d+)?)/i)?.[1]
+  if (vTagged) return vTagged
+  const tokens = s.match(/\d+\.\d+(?:\.\d+)?/g) ?? []
+  return tokens.find((t) => Number(t.split('.')[0]) < 1000)
 }
 
 /** Compare dotted versions numerically segment by segment. */

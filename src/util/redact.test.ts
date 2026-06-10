@@ -51,10 +51,28 @@ describe('redactSecrets', () => {
     expect(qs).toContain('apikey=<redacted>')
   })
 
-  it('redacts a URL-encoded / padded provider key in full, not just the leading chars', () => {
-    const out = redactSecrets('https://base-mainnet.g.alchemy.com/v2/SECRET%2DKEY.pad=123')
-    expect(out).not.toContain('SECRET')
-    expect(out).not.toContain('%2DKEY')
+  it('basic-auth: spans an embedded @ in the password and tolerates an empty username (review findings)', () => {
+    const at = redactSecrets('https://admin:p@ssword@host/ failed')
+    expect(at).not.toContain('p@ssword')
+    expect(at).toContain('@host/')
+    const empty = redactSecrets('https://:s3cr3t@host/ failed')
+    expect(empty).not.toContain('s3cr3t')
+  })
+
+  it('basic-auth regex does NOT mis-fire on a host:port URL with an @ in the path', () => {
+    const s = 'GET https://rpc.host:8545/path@v2 returned 500'
+    expect(redactSecrets(s)).toBe(s) // no credentials → untouched
+  })
+
+  it('provider-key redaction stops at a trailing period, not eating prose', () => {
+    const out = redactSecrets('see https://base-mainnet.g.alchemy.com/v2/MYKEYHERE123456.')
+    expect(out).not.toContain('MYKEYHERE123456')
+    expect(out).toContain('/v2/<redacted>.') // sentence period preserved
+  })
+
+  it('redacts a percent-encoded provider key', () => {
+    const out = redactSecrets('https://base-mainnet.g.alchemy.com/v2/SECRET%2DKEY12345 failed')
+    expect(out).not.toContain('SECRET%2DKEY12345')
     expect(out).toContain('/v2/<redacted>')
   })
 

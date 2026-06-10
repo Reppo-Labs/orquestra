@@ -15,13 +15,19 @@ describe('checkReppoVersion', () => {
     expect(await checkReppoVersion({ getVersion: async () => '1.0.0', warn: () => {} })).toBe(true)
   })
 
-  it('parses the reppo version despite a build/date PREFIX or a runtime-version SUFFIX', async () => {
+  it('parses the version despite a date/build token in PREFIX, ADJACENT, or SUFFIX position', async () => {
     expect(await checkReppoVersion({ getVersion: async () => '@reppo/cli 0.8.0', warn: () => {} })).toBe(true)
     expect(await checkReppoVersion({ getVersion: async () => 'built 2024.01 reppo v0.8.0', warn: () => {} })).toBe(true)
-    // SUFFIX trap: a too-old CLI whose banner appends the node runtime must still be flagged
+    // date IMMEDIATELY AFTER the product name (no v between) — year token filtered
+    expect(await checkReppoVersion({ getVersion: async () => 'reppo 2024.01.05 v0.8.0', warn: () => {} })).toBe(true)
+    // SUFFIX trap: too-old CLI whose banner appends the node runtime must still be flagged
     const warn: string[] = []
     expect(await checkReppoVersion({ getVersion: async () => 'reppo 0.7.0 (node 20.1.0)', warn: (m) => warn.push(m) })).toBe(false)
     expect(warn.join(' ')).toContain('0.7.0')
+    // too-old with a date right after the name — must still flag (year filtered, not picked)
+    const warn2: string[] = []
+    expect(await checkReppoVersion({ getVersion: async () => 'reppo 2024.01.05 0.5.0', warn: (m) => warn2.push(m) })).toBe(false)
+    expect(warn2.join(' ')).toContain('0.5.0')
   })
 
   it('warns loudly, naming both versions, when the CLI is too old', async () => {

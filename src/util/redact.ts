@@ -3,14 +3,18 @@
 // Known RPC providers that carry the API key in the URL path (`…/v2/<key>`) or as
 // a host token (quiknode). Anchored so generic REST paths like /v1/transactions
 // are NOT mangled.
-// key char class includes %-encoding, base64url padding (=), and dots so an
-// encoded/padded key is redacted whole, not just its leading word-chars.
-const KEY = String.raw`[\w%.=~+-]+`
+// key char class: alphanumerics, _, -, and %-encoding (so a percent-encoded key
+// is redacted whole). Deliberately excludes . = & ? so the match stops at a
+// trailing sentence period or a query-string boundary instead of eating them.
+const KEY = String.raw`[\w%~-]+`
 const PROVIDER_KEY_PATH = new RegExp(String.raw`\b([\w-]*\.?(?:alchemy\.com|infura\.io|chainstack\.com|ankr\.com|blastapi\.io|drpc\.org|nodereal\.io|blockpi\.network)\/v[0-9]+\/)${KEY}`, 'gi')
 const QUICKNODE = new RegExp(String.raw`\b([\w-]+\.quiknode\.pro\/)${KEY}`, 'gi')
-// credential-in-URL shapes that work for ANY host (basic-auth, query-string key):
-//   https://user:SECRET@host/   and   ...?apikey=SECRET / ?auth=SECRET / ?token=…
-const URL_BASIC_AUTH = /(\/\/[^/\s:@]+:)[^/\s@]+(@)/g
+// credential-in-URL shapes for ANY host:
+//  basic-auth `//[user]:password@host` — password class includes `@` and is
+//  greedy, so it spans an embedded `@` and backtracks to the LAST `@` before the
+//  host; it stops at `/`, so a `host:port/path@x` URL (no creds) doesn't match.
+const URL_BASIC_AUTH = /(\/\/[^\s/@]*:)[^\s/]+(@)/g
+//  query-string key: `?apikey=SECRET` / `?auth=…` / `?token=…` (value to & or end)
 const URL_QUERY_KEY = /([?&](?:api[_-]?key|apikey|auth|access[_-]?token|token|key)=)[^&\s"']+/gi
 
 /** Scrub credential-shaped substrings from a message before it is logged,
