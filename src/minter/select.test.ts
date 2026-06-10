@@ -67,6 +67,14 @@ describe('selectMints (minScore 7)', () => {
     expect(intents[0].podDescription.length).toBeLessThanOrEqual(200)
   })
 
+  it('carries sourceUrl + imageUrl from candidate to mint intent', async () => {
+    const c = cand('k1'); c.sourceUrl = 'https://news/x'; c.imageUrl = 'https://news/x.jpg'
+    const intents = await selectMints('9', [c], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ k1: 9 }) })
+    expect(intents[0].sourceUrl).toBe('https://news/x')
+    expect(intents[0].imageUrl).toBe('https://news/x.jpg')
+  })
+
   it('carries the score onto selfScore and dedups within the same batch', async () => {
     const intents = await selectMints('9', [cand('a'), cand('a')], rubric,
       { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ a: 8 }) })

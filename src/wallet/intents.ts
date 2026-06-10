@@ -24,6 +24,10 @@ export interface MintIntent {
   estReppoCost?: number
   /** scorer's 1-10 quality score; carried for downstream digest/audit. */
   selfScore?: number
+  /** human-viewable source page → pod's primary --url (the pinned dataset is attached separately). */
+  sourceUrl?: string
+  /** pod card image → mint-pod --image-url. */
+  imageUrl?: string
 }
 
 export interface ClaimIntent {

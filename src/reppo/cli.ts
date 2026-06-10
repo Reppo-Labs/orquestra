@@ -9,6 +9,10 @@ export interface VoteArgs { podId: string; direction: 'up' | 'down'; votes: numb
 export interface LockArgs { amountReppo: number; durationSeconds: number; idempotencyKey: string }
 export interface MintArgs {
   datanetId: string; subnetUuid: string; podName: string; podDescription: string; datasetPath: string; idempotencyKey: string
+  /** human-viewable source page → mint-pod --url (optional). */
+  url?: string
+  /** pod card image → mint-pod --image-url (optional). */
+  imageUrl?: string
 }
 export interface ClaimEmissionsArgs { podId: string; epoch: number; idempotencyKey: string }
 /** Result of an on-chain action: tx hash + gas spent (ETH), parsed from the CLI's --json output. */
@@ -73,7 +77,13 @@ export const defaultReppoCli: ReppoCli = {
   // reppo 0.8.0 vote: `--like`/`--dislike` (not `--direction`) + a required `--votes <n>`
   // weight. We weight by the scorer's conviction (1-10), bounded well within voting power.
   vote: (a) => run(['vote', '--pod', a.podId, a.direction === 'up' ? '--like' : '--dislike', '--votes', String(a.votes), '--idempotency-key', a.idempotencyKey]),
-  mintPod: (a) => run(['mint-pod', '--datanet', a.datanetId, '--subnet-uuid', a.subnetUuid, '--pod-name', a.podName, '--pod-description', a.podDescription, '--dataset', a.datasetPath, '--idempotency-key', a.idempotencyKey, '--agree-to-terms']),
+  mintPod: (a) => run([
+    'mint-pod', '--datanet', a.datanetId, '--subnet-uuid', a.subnetUuid,
+    '--pod-name', a.podName, '--pod-description', a.podDescription,
+    '--dataset', a.datasetPath, '--idempotency-key', a.idempotencyKey, '--agree-to-terms',
+    ...(a.url ? ['--url', a.url] : []),
+    ...(a.imageUrl ? ['--image-url', a.imageUrl] : []),
+  ]),
   claimEmissions: (a) => run(['claim-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
   grantAccess: (datanetId) => run(['grant-access', '--datanet', datanetId]),
 }

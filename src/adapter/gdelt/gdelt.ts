@@ -4,9 +4,10 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-export interface GeoArticle { url: string; title: string; domain: string; seendate: string }
+export interface GeoArticle { url: string; title: string; domain: string; seendate: string; image: string }
 
-/** Pure: map a GDELT DOC 2.0 ArtList response to GeoArticles; drop entries without a url. */
+/** Pure: map a GDELT DOC 2.0 ArtList response to GeoArticles; drop entries without a url.
+ *  `socialimage` is the article's og:image — used as the minted pod's card image. */
 export function parseGdelt(raw: unknown): GeoArticle[] {
   const rows = (raw as { articles?: unknown[] })?.articles
   if (!Array.isArray(rows)) return []
@@ -18,6 +19,7 @@ export function parseGdelt(raw: unknown): GeoArticle[] {
         title: String(a.title ?? ''),
         domain: String(a.domain ?? ''),
         seendate: String(a.seendate ?? ''),
+        image: typeof a.socialimage === 'string' ? a.socialimage : '',
       }
     })
     .filter((a) => a.url !== '')

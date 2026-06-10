@@ -4,7 +4,7 @@ import type { GeoArticle } from './gdelt.js'
 import type { DatanetRubric } from '../../rubric/types.js'
 
 const rubric = { name: 'Geo', goal: 'g', publisherSpec: 'p', voterRubric: 'v', canMint: true } as DatanetRubric
-const articles: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'Ceasefire extended', domain: 'ex.com', seendate: 't' }]
+const articles: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'Ceasefire extended', domain: 'ex.com', seendate: 't', image: 'https://ex.com/a.jpg' }]
 const strategy = { focus: 'ME', angle: 'contrarian', brief: 'b', topN: 5, minImportance: 7 }
 const gen = async () => ({ claims: [
   { claim: 'Ceasefire holds through June', verdict: 'credible', confidence: 7, importance: 8, rationale: 'r', sources: ['https://ex.com/a'] },

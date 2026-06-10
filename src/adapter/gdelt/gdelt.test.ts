@@ -25,7 +25,15 @@ describe('parseGdelt', () => {
   it('maps articles to GeoArticle and drops url-less entries', () => {
     const a = parseGdelt(raw)
     expect(a).toHaveLength(2)
-    expect(a[0]).toEqual({ url: 'https://ex.com/a', title: 'Israel and Lebanon extend ceasefire', domain: 'ex.com', seendate: '20260608T120000Z' })
+    expect(a[0]).toEqual({ url: 'https://ex.com/a', title: 'Israel and Lebanon extend ceasefire', domain: 'ex.com', seendate: '20260608T120000Z', image: '' })
+  })
+  it('captures socialimage into the image field (and empties it when absent)', () => {
+    const a = parseGdelt({ articles: [
+      { url: 'https://x/1', title: 't', domain: 'x', seendate: 's', socialimage: 'https://x/og.jpg' },
+      { url: 'https://x/2', title: 't', domain: 'x', seendate: 's' },
+    ] })
+    expect(a[0].image).toBe('https://x/og.jpg')
+    expect(a[1].image).toBe('')
   })
   it('returns [] on malformed input', () => {
     expect(parseGdelt({})).toEqual([])

@@ -6,7 +6,7 @@ import type { DatanetRubric } from '../../rubric/types.js'
 
 const rubric = { name: 'Geopolitics', goal: 'g', publisherSpec: 'submit sources', voterRubric: 'price truth' } as DatanetRubric
 const strategy: GdeltStrategy = { focus: 'Middle East energy', angle: 'contrarian on ceasefires', brief: 'favor sanctions impact', topN: 5, minImportance: 7 }
-const articles: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'Ceasefire extended', domain: 'ex.com', seendate: '20260608T120000Z' }]
+const articles: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'Ceasefire extended', domain: 'ex.com', seendate: '20260608T120000Z', image: 'https://ex.com/a.jpg' }]
 
 const fakeGenerate = async () => ({
   claims: [
@@ -18,16 +18,27 @@ const fakeGenerate = async () => ({
 describe('synthesizeClaims', () => {
   const r = { name: 'Geo', goal: 'g', publisherSpec: 'p', voterRubric: 'v' } as DatanetRubric
   const s: GdeltStrategy = { focus: 'ME', angle: 'contrarian', brief: 'b', topN: 5, minImportance: 7 }
-  const arts: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'x', domain: 'ex.com', seendate: 't' }]
+  const arts: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'x', domain: 'ex.com', seendate: 't', image: 'https://ex.com/a.jpg' }]
 
   it('builds candidates and drops those below minImportance', async () => {
     const cands = await synthesizeClaims(arts, r, '9', s, { generate: fakeGenerate })
     expect(cands).toHaveLength(1)
     expect(cands[0].podName).toBe('Ceasefire holds through June')
     expect(cands[0].canonicalKey).toMatch(/^[0-9a-f]{16}$/)
-    const ds = cands[0].dataset as { verdict: string; sources: unknown[] }
+    const ds = cands[0].dataset as { verdict: string; sources: unknown[]; image: string }
     expect(ds.verdict).toBe('credible')
     expect(ds.sources).toHaveLength(1)
+    // primary source → clickable link; its og:image → card image
+    expect(cands[0].sourceUrl).toBe('https://ex.com/a')
+    expect(cands[0].imageUrl).toBe('https://ex.com/a.jpg')
+    expect(ds.image).toBe('https://ex.com/a.jpg')
+  })
+
+  it('leaves imageUrl unset when no cited source has an og:image', async () => {
+    const noImg: GeoArticle[] = [{ url: 'https://ex.com/a', title: 'x', domain: 'ex.com', seendate: 't', image: '' }]
+    const cands = await synthesizeClaims(noImg, r, '9', s, { generate: fakeGenerate })
+    expect(cands[0].imageUrl).toBeUndefined()
+    expect(cands[0].sourceUrl).toBe('https://ex.com/a') // source link still set
   })
   it('returns [] when the model yields no usable claims', async () => {
     expect(await synthesizeClaims(arts, r, '9', s, { generate: async () => ({ claims: [] }) })).toEqual([])

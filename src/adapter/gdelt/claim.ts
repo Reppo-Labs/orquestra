@@ -70,11 +70,16 @@ export async function synthesizeClaims(
     return []
   }
 
+  // url → og:image, to give each minted pod the source article's image.
+  const imageByUrl = new Map(articles.filter((a) => a.image).map((a) => [a.url, a.image]))
   const cands: CandidatePod[] = []
   for (const c of out.claims) {
     if (c.importance < strategy.minImportance) continue
     const sources = [...c.sources].sort()
     const primary = sources[0] ?? ''
+    // Pod image: the primary source's og:image, else any cited source that has one
+    // (the LLM may echo a different cited url than the article we matched).
+    const image = imageByUrl.get(primary) ?? sources.map((u) => imageByUrl.get(u)).find(Boolean) ?? ''
     // Key on the CLAIM (the unit of dedup), normalized — stable across source churn and
     // unique per distinct claim (URL-keying collided same-source claims + re-minted on source change).
     const normClaim = c.claim.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -88,10 +93,13 @@ export async function synthesizeClaims(
       dataset: {
         kind: 'geopolitical-claim', schema_version: 1,
         claim: c.claim, verdict: c.verdict, confidence: c.confidence,
-        timeframe: c.timeframe, rationale: c.rationale,
+        timeframe: c.timeframe, rationale: c.rationale, image,
         sources: sources.map((u) => ({ url: u })),
       },
       selfScore: c.importance,
+      // primary source = the pod's clickable link; image = its card image.
+      ...(primary ? { sourceUrl: primary } : {}),
+      ...(image ? { imageUrl: image } : {}),
     })
   }
   return cands

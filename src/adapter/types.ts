@@ -11,6 +11,10 @@ export interface CandidatePod {
   dataset: unknown
   /** adapter's own 1-10 quality estimate, if any. */
   selfScore?: number
+  /** human-viewable source page for the pod's primary link (e.g. the article). */
+  sourceUrl?: string
+  /** image URL for the pod card (e.g. the article's og:image). */
+  imageUrl?: string
 }
 
 export interface AdapterContext {
