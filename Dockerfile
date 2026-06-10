@@ -10,8 +10,10 @@ RUN npm run build
 FROM node:20-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.8.0
-# @reppo/cli@0.8.0: datanet rubric metadata on `query datanet` + epoch data (current epoch).
+ && npm i -g @reppo/cli@0.8.2
+# @reppo/cli@0.8.2: emits gasEth in write results (real gas caps) + mint-pod
+# --image-url / source-url as the pod's primary link (needed by this branch's
+# image/source-url mint flow). 0.8.0 added datanet rubric metadata + epoch data.
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist

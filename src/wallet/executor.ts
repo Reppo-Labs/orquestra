@@ -75,6 +75,8 @@ export class WalletExecutor {
       const r = await this.cli.mintPod({
         datanetId: intent.datanetId, subnetUuid: intent.subnetUuid, podName: intent.podName, podDescription: intent.podDescription,
         datasetPath: intent.datasetPath, idempotencyKey: `mint-${intent.canonicalKey}`,
+        ...(intent.sourceUrl ? { url: intent.sourceUrl } : {}),
+        ...(intent.imageUrl ? { imageUrl: intent.imageUrl } : {}),
       })
       if (!r.txHash) {
         this.ledger.releaseMint(res)

@@ -42,6 +42,8 @@ export async function selectMints(
       kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
       podName: clampPodName(c.podName), podDescription: clampPodName(c.podDescription, POD_DESC_MAX), datasetPath,
       estReppoCost: opts.estReppoCost ?? 0, selfScore: score,
+      ...(c.sourceUrl ? { sourceUrl: c.sourceUrl } : {}),
+      ...(c.imageUrl ? { imageUrl: c.imageUrl } : {}),
     })
   }
   return intents

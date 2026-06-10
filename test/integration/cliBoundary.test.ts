@@ -62,6 +62,20 @@ describe('reppo CLI boundary (stub binary)', () => {
       '--pod-description', 'Short desc', '--dataset', '/tmp/d.json', '--idempotency-key', 'mint-k1',
     ])
     expect(argv).toContain('--agree-to-terms')
+    expect(argv).not.toContain('--url')        // omitted when not provided
+    expect(argv).not.toContain('--image-url')
+  })
+
+  it('mint-pod emits --url and --image-url when the intent carries them', async () => {
+    stubReppo('ok')
+    await defaultReppoCli.mintPod({
+      datanetId: '2', subnetUuid: 'cm-x', podName: 'n', podDescription: 'd',
+      datasetPath: '/tmp/d.json', idempotencyKey: 'mint-k2',
+      url: 'https://news.example/article', imageUrl: 'https://news.example/og.jpg',
+    })
+    const argv = recordedArgv()
+    expect(argv[argv.indexOf('--url') + 1]).toBe('https://news.example/article')
+    expect(argv[argv.indexOf('--image-url') + 1]).toBe('https://news.example/og.jpg')
   })
 
   it('grant-access takes the integer datanet id', async () => {
