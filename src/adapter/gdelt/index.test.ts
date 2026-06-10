@@ -50,6 +50,21 @@ describe('createGdeltAdapter', () => {
     await a.discover({ datanetId: '2', rubric, topN: 5, strategy })
     expect(fetchEvents).toHaveBeenCalledTimes(2) // fetched again
   })
+
+  it('a FAILED fetch does not arm the throttle — next cycle retries (review finding)', async () => {
+    let clock = 1_000_000
+    let calls = 0
+    const fetchEvents = vi.fn(async () => {
+      calls++
+      if (calls === 1) throw new Error('429')
+      return articles
+    })
+    const a = createGdeltAdapter({ fetchEvents, generate: gen, minFetchIntervalMs: 30 * 60_000, now: () => clock })
+    expect(await a.discover({ datanetId: '2', rubric, topN: 5, strategy })).toEqual([]) // failed
+    clock += 60_000 // 1 min later, well within the 30 min guard
+    await a.discover({ datanetId: '2', rubric, topN: 5, strategy })
+    expect(fetchEvents).toHaveBeenCalledTimes(2) // NOT throttled — retried despite < interval
+  })
   it('sanitizes the free-text focus into a valid GDELT query (no commas/slashes)', async () => {
     let seenQuery = ''
     const fetchEvents = vi.fn(async (q: { query: string }) => { seenQuery = q.query; return articles })

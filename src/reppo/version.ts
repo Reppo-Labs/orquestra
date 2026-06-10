@@ -18,11 +18,14 @@ const defaultGetVersion = async (): Promise<string> => {
   return stdout.trim().split('\n')[0]
 }
 
-/** Compare dotted versions numerically segment by segment. Anchors on a real
- *  semver-shaped token (X.Y or X.Y.Z) so a leading number in the CLI banner
- *  (e.g. "reppo-cli 2024 build, v0.8.0") isn't mistaken for the version. */
+/** Compare dotted versions numerically segment by segment. Prefers a `v`-prefixed
+ *  semver token, else the LAST dotted-number token on the line — so a dotted
+ *  date/build prefix ("built 2024.01 reppo v0.8.0") isn't mistaken for the version. */
 function atLeast(actual: string, required: string): boolean {
-  const a = actual.match(/\d+\.\d+(\.\d+)?/)?.[0]?.split('.').map(Number) ?? []
+  const vTagged = actual.match(/\bv(\d+\.\d+(?:\.\d+)?)/i)?.[1]
+  const allTokens = actual.match(/\d+\.\d+(?:\.\d+)?/g)
+  const picked = vTagged ?? (allTokens ? allTokens[allTokens.length - 1] : undefined)
+  const a = picked?.split('.').map(Number) ?? []
   const r = required.split('.').map(Number)
   if (a.length === 0) return false
   for (let i = 0; i < Math.max(a.length, r.length); i++) {

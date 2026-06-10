@@ -38,14 +38,14 @@ describe('activityLog', () => {
     expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
   })
 
-  it('rotates the log to .old once it exceeds maxBytes (history preserved, live file fresh)', () => {
+  it('rotates the live file at maxBytes but readActivity still spans the archive (history preserved)', () => {
     appendActivity(dir, entry({ podId: 'old1' }))
     appendActivity(dir, entry({ podId: 'old2' }), { maxBytes: 10 }) // file already > 10 bytes → rotates first
-    const live = readActivity(dir, { limit: 10 })
-    expect(live.map((r) => r.podId)).toEqual(['old2']) // fresh file holds only the new entry
+    // live file now holds only old2; old1 is in .old
     expect(existsSync(join(dir, 'activity-log.jsonl.old'))).toBe(true)
-    const archived = readFileSync(join(dir, 'activity-log.jsonl.old'), 'utf-8')
-    expect(archived).toContain('old1')
+    expect(readFileSync(join(dir, 'activity-log.jsonl'), 'utf-8')).not.toContain('old1')
+    // readActivity spans both, newest-first: live (old2) then archived (old1)
+    expect(readActivity(dir, { limit: 10 }).map((r) => r.podId)).toEqual(['old2', 'old1'])
   })
 
   it('redacts rpc-url keys from detail/reason at append time', () => {

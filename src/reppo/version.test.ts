@@ -15,10 +15,11 @@ describe('checkReppoVersion', () => {
     expect(await checkReppoVersion({ getVersion: async () => '1.0.0', warn: () => {} })).toBe(true)
   })
 
-  it('anchors on the semver token, ignoring a leading number in the banner', async () => {
+  it('anchors on the v-tagged or last semver token, ignoring a dotted date/build prefix', async () => {
     expect(await checkReppoVersion({ getVersion: async () => 'reppo-cli 2024 build v0.8.0', warn: () => {} })).toBe(true)
+    expect(await checkReppoVersion({ getVersion: async () => 'built 2024.01 reppo v0.8.0', warn: () => {} })).toBe(true)
     const warn: string[] = []
-    expect(await checkReppoVersion({ getVersion: async () => 'reppo 2024 v0.5.0', warn: (m) => warn.push(m) })).toBe(false)
+    expect(await checkReppoVersion({ getVersion: async () => 'built 2024.01 reppo v0.5.0', warn: (m) => warn.push(m) })).toBe(false)
     expect(warn.join(' ')).toContain('0.5.0')
   })
 

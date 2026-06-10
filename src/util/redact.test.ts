@@ -10,29 +10,43 @@ describe('redactSecrets', () => {
     expect(out).toContain('{"error":{"code":"X"}}') // error payload survives
   })
 
-  it('redacts alchemy-style key paths even without the flag form', () => {
-    // real alchemy keys are 32 chars; the /vN/ rule floors at 16 to avoid eating
-    // short path words like /v2/docs.
-    const out = redactSecrets('rpc error from https://base-mainnet.g.alchemy.com/v2/abcDEF123xyz4567890key: timeout')
-    expect(out).not.toContain('abcDEF123xyz4567890key')
-    expect(out).toContain('/v2/<redacted>')
+  it('redacts keyed provider URLs outside the flag form: alchemy, infura, quiknode', () => {
+    const al = redactSecrets('rpc error from https://base-mainnet.g.alchemy.com/v2/abcDEF123xyz4567890key: timeout')
+    expect(al).not.toContain('abcDEF123xyz4567890key')
+    expect(al).toContain('/v2/<redacted>')
+    const inf = redactSecrets('failed to connect to https://mainnet.infura.io/v3/SECRETKEY1234567890: timeout')
+    expect(inf).not.toContain('SECRETKEY1234567890')
+    const qn = redactSecrets('rpc https://billowing-old-pine.quiknode.pro/abc123def456 failed')
+    expect(qn).not.toContain('abc123def456')
+  })
+
+  it('does NOT mangle generic REST paths (review finding: over-redaction)', () => {
+    expect(redactSecrets('GET https://api.example.com/v1/transactions_endpoint_data failed'))
+      .toContain('transactions_endpoint_data')
+    expect(redactSecrets('calling /v2/getLogsByBlockRange now')).toContain('getLogsByBlockRange')
+  })
+
+  it('preserves tx hashes and signatures in ALL forms (review finding: false redaction)', () => {
+    const h = '0x' + 'ab'.repeat(32)
+    expect(redactSecrets(`{"txHash":"${h}"}`)).toContain(h)
+    expect(redactSecrets(`https://basescan.org/tx/${h}`)).toContain(h)
+    expect(redactSecrets(`Vote tx reverted: ${h}`)).toContain(h)
+    expect(redactSecrets(`nextTxParam ${h}`)).toContain(h) // no false "tx"-substring redaction
+    const sig = '0x' + 'ef'.repeat(65) // 130-hex signature (public, not secret)
+    expect(redactSecrets(`sig ${sig}`)).toContain(sig)
   })
 
   it('redacts bearer tokens and inf_/acp_ prefixed api keys', () => {
     expect(redactSecrets('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig')).not.toContain('eyJhbGciOiJIUzI1NiJ9')
-    expect(redactSecrets('using key inf_a1b2c3d4e5')).toContain('inf_<redacted>')
-    expect(redactSecrets('using key acp_a1b2c3d4e5')).toContain('acp_<redacted>')
+    expect(redactSecrets('using key inf_a1b2c3d4e5f6g7')).toContain('inf_<redacted>')
+    expect(redactSecrets('using key acp_a1b2c3d4e5f6g7')).toContain('acp_<redacted>')
   })
 
-  it('redacts 64-hex private-key shapes', () => {
-    const pk = '0x' + 'ab'.repeat(32)
-    expect(redactSecrets(`oops ${pk} leaked`)).not.toContain(pk)
+  it('does not mangle short prose starting with inf_/acp_', () => {
+    expect(redactSecrets('inf_short')).toBe('inf_short') // below the 12-char key floor
   })
 
-  it('leaves ordinary content untouched (tx hashes are 32-byte but legitimate output)', () => {
-    // tx hashes are also 0x + 64 hex — they MUST survive (forensics) when labeled as such
-    const s = 'txHash: 0x' + 'cd'.repeat(32)
-    expect(redactSecrets(s)).toBe(s)
+  it('leaves ordinary content untouched', () => {
     expect(redactSecrets('plain error, nothing secret; pod 925')).toBe('plain error, nothing secret; pod 925')
   })
 })

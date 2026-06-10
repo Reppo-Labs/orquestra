@@ -47,20 +47,19 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
         timespanHours: deps.defaults?.timespanHours ?? 24,
         maxRecords: deps.defaults?.maxRecords ?? 75,
       }
-      // Throttle guard: skip the fetch if we hit this same query within minInterval.
-      // GDELT rate-limits per IP; at a low cadence one fetch per cycle is fine, at a
-      // high cadence this prevents a 429 storm. Skipping just defers mint discovery.
+      // Throttle guard: skip the fetch if a SUCCESSFUL fetch of this same query
+      // happened within minInterval. GDELT rate-limits per IP; at a low cadence one
+      // fetch per cycle is fine, at high cadence this prevents a 429 storm.
       const last = lastFetchAt.get(q.query)
       const t = now()
       if (last !== undefined && t - last < minInterval) {
-        console.error(`orquestra: gdelt fetch skipped for "${q.query}" — throttled (last fetch ${Math.round((t - last) / 1000)}s ago, min ${Math.round(minInterval / 1000)}s)`)
+        console.error(`orquestra: gdelt fetch skipped for "${q.query}" — throttled (last success ${Math.round((t - last) / 1000)}s ago, min ${Math.round(minInterval / 1000)}s)`)
         return []
       }
-      lastFetchAt.set(q.query, t)
       // A fetch failure (GDELT 429 rate limit, network blip) means no candidates THIS
-      // cycle — it must not throw into runCycle and mark the whole datanet errored
-      // (votes already executed would be reported as a datanet failure). Next cycle
-      // retries naturally.
+      // cycle — it must not throw into runCycle and mark the whole datanet errored.
+      // The timestamp is recorded only on SUCCESS, so a transient failure retries next
+      // cycle (fetchGeoEvents' own 15s/60s/180s ladder handles within-attempt 429s).
       let articles: GeoArticle[]
       try {
         articles = await fetchEvents(q)
@@ -68,6 +67,7 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
         console.error(`orquestra: gdelt fetch failed (skipping mint discovery this cycle) — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
         return []
       }
+      lastFetchAt.set(q.query, t) // only successful fetches count toward the throttle
       if (articles.length === 0) return []
       const cands = await synthesizeClaims(articles, ctx.rubric, ctx.datanetId, strategy, {
         model: deps.model,
