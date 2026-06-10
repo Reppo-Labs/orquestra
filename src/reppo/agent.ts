@@ -1,11 +1,8 @@
 // src/reppo/agent.ts
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { reppoEnv, withRpcUrl } from './exec.js'
+import { runReppoStdout } from './exec.js'
 
-const execFileAsync = promisify(execFile)
 const FILE = 'agent.json'
 
 /** Reppo platform agent identity. `mint-pod` requires REPPO_AGENT_ID (>=0.8.0);
@@ -63,11 +60,9 @@ export function parseRegisterAgentOutput(stdout: string): AgentCreds {
 /** Live: register an agent identity on the Reppo platform (signs with the wallet).
  *  One-time per operator — callers gate it behind ensureAgentId's idempotency. */
 export async function registerAgentJson(name: string, description: string): Promise<AgentCreds> {
-  const { stdout } = await execFileAsync(
-    'reppo',
-    withRpcUrl(['register-agent', '--name', name, '--description', description, '--json']),
-    { env: reppoEnv(), timeout: 120_000 },
-  )
+  // via runReppoStdout so a registration failure's folded command line (which
+  // carries the --rpc-url key) is redacted like every other reppo call.
+  const stdout = await runReppoStdout(['register-agent', '--name', name, '--description', description, '--json'], 120_000)
   return parseRegisterAgentOutput(stdout)
 }
 

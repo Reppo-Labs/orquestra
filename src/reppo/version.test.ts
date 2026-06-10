@@ -15,12 +15,13 @@ describe('checkReppoVersion', () => {
     expect(await checkReppoVersion({ getVersion: async () => '1.0.0', warn: () => {} })).toBe(true)
   })
 
-  it('anchors on the v-tagged or last semver token, ignoring a dotted date/build prefix', async () => {
-    expect(await checkReppoVersion({ getVersion: async () => 'reppo-cli 2024 build v0.8.0', warn: () => {} })).toBe(true)
+  it('parses the reppo version despite a build/date PREFIX or a runtime-version SUFFIX', async () => {
+    expect(await checkReppoVersion({ getVersion: async () => '@reppo/cli 0.8.0', warn: () => {} })).toBe(true)
     expect(await checkReppoVersion({ getVersion: async () => 'built 2024.01 reppo v0.8.0', warn: () => {} })).toBe(true)
+    // SUFFIX trap: a too-old CLI whose banner appends the node runtime must still be flagged
     const warn: string[] = []
-    expect(await checkReppoVersion({ getVersion: async () => 'built 2024.01 reppo v0.5.0', warn: (m) => warn.push(m) })).toBe(false)
-    expect(warn.join(' ')).toContain('0.5.0')
+    expect(await checkReppoVersion({ getVersion: async () => 'reppo 0.7.0 (node 20.1.0)', warn: (m) => warn.push(m) })).toBe(false)
+    expect(warn.join(' ')).toContain('0.7.0')
   })
 
   it('warns loudly, naming both versions, when the CLI is too old', async () => {

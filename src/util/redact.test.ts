@@ -42,6 +42,22 @@ describe('redactSecrets', () => {
     expect(redactSecrets('using key acp_a1b2c3d4e5f6g7')).toContain('acp_<redacted>')
   })
 
+  it('redacts credential-in-URL shapes for ANY host (review finding)', () => {
+    const ba = redactSecrets('request to https://user:s3cr3tpass@my-node.example/ failed')
+    expect(ba).not.toContain('s3cr3tpass')
+    expect(ba).toContain('user:<redacted>@')
+    const qs = redactSecrets('rpc https://rpc.llamarpc.com/?apikey=SUPERSECRET123 failed')
+    expect(qs).not.toContain('SUPERSECRET123')
+    expect(qs).toContain('apikey=<redacted>')
+  })
+
+  it('redacts a URL-encoded / padded provider key in full, not just the leading chars', () => {
+    const out = redactSecrets('https://base-mainnet.g.alchemy.com/v2/SECRET%2DKEY.pad=123')
+    expect(out).not.toContain('SECRET')
+    expect(out).not.toContain('%2DKEY')
+    expect(out).toContain('/v2/<redacted>')
+  })
+
   it('does not mangle short prose starting with inf_/acp_', () => {
     expect(redactSecrets('inf_short')).toBe('inf_short') // below the 12-char key floor
   })

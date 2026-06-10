@@ -18,14 +18,22 @@ const defaultGetVersion = async (): Promise<string> => {
   return stdout.trim().split('\n')[0]
 }
 
-/** Compare dotted versions numerically segment by segment. Prefers a `v`-prefixed
- *  semver token, else the LAST dotted-number token on the line — so a dotted
- *  date/build prefix ("built 2024.01 reppo v0.8.0") isn't mistaken for the version. */
+/** Extract the reppo CLI version from a `--version` banner. Prefers, in order:
+ *  the token right after "reppo"/"cli" ("@reppo/cli 0.8.0", "reppo 0.7.0 (node
+ *  20.1.0)" → 0.7.0), a `v`-tagged token ("reppo-cli v0.8.0"), else the FIRST
+ *  dotted token. This dodges BOTH a build/date prefix and a runtime-version
+ *  suffix (the last-token heuristic was fooled by "(node 20.1.0)"). */
+function parseVersion(s: string): string | undefined {
+  return (
+    s.match(/(?:reppo|cli)[\s/@-]*v?(\d+\.\d+(?:\.\d+)?)/i)?.[1] ??
+    s.match(/\bv(\d+\.\d+(?:\.\d+)?)/i)?.[1] ??
+    s.match(/\d+\.\d+(?:\.\d+)?/)?.[0]
+  )
+}
+
+/** Compare dotted versions numerically segment by segment. */
 function atLeast(actual: string, required: string): boolean {
-  const vTagged = actual.match(/\bv(\d+\.\d+(?:\.\d+)?)/i)?.[1]
-  const allTokens = actual.match(/\d+\.\d+(?:\.\d+)?/g)
-  const picked = vTagged ?? (allTokens ? allTokens[allTokens.length - 1] : undefined)
-  const a = picked?.split('.').map(Number) ?? []
+  const a = parseVersion(actual)?.split('.').map(Number) ?? []
   const r = required.split('.').map(Number)
   if (a.length === 0) return false
   for (let i = 0; i < Math.max(a.length, r.length); i++) {

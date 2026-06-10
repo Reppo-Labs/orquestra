@@ -25,8 +25,13 @@ export interface ActivityEntry {
 const FILE = 'activity-log.jsonl'
 /** Rotate the log once it exceeds this. At a low cadence the file grows slowly,
  *  but it is otherwise unbounded — cap it so disk and parse cost stay finite.
- *  One generation of history is retained as `.jsonl.old`. */
-const DEFAULT_MAX_BYTES = 32 * 1024 * 1024 // 32 MiB ≈ hundreds of thousands of entries
+ *  ONE generation of history is retained as `.jsonl.old`; readActivity spans
+ *  live + `.old`. Caveat: cumulative metrics derived from the full log
+ *  (pnl.ts/earnStatus.ts "claimed to date") only see live + one archive, so
+ *  after a SECOND rotation the oldest realized claims roll off. At 32 MiB/gen
+ *  (≈ hundreds of thousands of entries) that is years away at any real cadence;
+ *  authoritative cumulative accounting should come from on-chain/ledger state. */
+const DEFAULT_MAX_BYTES = 32 * 1024 * 1024
 
 function redactEntry(entry: ActivityEntry): ActivityEntry {
   return {
