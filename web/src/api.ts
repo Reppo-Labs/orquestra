@@ -133,6 +133,64 @@ export async function saveStrategy(candidate: unknown, token: string): Promise<{
   return r.ok ? { ok: true } : { ok: false, error: out.error || String(r.status) }
 }
 
+// ── Onboarding (mirrors src/onboarding/types.ts) ──
+export interface OnboardingDatanetChoice {
+  id: string
+  vote: boolean
+  mint: boolean
+  strictness: string
+  adapter?: string
+  adapterParams?: { focus?: string; angle?: string; topN?: number; minImportance?: number }
+}
+
+export interface OnboardingAnswers {
+  datanets: OnboardingDatanetChoice[]
+  lockReppo: number
+  lockDurationDays: number
+  voteGasEthMax: number
+  voteRateMaxPerCycle: number
+  mintReppoMax: number
+  mintGasEthMax: number
+  horizonDays: number
+  cadenceHours: number
+  notes: string
+}
+
+export type OnboardingDraft = Partial<OnboardingAnswers>
+
+export interface OnboardingStatus { needed: boolean; chatAvailable: boolean; writesEnabled: boolean }
+
+export async function onboardingStatus(): Promise<OnboardingStatus | null> {
+  try { return await fetch('/api/onboarding/status').then((r) => r.json()) } catch { return null }
+}
+
+export interface OnboardingChatOut {
+  reply?: string
+  draft?: OnboardingDraft | null
+  finalized?: OnboardingAnswers | null
+  reset?: boolean
+  error?: string
+}
+
+export async function onboardingChat(body: { message?: string; reset?: boolean }, token: string): Promise<{ ok: boolean; out: OnboardingChatOut }> {
+  const r = await fetch('/api/onboarding/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-orquestra-token': token },
+    body: JSON.stringify(body),
+  })
+  return { ok: r.ok, out: await r.json().catch(() => ({ error: `HTTP ${r.status}` })) }
+}
+
+export async function onboardingConfirm(answers: OnboardingAnswers, token: string): Promise<{ ok: boolean; error?: string }> {
+  const r = await fetch('/api/onboarding/confirm', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-orquestra-token': token },
+    body: JSON.stringify(answers),
+  })
+  const out = await r.json().catch(() => ({}))
+  return r.ok ? { ok: true } : { ok: false, error: (out as { error?: string }).error || String(r.status) }
+}
+
 export interface ChatResult { reply: string; warning?: string; proposedConfig?: StrategyConfig & Record<string, unknown> }
 
 export async function strategyChat(messages: ChatMsg[], token: string): Promise<{ ok: boolean; out: ChatResult & { error?: string }; status: number }> {

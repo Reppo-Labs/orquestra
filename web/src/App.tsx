@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { loadAll, type DashData } from './api'
+import { loadAll, onboardingStatus, type DashData, type OnboardingStatus } from './api'
 import { fmt } from './lib/format'
 import { PnlCards } from './components/PnlCards'
 import { CycleHealth } from './components/CycleHealth'
@@ -7,14 +7,18 @@ import { BudgetBurn } from './components/BudgetBurn'
 import { StrategyPanel } from './components/StrategyPanel'
 import { Emissions } from './components/Emissions'
 import { Activity } from './components/Activity'
+import { Onboarding } from './components/Onboarding'
 
 export function App() {
   const [data, setData] = useState<DashData | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [obStatus, setObStatus] = useState<OnboardingStatus | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      setData(await loadAll())
+      const [d, ob] = await Promise.all([loadAll(), onboardingStatus()])
+      setData(d)
+      setObStatus(ob)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -30,6 +34,11 @@ export function App() {
   const cfg = data?.config
   const snap = data?.snapshot ?? null
   const earn = data?.earn
+
+  // Fresh node: the dashboard IS the onboarding until a strategy config exists.
+  if (obStatus?.needed) {
+    return <Onboarding status={obStatus} netNames={data?.netNames ?? {}} onDone={() => void refresh()} />
+  }
 
   return (
     <>
