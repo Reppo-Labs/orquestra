@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BudgetLedger } from './ledger.js'
-import { WalletExecutor } from './executor.js'
+import { WalletExecutor, MINT_REPPO_FALLBACK } from './executor.js'
 import type { ReppoCli } from '../reppo/cli.js'
 import type { VoteIntent, MintIntent, ClaimIntent } from './intents.js'
 
@@ -60,6 +60,25 @@ describe('WalletExecutor', () => {
     expect(ledger.state.mintReppoSpent).toBe(50)
     // actual gas returned by fakeCli is 0.01; reconcileMint adjusts from MINT_GAS_EST_ETH (0.02)
     expect(ledger.state.mintGasSpentEth).toBeCloseTo(0.01)
+  })
+
+  it('reconciles mint REPPO to the on-chain fee read from the receipt (CLI omits it)', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const reader = vi.fn(async () => 150) // mint-pod tx paid 150 REPPO on-chain
+    const ex = new WalletExecutor(cli, ledger, reader)
+    await ex.executeMint(mintIntent('k1')) // est defaults to 0 (selectMints passes no estimate)
+    expect(reader).toHaveBeenCalledWith('0xmint')
+    expect(ledger.state.mintReppoSpent).toBe(150)
+  })
+
+  it('falls back to a conservative REPPO estimate when the fee read fails (never under-counts to 0)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const reader = vi.fn(async () => undefined) // RPC down / reverted — no fee read
+    const ex = new WalletExecutor(cli, ledger, reader)
+    await ex.executeMint(mintIntent('k1'))
+    expect(ledger.state.mintReppoSpent).toBe(MINT_REPPO_FALLBACK)
+    warn.mockRestore()
   })
 
   it('reports error (not executed) when the CLI throws, and reservation is released', async () => {
