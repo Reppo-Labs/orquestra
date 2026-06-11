@@ -164,3 +164,11 @@ describe('POST /api/strategy/chat', () => {
     } finally { delete process.env.DASHBOARD_TOKEN }
   })
 })
+
+describe('GET /api/datanets', () => {
+  it('returns an id→name object; tolerates a missing reppo CLI by serving {}', async () => {
+    const r = await get('/api/datanets')
+    expect(r.status).toBe(200)
+    expect(typeof JSON.parse(r.body)).toBe('object') // {} in tests (no CLI on PATH with creds)
+  })
+})
