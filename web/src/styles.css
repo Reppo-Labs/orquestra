@@ -53,6 +53,16 @@ a { color: var(--accent); }
 .diff-line { font-size: 12px; margin-bottom: 8px; color: var(--muted); }
 .diff-line.dirty { color: var(--warn); }
 
+/* ── Panel transcript (multi-agent decisions) ── */
+.panel-badge {
+  margin-left: 6px; background: #2a2440; color: #b39ae5; border: 1px solid #4a3f70;
+  border-radius: 999px; font-size: 10px; padding: 1px 7px; cursor: pointer;
+}
+.panel-badge:hover { background: #36305a; }
+.panel-transcript { background: #0e1219; border-left: 2px solid #b39ae5; padding: 8px 12px; font-size: 12px; line-height: 1.6; }
+.panel-persona { color: #b39ae5; font-weight: 600; text-transform: capitalize; }
+.panel-judge { margin-top: 4px; color: var(--pos); }
+
 /* ── Strategy settings ── */
 .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; }
 .settings label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
