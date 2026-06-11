@@ -103,7 +103,7 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       // Atomic write (temp + rename) — the node hot-reloads it at the next cycle.
       const finalPath = join(dataDir, 'strategy.config.json')
       const tmpPath = finalPath + '.tmp'
-      writeFileSync(tmpPath, JSON.stringify(body, null, 2))
+      writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2))
       renameSync(tmpPath, finalPath)
       json(res, 200, { saved: true, appliesNextCycle: true })
       return
