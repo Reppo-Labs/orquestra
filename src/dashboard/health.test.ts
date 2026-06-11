@@ -61,7 +61,29 @@ describe('buildHealth', () => {
   })
 
   it('handles an empty log', () => {
-    expect(buildHealth([])).toEqual({ entriesScanned: 0, datanets: [] })
+    expect(buildHealth([])).toEqual({ entriesScanned: 0, datanets: [], txRate: { executed: 0, failed: 0, rate: null } })
+  })
+
+  it('computes txRate per datanet and overall: executed/(executed+error), refused EXCLUDED', () => {
+    const report = buildHealth([
+      e({ kind: 'vote', status: 'executed', txHash: '0x1' }),
+      e({ kind: 'vote', status: 'executed', txHash: '0x2' }),
+      e({ kind: 'mint', status: 'error', detail: BAD_NAME }),
+      e({ kind: 'vote', status: 'refused-budget' }),          // excluded from rate
+      e({ kind: 'vote', status: 'executed', datanetId: '9', txHash: '0x3' }),
+    ])
+    const d2 = report.datanets.find((d) => d.datanetId === '2')!
+    expect(d2.txRate).toEqual({ executed: 2, failed: 1, rate: 2 / 3 })
+    const d9 = report.datanets.find((d) => d.datanetId === '9')!
+    expect(d9.txRate).toEqual({ executed: 1, failed: 0, rate: 1 })
+    expect(report.txRate).toEqual({ executed: 3, failed: 1, rate: 3 / 4 })
+  })
+
+  it('txRate.rate is null when there were no attempts (no executed, no error)', () => {
+    const report = buildHealth([e({ kind: 'skip', status: 'skipped', reason: 'r' })])
+    const d2 = report.datanets.find((d) => d.datanetId === '2')!
+    expect(d2.txRate).toEqual({ executed: 0, failed: 0, rate: null })
+    expect(report.txRate).toEqual({ executed: 0, failed: 0, rate: null })
   })
 
   it('windowing: ignores entries older than sinceMs while keeping newer ones', () => {

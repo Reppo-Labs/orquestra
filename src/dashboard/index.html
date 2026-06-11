@@ -35,7 +35,8 @@
   <div id="earnBanner" class="muted" style="margin-bottom:16px"></div>
   <div class="cards" id="cards"></div>
   <h2 style="font-size:15px">Cycle health</h2>
-  <table id="healthTable"><thead><tr><th>Datanet</th><th>Votes ✓/⊘/✗</th><th>Mints ✓/⊘/✗</th><th>Skips</th><th>Top error</th></tr></thead><tbody></tbody></table>
+  <table id="healthTable"><thead><tr><th>Datanet</th><th>Votes ✓/⊘/✗</th><th>Mints ✓/⊘/✗</th><th>Tx rate</th><th>Skips</th><th>Top error</th></tr></thead><tbody></tbody></table>
+  <div id="txOverall" class="muted" style="margin:-16px 0 16px 0"></div>
   <div id="idle" style="margin-bottom:24px"></div>
   <h2 style="font-size:15px">Budget burn</h2>
   <div class="cards" id="budget"></div>
@@ -78,9 +79,16 @@ async function load() {
   // Cycle health: per-datanet outcome counts + dominant error code
   const hRows = (health?.datanets ?? [])
   const kc = (c) => `${c.executed}/${c.refused}/${c.error}`
+  const rateCell = (t) => t && t.rate !== null
+    ? `<span class="${t.rate >= 0.9 ? 'pos' : t.rate >= 0.5 ? '' : 'neg'}">${Math.round(t.rate * 100)}%</span> <span class="muted">(${t.executed}✓/${t.failed}✗)</span>`
+    : '<span class="muted">—</span>'
   document.querySelector('#healthTable tbody').innerHTML = hRows.length
-    ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
-    : '<tr><td colspan="5" class="muted">no activity yet</td></tr>'
+    ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${rateCell(d.txRate)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted">no activity yet</td></tr>'
+  const ot = health?.txRate
+  document.getElementById('txOverall').innerHTML = ot && ot.rate !== null
+    ? `overall tx success: ${rateCell(ot)} over the 7-day window`
+    : ''
   // Idle datanets: why a configured datanet is doing nothing RIGHT NOW (newest entry
   // is a skip) — a stale skip reason from before activity resumed must not show.
   const idle = hRows.filter(d => d.idle && d.lastSkipReason)

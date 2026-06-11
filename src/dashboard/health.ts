@@ -2,6 +2,9 @@
 import type { ActivityEntry } from './activityLog.js'
 
 export interface KindCounts { executed: number; refused: number; error: number }
+/** On-chain attempt outcome: executed vs error. Budget refusals are NOT failures —
+ *  no tx was attempted — so they are excluded from the rate. */
+export interface TxRate { executed: number; failed: number; rate: number | null }
 export interface DatanetHealth {
   datanetId: string
   votes: KindCounts
@@ -15,8 +18,10 @@ export interface DatanetHealth {
   /** true when the datanet's NEWEST entry is a skip — i.e. it is idle right now.
    *  A skip followed by later activity is history, not current idleness. */
   idle: boolean
+  /** executed vs failed tx attempts across vote+mint+claim (refused excluded). */
+  txRate: TxRate
 }
-export interface HealthReport { entriesScanned: number; datanets: DatanetHealth[] }
+export interface HealthReport { entriesScanned: number; datanets: DatanetHealth[]; txRate: TxRate }
 
 /** Extract the reppo CLI error code from an entry detail. The CLI embeds
  *  `{"error":{"code":"..."}}` inside a longer "Command failed: …" message, so a
@@ -49,7 +54,7 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
   const errCounts = new Map<string, Map<string, number>>()
   const net = (id: string): DatanetHealth => {
     let n = nets.get(id)
-    if (!n) { n = { datanetId: id, votes: counts(), mints: counts(), claims: counts(), skips: 0, topErrors: [], idle: false }; nets.set(id, n) }
+    if (!n) { n = { datanetId: id, votes: counts(), mints: counts(), claims: counts(), skips: 0, topErrors: [], idle: false, txRate: { executed: 0, failed: 0, rate: null } }; nets.set(id, n) }
     return n
   }
   const seen = new Set<string>()
@@ -78,8 +83,18 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
       .map(([code, count]) => ({ code, count }))
       .sort((a, b) => b.count - a.count)
   }
+  const finalize = (executed: number, failed: number): TxRate =>
+    ({ executed, failed, rate: executed + failed > 0 ? executed / (executed + failed) : null })
+  let allExecuted = 0, allFailed = 0
+  for (const n of nets.values()) {
+    const executed = n.votes.executed + n.mints.executed + n.claims.executed
+    const failed = n.votes.error + n.mints.error + n.claims.error
+    n.txRate = finalize(executed, failed)
+    allExecuted += executed; allFailed += failed
+  }
   return {
     entriesScanned: entries.length,
     datanets: [...nets.values()].sort((a, b) => a.datanetId.localeCompare(b.datanetId, undefined, { numeric: true })),
+    txRate: finalize(allExecuted, allFailed),
   }
 }
