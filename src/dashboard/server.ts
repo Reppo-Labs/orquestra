@@ -25,13 +25,18 @@ function safeConfig(dataDir: string): Record<string, unknown> {
   if (!existsSync(path)) return {}
   try {
     const c = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
+    // Prefer the CANONICAL schema parse (defaults + transforms applied) so the
+    // strategy editor always receives a complete, Save-able config — budget and
+    // stake are NOT secrets (caps already surface via the snapshot).
+    const parsed = StrategyConfigSchema.safeParse(c)
+    if (parsed.success) {
+      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake } = parsed.data
+      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake }
+    }
+    // tolerant fallback for a file the schema rejects (node likely won't run on it either)
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
-      // raw file may omit the key; the schema defaults it to true — mirror that here
-      // so the header doesn't claim "claim off" for a node that IS claiming.
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
-      // budget + stake are NOT secrets (caps already surface via the snapshot) and the
-      // strategy editor needs the FULL config to round-trip a valid Save.
       budget: c.budget, stake: c.stake,
     }
   } catch (e) {
