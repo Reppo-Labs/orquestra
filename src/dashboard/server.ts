@@ -1,11 +1,11 @@
 // src/dashboard/server.ts
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { writeFileSync, renameSync } from 'node:fs'
+import { writeFileSync, renameSync, statSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { readActivity } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
@@ -16,7 +16,29 @@ import { runStrategyChat, type ChatMessage } from './strategyChat.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import type { LanguageModel } from 'ai'
 
-const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
+// The built SPA (web/ → vite build) lands in a `public/` dir next to this file.
+const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'public')
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.map': 'application/json',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+}
+
+/** Resolve a request path to a file inside publicDir, or null. The startsWith
+ *  guard keeps raw `..` request paths from escaping the public dir. */
+function staticFile(publicDir: string, url: string): string | null {
+  const root = resolve(publicDir)
+  const path = normalize(join(root, url === '/' ? '/index.html' : url))
+  if (!path.startsWith(root + sep) && path !== root) return null
+  try { return statSync(path).isFile() ? path : null } catch { return null }
+}
 
 export interface DashboardHandle { close(): Promise<void>; port: number }
 
@@ -128,11 +150,6 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       json(res, 200, { saved: true, appliesNextCycle: true })
       return
     }
-    if (url === '/' || url === '/index.html') {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      res.end(existsSync(HTML_PATH) ? readFileSync(HTML_PATH, 'utf-8') : '<h1>Orquestra</h1>')
-      return
-    }
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
     if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
     if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
@@ -140,12 +157,30 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     // means hours at high cadence, months at low). 100k limit is a safety ceiling.
     if (url === '/api/health') { json(res, 200, buildHealth(readActivity(dataDir, { limit: 100_000 }), { sinceMs: Date.now() - 7 * 24 * 3600_000 })); return }
     if (url === '/api/datanets') { json(res, 200, await datanetNames()); return }
-    if (url === '/favicon.ico') { res.writeHead(204); res.end(); return }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
       const activity = readActivity(dataDir, { limit: 5000 })
       const pnl = snapshot ? derivePnl(snapshot, activity) : null
       json(res, 200, { pnl, snapshot }); return
+    }
+    // Static SPA: exact asset first, then index.html fallback so client-side
+    // routes deep-link. /api/* never reaches here (handled or 404'd above).
+    if (req.method === 'GET' && !url.startsWith('/api/')) {
+      const pubDir = opts.publicDir ?? PUBLIC_DIR
+      const exact = staticFile(pubDir, url)
+      if (!exact && url === '/favicon.ico') { res.writeHead(204); res.end(); return }
+      const file = exact ?? staticFile(pubDir, '/index.html')
+      if (file) {
+        res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' })
+        res.end(readFileSync(file))
+        return
+      }
+      // no built SPA on disk (dev/test without `vite build`) — minimal placeholder at /
+      if (url === '/' || url === '/index.html') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        res.end('<h1>Orquestra</h1>')
+        return
+      }
     }
     json(res, 404, { error: 'not found' })
   } catch (e) {
@@ -155,7 +190,11 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
 
 /** Start the read-only dashboard server. Binds 0.0.0.0 (docker -p maps the port);
  *  restrict exposure with `-p 127.0.0.1:7070:7070`. */
-export interface DashboardOpts { chatModel?: LanguageModel }
+export interface DashboardOpts {
+  chatModel?: LanguageModel
+  /** Override the built-SPA dir (defaults to `public/` beside this file); tests use this. */
+  publicDir?: string
+}
 
 export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
   const server = createServer((req, res) => { void handle(dataDir, req, res, opts) })

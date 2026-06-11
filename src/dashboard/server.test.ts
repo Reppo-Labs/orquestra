@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { request as httpRequest } from 'node:http'
 import { startDashboard, type DashboardHandle } from './server.js'
 import { appendActivity } from './activityLog.js'
 import { writeEarnStatus } from './earnStatus.js'
@@ -162,6 +163,64 @@ describe('POST /api/strategy/chat', () => {
       expect(r.status).toBe(503)
       expect(r.body).toMatch(/chat unavailable/i)
     } finally { delete process.env.DASHBOARD_TOKEN }
+  })
+})
+
+describe('static SPA serving (publicDir)', () => {
+  let pub: string
+  let spa: DashboardHandle
+  beforeEach(async () => {
+    pub = mkdtempSync(join(tmpdir(), 'orq-pub-'))
+    writeFileSync(join(pub, 'index.html'), '<html><body>orquestra spa</body></html>')
+    mkdirSync(join(pub, 'assets'))
+    writeFileSync(join(pub, 'assets', 'app.js'), 'console.log("spa")')
+    spa = await startDashboard(dir, 0, { publicDir: pub })
+  })
+  afterEach(async () => { await spa.close(); rmSync(pub, { recursive: true, force: true }) })
+
+  const getSpa = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${spa.port}${path}`)
+    return { status: res.status, type: res.headers.get('content-type') ?? '', body: await res.text() }
+  }
+
+  it('serves index.html at / with html content type', async () => {
+    const r = await getSpa('/')
+    expect(r.status).toBe(200)
+    expect(r.type).toMatch(/text\/html/)
+    expect(r.body).toContain('orquestra spa')
+  })
+
+  it('serves assets with their content type', async () => {
+    const r = await getSpa('/assets/app.js')
+    expect(r.status).toBe(200)
+    expect(r.type).toMatch(/javascript/)
+    expect(r.body).toContain('spa')
+  })
+
+  it('falls back to index.html for unknown non-API routes (SPA deep links)', async () => {
+    const r = await getSpa('/some/client/route')
+    expect(r.status).toBe(200)
+    expect(r.body).toContain('orquestra spa')
+  })
+
+  it('API routes are NOT swallowed by the SPA fallback', async () => {
+    const r = await getSpa('/api/config')
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toHaveProperty('cadenceHours')
+  })
+
+  it('path traversal cannot escape the public dir', async () => {
+    // raw http request: fetch() would normalize the .. segments client-side
+    const body = await new Promise<string>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: spa.port, path: '/../strategy.config.json' }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP(s))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(body).not.toContain('horizonDays') // must not leak the data dir
   })
 })
 

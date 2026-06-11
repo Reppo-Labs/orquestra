@@ -3,8 +3,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
 RUN npm ci
+COPY web/package*.json ./web/
+RUN npm ci --prefix web
 COPY tsconfig.json ./
 COPY src ./src
+COPY web ./web
 RUN npm run build
 
 FROM node:20-slim
