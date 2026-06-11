@@ -89,13 +89,23 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       const currentEpoch = deriveCurrentEpoch(pods)
       const voted = w.dedup.getVotedPodIds(id)
       const ownSet = new Set(own), votedSet = new Set(voted)
+      // Name-based own-pod backstop: the platform's creator field is empty on our
+      // pods, so the creator-based query above misses some — each miss wastes an
+      // LLM scoring call and burns a one-time CANNOT_VOTE_FOR_OWN_POD error. Our
+      // executed mints' names (the earn-attribution source) close the gap.
+      const mintedNames = new Set(
+        readActivity(w.dataDir, { limit: 100_000 })
+          .filter((e) => e.kind === 'mint' && e.status === 'executed' && e.podName)
+          .map((e) => e.podName as string),
+      )
+      for (const p of pods) if (p.name && mintedNames.has(p.name)) ownSet.add(p.podId)
       // Enrich ONLY pods we might actually vote on (current epoch, not ours, not
       // voted) — content fetches are the slow part of a cycle.
       for (const p of pods) {
         const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
         if (eligible && p.url) { const c = await io.fetchContent(p.url); if (c) p.description = `${p.name}\n\n${c}` }
       }
-      return { pods, filter: { currentEpoch, ownPodIds: own, votedPodIds: voted } }
+      return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
     },
     getAdapter: (id) => w.adapters.find((a) => a.id === id),
     voteScorer: w.scorer,
