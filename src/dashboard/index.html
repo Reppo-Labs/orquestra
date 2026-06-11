@@ -78,6 +78,7 @@ async function load() {
     fetch('/api/health').then(r => r.json()).catch(() => null),
     fetch('/api/datanets').then(r => r.json()).catch(() => ({})),
   ])
+  window._netNames = netNames || {} // BEFORE any render below uses netLabel()
   const p = pnlRes.pnl, snap = pnlRes.snapshot
   document.getElementById('earnBanner').textContent = earn
     ? `Earn-test: ${earn.earning ? 'EARNING' : (earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet')} · ${earn.mintedPods} pod(s), ${fmt(earn.claimableReppo)} claimable + ${fmt(earn.claimedReppo)} claimed REPPO, ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
@@ -133,7 +134,6 @@ async function load() {
     ? em.map(e => `<tr><td>${esc(e.podId)}</td><td>${esc(e.datanetId)}</td><td>${esc(e.epoch)}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">none — all claimed</td></tr>'
   window._activity = act
-  window._netNames = netNames || {}
   if (!window._candidate && cfg && cfg.datanets) initStrategy(cfg)
   else renderStrategy() // names may have arrived after first render
   renderActivity()
