@@ -1,4 +1,6 @@
 // src/wallet/intents.ts
+import type { PanelTranscript } from '../panel/types.js'
+
 export interface VoteIntent {
   kind: 'vote'
   datanetId: string
@@ -7,6 +9,8 @@ export interface VoteIntent {
   /** 1-10 conviction from the voter; used to prioritise scarce voting power. */
   conviction: number
   reason: string
+  /** multi-agent panel transcript when a panel produced this decision (see src/panel). */
+  panel?: PanelTranscript
 }
 
 export interface MintIntent {
@@ -28,6 +32,8 @@ export interface MintIntent {
   sourceUrl?: string
   /** pod card image → mint-pod --image-url. */
   imageUrl?: string
+  /** multi-agent panel transcript when a panel produced this decision (see src/panel). */
+  panel?: PanelTranscript
 }
 
 export interface ClaimIntent {

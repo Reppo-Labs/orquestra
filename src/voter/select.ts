@@ -31,18 +31,19 @@ export async function selectVotes(
     // Per-pod isolation: a single pod's scoring failure (e.g. the model returns
     // output that doesn't match the score schema) skips THAT pod, not the whole
     // datanet — the other pods still get scored + voted.
-    let result: { score: number; reason: string }
+    let result: { score: number; reason: string; panel?: VoteIntent['panel'] }
     try {
-      result = await scorer.scorePod(pod, rubric)
+      // Pass the thresholds so a tiered (panel) scorer knows the ambiguity band.
+      result = await scorer.scorePod(pod, rubric, { like, dislike })
     } catch (e) {
       console.error(`orquestra: pod ${pod.podId} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
       continue
     }
-    const { score, reason } = result
+    const { score, reason, panel } = result
     if (score >= like) {
-      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'up', conviction: score, reason })
+      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'up', conviction: score, reason, ...(panel ? { panel } : {}) })
     } else if (score <= dislike) {
-      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'down', conviction: score, reason })
+      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'down', conviction: score, reason, ...(panel ? { panel } : {}) })
     }
     // mid-range → skip (no intent)
   }

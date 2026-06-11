@@ -13,6 +13,7 @@ const config = StrategyConfigSchema.parse({
   stake: { lockReppo: 0, lockDurationDays: 7 },
   budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
   datanets: { '2': { vote: true, mint: true, strictness: 'balanced', adapter: 'gdelt', adapterParams: { focus: 'energy', topN: 3 } } },
+  notes: 'the brief',
 })
 
 const pod = (id: string, over: Partial<VoterPod> = {}): VoterPod =>
@@ -25,12 +26,11 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
   return {
     dataDir: dir, config,
-    scorer: { scorePod: async () => ({ score: 8, reason: 'r' }) },
+    model: {} as CycleWiring['model'], // scorers aren't exercised in these tests
     ledger: { startCycle: vi.fn(), state: {} } as unknown as CycleWiring['ledger'],
     executor: {} as CycleWiring['executor'],
     dedup: new DedupState(dir),
     adapters: [{ id: 'gdelt', matches: () => true, discover: async () => [] }],
-    strategyBrief: 'the brief',
     ...over,
   }
 }
@@ -101,6 +101,15 @@ describe('buildCycleDeps', () => {
     expect(s.brief).toBe('the brief')
     expect(s.focus).toBe('energy')
     expect(s.topN).toBe(3)
+  })
+
+  it('reads the operator brief live from config.notes (hot-reload, not captured at build)', () => {
+    const w = wiring()
+    const deps = buildCycleDeps(w)
+    expect(deps.strategyFor!('2').brief).toBe('the brief')
+    // Simulate buildTick swapping in a freshly-reloaded config with edited notes.
+    w.config = { ...w.config, notes: 'edited via dashboard' }
+    expect(deps.strategyFor!('2').brief).toBe('edited via dashboard')
   })
 
   it('dedup closures thread through to DedupState (vote, mint, grant, revoke)', async () => {

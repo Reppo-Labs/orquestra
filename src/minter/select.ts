@@ -34,16 +34,34 @@ export async function selectMints(
   for (const c of candidates) {
     if (seen.has(c.canonicalKey)) continue
     seen.add(c.canonicalKey) // dedup within the batch too
-    const { score } = await opts.scorer.scoreCandidate(c, rubric)
+    // Per-candidate isolation (parity with selectVotes): a single candidate's
+    // scoring failure — including a panel that could not reach a verdict — skips
+    // THAT candidate, not the whole datanet's mint batch.
+    let result: { score: number; reason?: string; panel?: MintIntent['panel'] }
+    try {
+      result = await opts.scorer.scoreCandidate(c, rubric)
+    } catch (e) {
+      console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+      continue
+    }
+    const { score, panel } = result
     if (score < opts.minScore) continue
     const datasetPath = join(dataOut, `mint-${c.canonicalKey}.json`)
-    writeFileSync(datasetPath, JSON.stringify(c.dataset))
+    // The dataset write is inside the per-candidate isolation too: a single disk
+    // failure skips THAT candidate, it does not abort the whole datanet's batch.
+    try {
+      writeFileSync(datasetPath, JSON.stringify(c.dataset))
+    } catch (e) {
+      console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) dataset write failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+      continue
+    }
     intents.push({
       kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
       podName: clampPodName(c.podName), podDescription: clampPodName(c.podDescription, POD_DESC_MAX), datasetPath,
       estReppoCost: opts.estReppoCost ?? 0, selfScore: score,
       ...(c.sourceUrl ? { sourceUrl: c.sourceUrl } : {}),
       ...(c.imageUrl ? { imageUrl: c.imageUrl } : {}),
+      ...(panel ? { panel } : {}),
     })
   }
   return intents

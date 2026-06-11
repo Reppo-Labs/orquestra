@@ -2,11 +2,14 @@
 // Composition factories extracted from index.ts so the wiring that decides what
 // gets signed (dedup closures, pod enrichment, adapter routing) is unit-testable.
 // index.ts stays a thin shell: env, service construction, argv dispatch, signals.
+import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
 import type { CycleDeps, CycleReport } from './cycle.js'
-import type { DatanetAdapter } from '../adapter/types.js'
-import type { PodScorer, VoterPod } from '../voter/types.js'
+import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
+import type { VoterPod } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
+import { createLlmScorer } from '../voter/score.js'
+import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
@@ -57,12 +60,12 @@ const defaultIo: WiringIo = {
 export interface CycleWiring {
   dataDir: string
   config: StrategyConfig
-  scorer: PodScorer
+  /** model the screen scorer + deliberation panel run on. */
+  model: LanguageModel
   ledger: BudgetLedger
   executor: WalletExecutor
   dedup: DedupState
   adapters: DatanetAdapter[]
-  strategyBrief: string
   io?: Partial<WiringIo>
 }
 
@@ -70,10 +73,31 @@ export interface CycleWiring {
  *  is threaded explicitly; everything IO is injectable for tests. */
 export function buildCycleDeps(w: CycleWiring): CycleDeps {
   const io: WiringIo = { ...defaultIo, ...w.io }
+  // The operator brief is config.notes, read live so dashboard edits hot-reload
+  // (buildTick swaps w.config each cycle). Used by the screen scorer, the panel
+  // judge, and the adapters.
+  const liveBrief = (): string => w.config.notes
   const strategyFor = (id: string): Record<string, unknown> => {
     const p = (w.config.datanets[id] as { adapterParams?: Record<string, unknown> } | undefined)?.adapterParams ?? {}
-    return { brief: w.strategyBrief, ...p }
+    return { brief: liveBrief(), ...p }
   }
+
+  // Screen scorer + panel decorators are built ONCE. They read the brief and the
+  // deliberation settings live (via getters / liveBrief) so a hot-reload of either
+  // takes effect on the next decision without rebuilding anything.
+  const screenScorer = createLlmScorer(w.model, { brief: liveBrief })
+  const getDeliberation = () => w.config.deliberation
+  const voteScorer = createPanelPodScorer(screenScorer, { model: w.model, getDeliberation, getBrief: liveBrief })
+  // Mint base scorer: score the DATASET against the publisher spec, not just the
+  // summary line — otherwise every candidate scores low and nothing mints (see
+  // src/minter/score.ts). The panel (when enabled) replaces this for mints.
+  const candidateBase: CandidateScorer = {
+    scoreCandidate: (cand, rub) => {
+      const { name, description } = candidateScoreInput(cand)
+      return screenScorer.scorePod({ podId: cand.canonicalKey, validityEpoch: '', name, description }, rub)
+    },
+  }
+  const candidateScorer = createPanelCandidateScorer(candidateBase, { model: w.model, getDeliberation, getBrief: liveBrief })
   return {
     dataDir: w.dataDir,
     topN: 12,
@@ -108,16 +132,8 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
     },
     getAdapter: (id) => w.adapters.find((a) => a.id === id),
-    voteScorer: w.scorer,
-    candidateScorer: {
-      scoreCandidate: (c, r) => {
-        // Score the DATASET against the publisher spec, not just the summary line —
-        // otherwise every candidate scores low ("no trade detail / no verification")
-        // and nothing ever mints. See src/minter/score.ts.
-        const { name, description } = candidateScoreInput(c)
-        return w.scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
-      },
-    },
+    voteScorer,
+    candidateScorer,
     seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
     executor: w.executor,
     ledger: w.ledger,

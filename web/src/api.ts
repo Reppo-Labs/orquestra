@@ -40,6 +40,12 @@ export interface Snapshot {
   emissionsDue: { pods: EmissionPod[] }
 }
 
+export interface PanelTranscript {
+  screenScore?: number
+  panelists: { persona: string; score: number; argument: string }[]
+  judge: { score: number; reason: string }
+}
+
 export interface ActivityRow {
   ts: string | number
   kind: 'vote' | 'mint' | 'claim' | 'skip'
@@ -55,6 +61,7 @@ export interface ActivityRow {
   podName?: string
   epoch?: string | number
   reppoClaimed?: number
+  panel?: PanelTranscript
 }
 
 export interface HealthCounts { executed: number; refused: number; error: number }
@@ -97,6 +104,7 @@ export interface StrategyConfig {
   notes?: string
   budget?: Record<string, number | undefined>
   stake?: Record<string, number | undefined>
+  deliberation?: { enabled?: boolean; voteBand?: number }
 }
 
 export interface ChatMsg { role: 'user' | 'assistant'; content: string }

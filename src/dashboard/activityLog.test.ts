@@ -58,6 +58,20 @@ describe('activityLog', () => {
     expect(row.detail).toContain('--rpc-url <redacted>')
   })
 
+  it('redacts secrets inside the panel transcript (panelist arguments + judge reason)', () => {
+    appendActivity(dir, entry({
+      panel: {
+        screenScore: 8,
+        panelists: [{ persona: 'bull', score: 9, argument: 'see --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123' }],
+        judge: { score: 7, reason: 'verified via --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123' },
+      },
+    }))
+    const [row] = readActivity(dir, { limit: 1 })
+    expect(JSON.stringify(row.panel)).not.toContain('SECRET123')
+    expect(row.panel!.panelists[0].argument).toContain('<redacted>')
+    expect(row.panel!.judge.reason).toContain('<redacted>')
+  })
+
   it('serves repeat reads from cache and picks up appends (cache invalidated by size/mtime)', () => {
     appendActivity(dir, entry({ podId: '1' }))
     expect(readActivity(dir, { limit: 10 })).toHaveLength(1)

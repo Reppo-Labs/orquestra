@@ -81,4 +81,35 @@ describe('selectMints (minScore 7)', () => {
     expect(intents).toHaveLength(1)           // second 'a' deduped within batch
     expect(intents[0].selfScore).toBe(8)
   })
+
+  it('threads a panel transcript from the score onto the mint intent', async () => {
+    const panel = { panelists: [{ persona: 'bear', score: 8, argument: 'a' }], judge: { score: 8, reason: 'j' } }
+    const withPanel: CandidateScorer = { scoreCandidate: async () => ({ score: 8, reason: 'j', panel }) }
+    const intents = await selectMints('9', [cand('a')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: withPanel })
+    expect(intents[0].panel).toEqual(panel)
+  })
+
+  it('per-candidate isolation: a scorer that throws on one candidate skips it, others still mint', async () => {
+    const flaky: CandidateScorer = {
+      scoreCandidate: async (c) => {
+        if (c.canonicalKey === 'bad') throw new Error('panel: all personas failed')
+        return { score: 9, reason: 'ok' }
+      },
+    }
+    const intents = await selectMints('9', [cand('bad'), cand('good')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: flaky })
+    expect(intents.map((i) => i.canonicalKey)).toEqual(['good']) // bad skipped, datanet not aborted
+  })
+
+  it('per-candidate isolation: a dataset write failure skips that candidate, others still mint', async () => {
+    // Point dataDir at a path where the pending-data dir cannot be created for one
+    // candidate by making the dataset unserializable (circular) — write throws.
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    const c1 = cand('bad'); c1.dataset = circular
+    const intents = await selectMints('9', [c1, cand('good')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ bad: 9, good: 9 }) })
+    expect(intents.map((i) => i.canonicalKey)).toEqual(['good']) // bad's write threw, datanet not aborted
+  })
 })

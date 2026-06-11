@@ -131,6 +131,7 @@ export function StrategyPanel({ config, netNames, onReconfigure }: {
 
   const budget = candidate.budget ?? {}
   const stake = candidate.stake ?? {}
+  const delib = candidate.deliberation ?? {}
   const params = (d: DatanetEntry) => (d.adapterParams ?? {}) as { focus?: string; angle?: string; topN?: number; minImportance?: number }
 
   return (
@@ -205,6 +206,22 @@ export function StrategyPanel({ config, netNames, onReconfigure }: {
           else b.grantReppoMax = n
           c.budget = b
         })} />
+      </div>
+      <div className="settings">
+        <label>
+          multi-agent panel
+          <select
+            value={delib.enabled === false ? 'off' : 'on'}
+            onChange={(e) => edit((c) => { c.deliberation = { ...c.deliberation, enabled: e.target.value === 'on' } })}
+          >
+            <option value="on">on (bull / bear / rubric-purist + judge)</option>
+            <option value="off">off (single scorer)</option>
+          </select>
+        </label>
+        <Num
+          label="vote panel band (0 = mints only)" int value={delib.voteBand}
+          onChange={(n) => edit((c) => { c.deliberation = { ...c.deliberation, voteBand: n ?? 0 } })}
+        />
       </div>
       <label className="notes-label">
         goals / strategy notes (the brief the node votes and mints by)
