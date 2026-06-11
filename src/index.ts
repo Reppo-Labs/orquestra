@@ -132,7 +132,7 @@ async function start(): Promise<void> {
 
   const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
   const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
-  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort) : null
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —

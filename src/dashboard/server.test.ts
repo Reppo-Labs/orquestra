@@ -137,3 +137,23 @@ describe('write layer — token gate (fail-closed)', () => {
     } finally { delete process.env.DASHBOARD_TOKEN }
   })
 })
+
+describe('POST /api/strategy/chat', () => {
+  it('is token-gated like /api/strategy (503 unset, 401 wrong)', async () => {
+    delete process.env.DASHBOARD_TOKEN
+    expect((await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] })).status).toBe(503)
+    process.env.DASHBOARD_TOKEN = 'secret-token'
+    try {
+      expect((await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] }, { 'x-orquestra-token': 'nope' })).status).toBe(401)
+    } finally { delete process.env.DASHBOARD_TOKEN }
+  })
+
+  it('503 when the server has no chat model (this test server passes none)', async () => {
+    process.env.DASHBOARD_TOKEN = 'secret-token'
+    try {
+      const r = await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] }, { 'x-orquestra-token': 'secret-token' })
+      expect(r.status).toBe(503)
+      expect(r.body).toMatch(/chat unavailable/i)
+    } finally { delete process.env.DASHBOARD_TOKEN }
+  })
+})

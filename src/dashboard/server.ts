@@ -12,6 +12,8 @@ import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
 import { StrategyConfigSchema } from '../config/schema.js'
+import { runStrategyChat, type ChatMessage } from './strategyChat.js'
+import type { LanguageModel } from 'ai'
 
 const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
 
@@ -70,15 +72,29 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
-async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
   try {
     if (req.method === 'POST') {
-      if (url !== '/api/strategy') { json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return }
+      if (url !== '/api/strategy' && url !== '/api/strategy/chat') {
+        json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return
+      }
       const auth = writeAuth(req)
       if (!auth.ok) { json(res, auth.code, { error: auth.error }); return }
       let body: unknown
       try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
+
+      if (url === '/api/strategy/chat') {
+        if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
+        const messages = (body as { messages?: ChatMessage[] })?.messages
+        if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
+        const currentRaw = JSON.parse(readFileSync(join(dataDir, 'strategy.config.json'), 'utf-8')) as unknown
+        const current = StrategyConfigSchema.parse(currentRaw)
+        const result = await runStrategyChat({ messages, currentConfig: current, model: opts.chatModel })
+        json(res, 200, result)
+        return
+      }
+
       const parsed = StrategyConfigSchema.safeParse(body)
       if (!parsed.success) { json(res, 400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) }); return }
       // Atomic write (temp + rename) — the node hot-reloads it at the next cycle.
@@ -115,8 +131,10 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
 
 /** Start the read-only dashboard server. Binds 0.0.0.0 (docker -p maps the port);
  *  restrict exposure with `-p 127.0.0.1:7070:7070`. */
-export function startDashboard(dataDir: string, port: number): Promise<DashboardHandle> {
-  const server = createServer((req, res) => { void handle(dataDir, req, res) })
+export interface DashboardOpts { chatModel?: LanguageModel }
+
+export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
+  const server = createServer((req, res) => { void handle(dataDir, req, res, opts) })
   return new Promise((resolve) => {
     server.listen(port, () => {
       const actual = (server.address() as AddressInfo).port
