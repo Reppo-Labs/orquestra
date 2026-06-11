@@ -11,12 +11,25 @@ const CLAIM_GAS_EST_ETH = 0.003
 // report the exact fee, so we reserve this and keep it as spent on success (over-count,
 // never under-count — matches the gas-reservation philosophy).
 const GRANT_REPPO_EST = 200
+/** Conservative mint-fee fallback (max observed: 200 REPPO) used only when the
+ *  on-chain fee read fails — keeps the cap honest (over-count, never silent 0). */
+export const MINT_REPPO_FALLBACK = 200
+
+/** Reads the actual REPPO fee a landed mint tx charged the signer, or undefined
+ *  if it can't be read. The reppo CLI omits the mint fee, so the executor reads
+ *  it from the tx receipt to reconcile the ledger to real spend. */
+export type ReppoFeeReader = (txHash: string) => Promise<number | undefined>
 
 /** The only component that signs. Each public method reserves budget BEFORE
  *  signing (fail-closed), then reconciles to actual gas on success or
  *  releases the reservation on failure. */
 export class WalletExecutor {
-  constructor(private readonly cli: ReppoCli, private readonly ledger: BudgetLedger) {}
+  constructor(
+    private readonly cli: ReppoCli,
+    private readonly ledger: BudgetLedger,
+    /** When set, mint REPPO spend is reconciled to the on-chain fee (CLI omits it). */
+    private readonly reppoFeeReader?: ReppoFeeReader,
+  ) {}
 
   /** One-time veREPPO lock for voting power. Not budget-gated. */
   async lock(args: LockArgs): Promise<ExecResult> {
@@ -85,7 +98,18 @@ export class WalletExecutor {
         this.ledger.releaseMint(res)
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
-      this.ledger.reconcileMint(res, r.gasEth, r.reppoFee)
+      // The CLI reports gasEth but omits the mint REPPO fee (only grant does).
+      // Prefer the CLI value if a future version adds it; else read the actual fee
+      // from the tx receipt; else fall back conservatively so we never record 0.
+      let reppoFee = r.reppoFee
+      if (reppoFee === undefined && this.reppoFeeReader) {
+        reppoFee = await this.reppoFeeReader(r.txHash)
+        if (reppoFee === undefined) {
+          console.warn(`orquestra: could not read mint REPPO fee for ${r.txHash}; recording fallback ${MINT_REPPO_FALLBACK} REPPO (cap may over-count)`)
+          reppoFee = MINT_REPPO_FALLBACK
+        }
+      }
+      this.ledger.reconcileMint(res, r.gasEth, reppoFee)
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseMint(res)

@@ -15,6 +15,7 @@ import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
 import { WalletExecutor } from './wallet/executor.js'
 import { defaultReppoCli } from './reppo/cli.js'
+import { readMintReppoFee } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
@@ -112,7 +113,12 @@ async function start(): Promise<void> {
   // One shared BudgetLedger instance: the executor reserves/records spend on it,
   // and runCycle calls startCycle on it — the single source of budget truth.
   const ledger = new BudgetLedger(DATA_DIR, config.budget)
-  const executor = new WalletExecutor(defaultReppoCli, ledger)
+  // The reppo CLI omits the mint REPPO fee; read it from the tx receipt so the
+  // ledger reconciles to real spend and mintReppoMax is a live cap. Same RPC the
+  // CLI uses; no RPC configured => reader omitted (mint spend keeps the reserved est).
+  const rpcUrl = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
+  const reppoFeeReader = rpcUrl ? (txHash: string) => readMintReppoFee(rpcUrl, txHash) : undefined
+  const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader)
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     scorer: createLlmScorer(model, { brief: strategyBrief }),
