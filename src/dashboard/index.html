@@ -48,6 +48,7 @@
       <button id="saveStrat" style="background:#1c2a3a;color:#6fb3e8;border:1px solid #28405c;border-radius:6px;padding:6px 14px;cursor:pointer">Save (applies next cycle)</button>
       <span id="saveMsg" class="muted"></span>
     </div>
+    <div id="diffSummary" class="k muted" style="margin-bottom:8px">no changes since last save</div>
     <div style="border:1px solid #1c2230;border-radius:8px;background:#121620;padding:10px;margin-bottom:24px">
       <div class="k muted" style="margin-bottom:6px">Strategy assistant — describe a goal ("activate sports on 11", "be more aggressive on geopolitics"); proposals appear in the grid above, nothing applies until you Save.</div>
       <div id="chatLog" style="max-height:180px;overflow-y:auto;font-size:13px;margin-bottom:6px"></div>
@@ -152,8 +153,40 @@ function initStrategy(cfg) {
   // candidate = full config we will save; grid/chat both mutate THIS, never the server.
   window._candidate = JSON.parse(JSON.stringify(cfg))
   delete window._candidate.claimEmissions // safeConfig omits schema-managed fields; keep only what we round-trip
+  // baseline = last persisted state (same normalized shape as candidate) — the diff
+  // is measured against THIS, refreshed only on a successful Save. So an edit shows
+  // "unsaved", and a Save that wrote nothing different reads as "no changes".
+  window._baseline = JSON.parse(JSON.stringify(window._candidate))
   window._chat = []
   renderStrategy()
+}
+const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v)
+const fmtVal = (v) => v === undefined ? '∅' : Array.isArray(v) ? `[${v.join(',')}]` : String(v)
+// Human-readable diff candidate-vs-baseline. Added/removed SUBTREES collapse to one
+// line ("datanets.7 added"); leaf changes show old→new ("budget.mintReppoMax 50→500").
+function configDiff(base, cand) {
+  const out = []
+  const walk = (a, b, path) => {
+    for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+      if (k === '*') continue // wildcard defaults aren't operator-editable in the grid
+      const p = path ? `${path}.${k}` : k
+      const av = a ? a[k] : undefined, bv = b ? b[k] : undefined
+      if (isObj(av) && isObj(bv)) { walk(av, bv, p); continue }
+      if (av === undefined && isObj(bv)) { out.push(`${p} added`); continue }
+      if (bv === undefined && isObj(av)) { out.push(`${p} removed`); continue }
+      if (av !== bv) out.push(`${p} ${fmtVal(av)}→${fmtVal(bv)}`)
+    }
+  }
+  walk(base, cand, '')
+  return out
+}
+// Recompute and render the diff line. Call after every candidate mutation + save.
+function renderDiff() {
+  const el = document.getElementById('diffSummary')
+  if (!el || !window._baseline || !window._candidate) return
+  const d = configDiff(window._baseline, window._candidate)
+  el.textContent = d.length ? `unsaved: ${d.join(' · ')}` : 'no changes since last save'
+  el.style.color = d.length ? '#d9a441' : ''
 }
 function renderStrategy() {
   const c = window._candidate
@@ -174,11 +207,12 @@ function renderStrategy() {
   }
   document.querySelectorAll('#stratGrid tr[data-id]').forEach((tr) => {
     const d = window._candidate.datanets[tr.dataset.id]
-    tr.querySelector('.sg-vote').onchange = (e) => { d.vote = e.target.checked }
-    tr.querySelector('.sg-mint').onchange = (e) => { d.mint = e.target.checked }
-    tr.querySelector('.sg-adapter').onchange = (e) => { if (e.target.value) d.adapter = e.target.value; else delete d.adapter }
-    tr.querySelector('.sg-strict').onchange = (e) => { d.strictness = e.target.value }
+    tr.querySelector('.sg-vote').onchange = (e) => { d.vote = e.target.checked; renderDiff() }
+    tr.querySelector('.sg-mint').onchange = (e) => { d.mint = e.target.checked; renderDiff() }
+    tr.querySelector('.sg-adapter').onchange = (e) => { if (e.target.value) d.adapter = e.target.value; else delete d.adapter; renderDiff() }
+    tr.querySelector('.sg-strict').onchange = (e) => { d.strictness = e.target.value; renderDiff() }
   })
+  renderDiff()
 }
 function chatAppend(role, text, warn) {
   const log = document.getElementById('chatLog')
@@ -218,7 +252,12 @@ document.getElementById('saveStrat').onclick = async () => {
   })
   const out = await r.json()
   msg.textContent = r.ok ? 'saved — applies next cycle' : `error: ${out.error || r.status}`
-  if (r.ok) document.getElementById('stratStatus').textContent = ''
+  if (r.ok) {
+    document.getElementById('stratStatus').textContent = ''
+    // The server now holds what we just sent — rebase the diff so it reads "no changes".
+    window._baseline = JSON.parse(JSON.stringify(window._candidate))
+    renderDiff()
+  }
 }
 function renderActivity() {
   // every field below is network-derived (LLM reasons, pod names, CLI errors) —
