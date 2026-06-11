@@ -71,7 +71,7 @@ export interface CycleWiring {
 export function buildCycleDeps(w: CycleWiring): CycleDeps {
   const io: WiringIo = { ...defaultIo, ...w.io }
   const strategyFor = (id: string): Record<string, unknown> => {
-    const p = (w.config.datanets[id] as { adapterParams?: Record<string, unknown> }).adapterParams ?? {}
+    const p = (w.config.datanets[id] as { adapterParams?: Record<string, unknown> } | undefined)?.adapterParams ?? {}
     return { brief: w.strategyBrief, ...p }
   }
   return {
@@ -127,15 +127,35 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   }
 }
 
-/** Build the scheduler tick: run a cycle, then best-effort snapshot + earn-status
- *  for the dashboard. Reporting failures never abort the loop. */
-export function buildTick(w: CycleWiring, deps: CycleDeps): () => Promise<void> {
+export interface TickOpts {
+  /** Re-read the strategy config each tick (dashboard hot-reload). Throwing keeps
+   *  the LAST-GOOD config — a bad save must not crash the loop. */
+  reloadConfig?: () => StrategyConfig
+  /** false skips the best-effort snapshot/earn reporting (tests). */
+  reporting?: boolean
+}
+
+/** Build the scheduler tick: re-read config, run a cycle, then best-effort
+ *  snapshot + earn-status for the dashboard. Reporting failures never abort the loop. */
+export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}): () => Promise<void> {
+  let config = w.config // last-good
   return async () => {
+    if (opts.reloadConfig) {
+      try {
+        const fresh = opts.reloadConfig()
+        if (JSON.stringify(fresh.budget) !== JSON.stringify(config.budget)) w.ledger.updateCaps(fresh.budget)
+        config = fresh
+        w.config = fresh // buildCycleDeps closures (strategyFor) read w.config at call time
+      } catch (e) {
+        console.error(`orquestra: config reload failed — keeping last-good config: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
     const cycleId = new Date().toISOString()
-    const report: CycleReport = await runCycle(w.config, cycleId, deps)
+    const report: CycleReport = await runCycle(config, cycleId, deps)
     const v = report.datanets.reduce((a, r) => a + r.votes.length, 0)
     const m = report.datanets.reduce((a, r) => a + r.mints.length, 0)
     console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints, ${report.claims.length} claims executed`)
+    if (opts.reporting === false) return
 
     // Snapshot the on-chain view for the dashboard (best-effort; never throws into the loop).
     try {
@@ -145,7 +165,7 @@ export function buildTick(w: CycleWiring, deps: CycleDeps): () => Promise<void> 
         voteGasSpentEth: w.ledger.state.voteGasSpentEth,
         claimGasSpentEth: w.ledger.state.claimGasSpentEth,
         grantReppoSpent: w.ledger.state.grantReppoSpent,
-        caps: w.config.budget,
+        caps: config.budget,
       }
       const snap = await collectSnapshot(w.dataDir, cycleId, {
         balance: () => queryBalanceJson(),
@@ -165,7 +185,7 @@ export function buildTick(w: CycleWiring, deps: CycleDeps): () => Promise<void> 
     try {
       const snap = readSnapshot(w.dataDir)
       const activity = readActivity(w.dataDir, { limit: 100_000 })
-      const mintDatanets = Object.entries(w.config.datanets).filter(([k, d]) => k !== '*' && d.mint).map(([k]) => k)
+      const mintDatanets = Object.entries(config.datanets).filter(([k, d]) => k !== '*' && d.mint).map(([k]) => k)
       // On-chain `creator` is empty on our pods, so identify ours by the mint names we
       // recorded, matched against the full datanet pod list.
       const ourNames = activity
