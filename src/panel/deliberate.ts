@@ -1,11 +1,12 @@
 // src/panel/deliberate.ts — runPanel: three personas score in parallel, then the
 // judge reconciles them into one verdict. Resilient by design: surviving panelists
 // still produce a ruling; total failure is signalled so the caller can fall back.
-import { generateObject, type LanguageModel } from 'ai'
+import type { LanguageModel } from 'ai'
 import type { ZodType } from 'zod'
 import type { PanelistVerdict, PanelTranscript } from './types.js'
 import { PERSONAS, PanelistSchema, buildPersonaPrompt, type PanelInput } from './personas.js'
 import { JudgeSchema, buildJudgePrompt } from './judge.js'
+import { generateObjectWithRetry } from '../llm/generate.js'
 
 /** One structured generation. Injectable so tests script the panel without a real
  *  model (the same seam strategyChat.ts uses). */
@@ -26,19 +27,11 @@ export interface PanelResult {
   transcript: PanelTranscript
 }
 
-/** Default backend: `generateObject` in tool mode with a single retry on a
- *  non-conforming response — mirrors the retry pattern in voter/score.ts. */
+/** Default backend: structured generation in tool mode with a single retry on a
+ *  non-conforming response (shared with the voter scorer). */
 function defaultGenerate(model: LanguageModel): PanelGenerate {
-  return async <T>({ schema, system, prompt }: { schema: ZodType<T>; system: string; prompt: string }): Promise<T> => {
-    let lastErr: unknown
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const { object } = await generateObject({ model, schema, mode: 'tool', system, prompt })
-        return object
-      } catch (e) { lastErr = e }
-    }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
-  }
+  return <T>({ schema, system, prompt }: { schema: ZodType<T>; system: string; prompt: string }): Promise<T> =>
+    generateObjectWithRetry(model, schema, system, prompt)
 }
 
 /** Run the full panel for one pod/candidate. Throws ONLY when no verdict can be

@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { PanelistVerdict } from './types.js'
+import { buildRubricBlock } from '../llm/prompt.js'
 
 /** The judge's ruling is THE score; thresholds apply to it exactly as today. */
 export const JudgeSchema = z.object({
@@ -31,7 +32,7 @@ export function buildJudgePrompt(
     .join('\n')
   const missingBlock = missing.length ? `\n## Missing voices\nThese panelists failed to respond: ${missing.join(', ')}. Judge on the available arguments.\n` : ''
   const prompt =
-    `# Datanet: ${input.rubric.name}\n## Goal\n${input.rubric.goal}\n## Voter rubric (scoring guide)\n${input.rubric.voterRubric}\n` +
+    `${buildRubricBlock(input.rubric)}\n` +
     `${briefBlock}\n# Pod under review (untrusted)\n## Name\n${input.name}\n## Description\n${input.description}\n\n` +
     `# Panel arguments\n${panel}\n${missingBlock}\n` +
     `Return your final 1-10 score and a one-line reason citing the rubric and the decisive argument(s).`

@@ -15,12 +15,13 @@ import { runPanel, type PanelGenerate } from './deliberate.js'
 
 export interface PanelScorerOpts {
   model: LanguageModel
-  /** false → the decorator is a pass-through to the wrapped single scorer (today's behavior). */
-  enabled: boolean
-  /** ± band around like/dislike that convenes a vote panel; 0 = mints only. */
-  voteBand: number
-  /** operator strategy brief — handed to the judge. */
-  brief?: string
+  /** Read the deliberation settings LIVE so a dashboard hot-reload of the
+   *  `deliberation` block takes effect on the next decision. enabled=false →
+   *  pass-through to the wrapped single scorer (today's behavior); voteBand is the
+   *  ± band around like/dislike that convenes a vote panel (0 = mints only). */
+  getDeliberation: () => { enabled: boolean; voteBand: number }
+  /** Operator strategy brief for the judge, read live (dashboard notes edits hot-reload). */
+  getBrief?: () => string
   /** override the panel's generation backend (tests). */
   generate?: PanelGenerate
 }
@@ -34,14 +35,15 @@ export function withinBand(score: number, t: ScoreThresholds, band: number): boo
 export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): PodScorer {
   return {
     async scorePod(pod, rubric, thresholds): Promise<PodScore> {
-      if (!opts.enabled) return base.scorePod(pod, rubric, thresholds)
+      const { enabled, voteBand } = opts.getDeliberation()
+      if (!enabled) return base.scorePod(pod, rubric, thresholds)
       const screen = await base.scorePod(pod, rubric, thresholds)
       // voteBand <= 0 means "mints only" — votes never convene a panel. Otherwise:
       // no thresholds (defensive — the vote path always passes them), or a score
       // decisively outside the band → the cheap screen result stands.
-      if (opts.voteBand <= 0 || !thresholds || !withinBand(screen.score, thresholds, opts.voteBand)) return screen
+      if (voteBand <= 0 || !thresholds || !withinBand(screen.score, thresholds, voteBand)) return screen
       try {
-        const r = await runPanel(opts.model, { name: pod.name, description: pod.description, rubric }, { brief: opts.brief, screenScore: screen.score, generate: opts.generate })
+        const r = await runPanel(opts.model, { name: pod.name, description: pod.description, rubric }, { brief: opts.getBrief?.(), screenScore: screen.score, generate: opts.generate })
         return { score: r.score, reason: r.reason, panel: r.transcript }
       } catch (e) {
         // Panel failed entirely — fall back to the screen result (never more fragile
@@ -58,9 +60,9 @@ export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): Po
 export function createPanelCandidateScorer(base: CandidateScorer, opts: PanelScorerOpts): CandidateScorer {
   return {
     async scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric) {
-      if (!opts.enabled) return base.scoreCandidate(candidate, rubric)
+      if (!opts.getDeliberation().enabled) return base.scoreCandidate(candidate, rubric)
       const { name, description } = candidateScoreInput(candidate)
-      const r = await runPanel(opts.model, { name, description, rubric }, { brief: opts.brief, generate: opts.generate })
+      const r = await runPanel(opts.model, { name, description, rubric }, { brief: opts.getBrief?.(), generate: opts.generate })
       return { score: r.score, reason: r.reason, panel: r.transcript }
     },
   }

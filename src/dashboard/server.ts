@@ -63,11 +63,12 @@ function safeConfig(dataDir: string): Record<string, unknown> {
       const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation } = parsed.data
       return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation }
     }
-    // tolerant fallback for a file the schema rejects (node likely won't run on it either)
+    // tolerant fallback for a file the schema rejects (node likely won't run on it either).
+    // deliberation falls back to the schema default so the editor reflects real behavior.
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
-      budget: c.budget, stake: c.stake, deliberation: c.deliberation,
+      budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, voteBand: 1 },
     }
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config

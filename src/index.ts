@@ -1,7 +1,7 @@
 // src/index.ts — thin shell: env, service construction, argv dispatch, signals.
 // All cycle wiring lives in src/runtime/wiring.ts (unit-tested there).
-import { resolve, join } from 'node:path'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { mkdirSync } from 'node:fs'
 import { loadConfig } from './config/load.js'
 import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
@@ -21,7 +21,6 @@ import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { createSportsAdapter } from './adapter/sports/index.js'
 import { resolveModel, type LlmProvider } from './llm/model.js'
-import { createLlmScorer } from './voter/score.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
@@ -126,9 +125,6 @@ async function start(): Promise<void> {
     }
   }
   const config: StrategyConfig = loadConfig(DATA_DIR)
-  const strategyBrief = (() => {
-    try { return readFileSync(join(DATA_DIR, 'strategy-notes.md'), 'utf-8') } catch { return '' }
-  })()
   // One shared BudgetLedger instance: the executor reserves/records spend on it,
   // and runCycle calls startCycle on it — the single source of budget truth.
   const ledger = new BudgetLedger(DATA_DIR, config.budget)
@@ -140,13 +136,11 @@ async function start(): Promise<void> {
   const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader)
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
-    scorer: createLlmScorer(model, { brief: strategyBrief }),
     model,
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.
     adapters: [createHyperliquidAdapter(), createGdeltAdapter({ model }), createSportsAdapter({ model })],
-    strategyBrief,
   }
 
   await setupNode(config, executor)

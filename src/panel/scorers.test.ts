@@ -15,7 +15,12 @@ const okGen: PanelGenerate = (async ({ system }) =>
   system.includes('You are the JUDGE') ? { score: 6, reason: 'panel reason' } : { score: 6, argument: 'arg' }) as PanelGenerate
 
 const basePod = (score: number): PodScorer => ({ scorePod: vi.fn(async () => ({ score, reason: 'screen' })) })
-const opts = (o: Partial<PanelScorerOpts> = {}): PanelScorerOpts => ({ model, enabled: true, voteBand: 1, generate: okGen, ...o })
+// Helper takes flat enabled/voteBand/generate and produces the live-getter opts shape.
+const opts = (o: { enabled?: boolean; voteBand?: number; generate?: PanelGenerate } = {}): PanelScorerOpts => ({
+  model,
+  getDeliberation: () => ({ enabled: o.enabled ?? true, voteBand: o.voteBand ?? 1 }),
+  generate: o.generate ?? okGen,
+})
 
 describe('withinBand', () => {
   const t = { like: 7, dislike: 3 }

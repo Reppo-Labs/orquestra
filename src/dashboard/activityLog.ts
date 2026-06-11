@@ -36,21 +36,28 @@ const FILE = 'activity-log.jsonl'
  *  authoritative cumulative accounting should come from on-chain/ledger state. */
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024
 
+/** Redact every string value in a nested value, leaving non-strings (scores,
+ *  booleans) untouched. redactSecrets is pattern-based (RPC keys, bearer tokens,
+ *  etc.), so it never touches benign identifiers like persona ids or scores. */
+function redactDeep(v: unknown): unknown {
+  if (typeof v === 'string') return redactSecrets(v)
+  if (Array.isArray(v)) return v.map(redactDeep)
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, redactDeep(val)]))
+  }
+  return v
+}
+
 function redactEntry(entry: ActivityEntry): ActivityEntry {
   return {
     ...entry,
     ...(entry.detail !== undefined ? { detail: redactSecrets(entry.detail) } : {}),
     ...(entry.reason !== undefined ? { reason: redactSecrets(entry.reason) } : {}),
     // Panel transcript text is LLM-generated from untrusted pod data and may echo
-    // the operator brief — redact the same way as detail/reason before it is
-    // persisted and before /api/activity serves it to the dashboard.
-    ...(entry.panel !== undefined ? {
-      panel: {
-        ...entry.panel,
-        panelists: entry.panel.panelists.map((p) => ({ ...p, argument: redactSecrets(p.argument) })),
-        judge: { ...entry.panel.judge, reason: redactSecrets(entry.panel.judge.reason) },
-      },
-    } : {}),
+    // the operator brief. Redact ALL its string fields recursively — robust to a
+    // malformed shape and to any future field — before it is persisted and before
+    // /api/activity serves it to the dashboard.
+    ...(entry.panel !== undefined ? { panel: redactDeep(entry.panel) as ActivityEntry['panel'] } : {}),
   }
 }
 
