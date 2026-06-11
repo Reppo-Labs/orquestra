@@ -70,12 +70,13 @@ const sign = (n) => n > 0 ? 'pos' : n < 0 ? 'neg' : ''
 // HTML-escape every interpolation of network/CLI-derived text before innerHTML.
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
 async function load() {
-  const [pnlRes, act, cfg, earn, health] = await Promise.all([
+  const [pnlRes, act, cfg, earn, health, netNames] = await Promise.all([
     fetch('/api/pnl').then(r => r.json()),
     fetch('/api/activity').then(r => r.json()),
     fetch('/api/config').then(r => r.json()),
     fetch('/api/earn').then(r => r.json()).catch(() => null),
     fetch('/api/health').then(r => r.json()).catch(() => null),
+    fetch('/api/datanets').then(r => r.json()).catch(() => ({})),
   ])
   const p = pnlRes.pnl, snap = pnlRes.snapshot
   document.getElementById('earnBanner').textContent = earn
@@ -100,7 +101,7 @@ async function load() {
     ? `<span class="${t.rate >= 0.9 ? 'pos' : t.rate >= 0.5 ? '' : 'neg'}">${Math.round(t.rate * 100)}%</span> <span class="muted">(${t.executed}✓/${t.failed}✗)</span>`
     : '<span class="muted">—</span>'
   document.querySelector('#healthTable tbody').innerHTML = hRows.length
-    ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${rateCell(d.txRate)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
+    ? hRows.map(d => `<tr><td>${esc(netLabel(d.datanetId))}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${rateCell(d.txRate)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
     : '<tr><td colspan="6" class="muted">no activity yet</td></tr>'
   const ot = health?.txRate
   document.getElementById('txOverall').innerHTML = ot && ot.rate !== null
@@ -132,8 +133,16 @@ async function load() {
     ? em.map(e => `<tr><td>${esc(e.podId)}</td><td>${esc(e.datanetId)}</td><td>${esc(e.epoch)}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">none — all claimed</td></tr>'
   window._activity = act
+  window._netNames = netNames || {}
   if (!window._candidate && cfg && cfg.datanets) initStrategy(cfg)
+  else renderStrategy() // names may have arrived after first render
   renderActivity()
+}
+
+// id → "id — Name" (truncated); falls back to the bare id until names load.
+const netLabel = (id) => {
+  const n = (window._netNames || {})[id]
+  return n ? `${id} — ${n.length > 30 ? n.slice(0, 29) + '…' : n}` : String(id)
 }
 
 // ── Strategy editor: grid + goal chat. One write path: Save → POST /api/strategy ──
@@ -152,7 +161,7 @@ function renderStrategy() {
   const rows = Object.entries(c.datanets).filter(([id]) => id !== '*')
   document.querySelector('#stratGrid tbody').innerHTML = rows.map(([id, d]) => `
     <tr data-id="${esc(id)}">
-      <td>${esc(id)}</td>
+      <td title="${esc((window._netNames || {})[id] || '')}">${esc(netLabel(id))}</td>
       <td><input type="checkbox" class="sg-vote" ${d.vote ? 'checked' : ''}></td>
       <td><input type="checkbox" class="sg-mint" ${d.mint ? 'checked' : ''}></td>
       <td><select class="sg-adapter">${ADAPTERS.map(a => `<option value="${a}" ${(d.adapter ?? '') === a ? 'selected' : ''}>${a || '—'}</option>`).join('')}</select></td>

@@ -13,6 +13,7 @@ import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
+import { listDatanetsJson } from '../reppo/listDatanets.js'
 import type { LanguageModel } from 'ai'
 
 const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
@@ -44,6 +45,20 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     // otherwise renders a blank header with no trace anywhere.
     console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
     return {}
+  }
+}
+
+// Datanet id→name map, cached: names change rarely and the CLI call is slow.
+let netNamesCache: { at: number; names: Record<string, string> } | null = null
+async function datanetNames(): Promise<Record<string, string>> {
+  if (netNamesCache && Date.now() - netNamesCache.at < 10 * 60_000) return netNamesCache.names
+  try {
+    const nets = await listDatanetsJson()
+    const names = Object.fromEntries(nets.map((n) => [n.id, n.name]))
+    netNamesCache = { at: Date.now(), names }
+    return names
+  } catch {
+    return netNamesCache?.names ?? {} // tolerate CLI/RPC failure; serve stale or empty
   }
 }
 
@@ -124,6 +139,7 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     // 7-day window: "recent health", independent of cadence (a count-based window
     // means hours at high cadence, months at low). 100k limit is a safety ceiling.
     if (url === '/api/health') { json(res, 200, buildHealth(readActivity(dataDir, { limit: 100_000 }), { sinceMs: Date.now() - 7 * 24 * 3600_000 })); return }
+    if (url === '/api/datanets') { json(res, 200, await datanetNames()); return }
     if (url === '/favicon.ico') { res.writeHead(204); res.end(); return }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
