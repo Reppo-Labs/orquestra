@@ -101,4 +101,15 @@ describe('selectMints (minScore 7)', () => {
       { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: flaky })
     expect(intents.map((i) => i.canonicalKey)).toEqual(['good']) // bad skipped, datanet not aborted
   })
+
+  it('per-candidate isolation: a dataset write failure skips that candidate, others still mint', async () => {
+    // Point dataDir at a path where the pending-data dir cannot be created for one
+    // candidate by making the dataset unserializable (circular) — write throws.
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    const c1 = cand('bad'); c1.dataset = circular
+    const intents = await selectMints('9', [c1, cand('good')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ bad: 9, good: 9 }) })
+    expect(intents.map((i) => i.canonicalKey)).toEqual(['good']) // bad's write threw, datanet not aborted
+  })
 })

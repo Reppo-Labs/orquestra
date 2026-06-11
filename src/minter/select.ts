@@ -47,7 +47,14 @@ export async function selectMints(
     const { score, panel } = result
     if (score < opts.minScore) continue
     const datasetPath = join(dataOut, `mint-${c.canonicalKey}.json`)
-    writeFileSync(datasetPath, JSON.stringify(c.dataset))
+    // The dataset write is inside the per-candidate isolation too: a single disk
+    // failure skips THAT candidate, it does not abort the whole datanet's batch.
+    try {
+      writeFileSync(datasetPath, JSON.stringify(c.dataset))
+    } catch (e) {
+      console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) dataset write failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+      continue
+    }
     intents.push({
       kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
       podName: clampPodName(c.podName), podDescription: clampPodName(c.podDescription, POD_DESC_MAX), datasetPath,

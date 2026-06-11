@@ -41,6 +41,16 @@ function redactEntry(entry: ActivityEntry): ActivityEntry {
     ...entry,
     ...(entry.detail !== undefined ? { detail: redactSecrets(entry.detail) } : {}),
     ...(entry.reason !== undefined ? { reason: redactSecrets(entry.reason) } : {}),
+    // Panel transcript text is LLM-generated from untrusted pod data and may echo
+    // the operator brief — redact the same way as detail/reason before it is
+    // persisted and before /api/activity serves it to the dashboard.
+    ...(entry.panel !== undefined ? {
+      panel: {
+        ...entry.panel,
+        panelists: entry.panel.panelists.map((p) => ({ ...p, argument: redactSecrets(p.argument) })),
+        judge: { ...entry.panel.judge, reason: redactSecrets(entry.panel.judge.reason) },
+      },
+    } : {}),
   }
 }
 
