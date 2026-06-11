@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { request as httpRequest } from 'node:http'
 import { startDashboard, type DashboardHandle } from './server.js'
 import { appendActivity } from './activityLog.js'
 import { writeEarnStatus } from './earnStatus.js'
@@ -162,6 +163,163 @@ describe('POST /api/strategy/chat', () => {
       expect(r.status).toBe(503)
       expect(r.body).toMatch(/chat unavailable/i)
     } finally { delete process.env.DASHBOARD_TOKEN }
+  })
+})
+
+describe('static SPA serving (publicDir)', () => {
+  let pub: string
+  let spa: DashboardHandle
+  beforeEach(async () => {
+    pub = mkdtempSync(join(tmpdir(), 'orq-pub-'))
+    writeFileSync(join(pub, 'index.html'), '<html><body>orquestra spa</body></html>')
+    mkdirSync(join(pub, 'assets'))
+    writeFileSync(join(pub, 'assets', 'app.js'), 'console.log("spa")')
+    spa = await startDashboard(dir, 0, { publicDir: pub })
+  })
+  afterEach(async () => { await spa.close(); rmSync(pub, { recursive: true, force: true }) })
+
+  const getSpa = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${spa.port}${path}`)
+    return { status: res.status, type: res.headers.get('content-type') ?? '', body: await res.text() }
+  }
+
+  it('serves index.html at / with html content type', async () => {
+    const r = await getSpa('/')
+    expect(r.status).toBe(200)
+    expect(r.type).toMatch(/text\/html/)
+    expect(r.body).toContain('orquestra spa')
+  })
+
+  it('serves assets with their content type', async () => {
+    const r = await getSpa('/assets/app.js')
+    expect(r.status).toBe(200)
+    expect(r.type).toMatch(/javascript/)
+    expect(r.body).toContain('spa')
+  })
+
+  it('falls back to index.html for unknown non-API routes (SPA deep links)', async () => {
+    const r = await getSpa('/some/client/route')
+    expect(r.status).toBe(200)
+    expect(r.body).toContain('orquestra spa')
+  })
+
+  it('API routes are NOT swallowed by the SPA fallback', async () => {
+    const r = await getSpa('/api/config')
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toHaveProperty('cadenceHours')
+  })
+
+  it('path traversal cannot escape the public dir', async () => {
+    // raw http request: fetch() would normalize the .. segments client-side
+    const body = await new Promise<string>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: spa.port, path: '/../strategy.config.json' }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP(s))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(body).not.toContain('horizonDays') // must not leak the data dir
+  })
+})
+
+const VALID_ANSWERS = {
+  datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
+  lockReppo: 0, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'dashboard onboarding test',
+}
+
+describe('onboarding API', () => {
+  let freshDir: string
+  let onb: DashboardHandle
+  const fakeTurn = async (messages: { role: string; content: unknown }[]) => {
+    const users = messages.filter((m) => m.role === 'user').length
+    if (String(messages[messages.length - 1]?.content).includes('finalize now')) {
+      return { text: 'Done — review and confirm.', responseMessages: [{ role: 'assistant' as const, content: 'Done — review and confirm.' }], finalized: VALID_ANSWERS as never, draft: null }
+    }
+    return {
+      text: `turn with ${users} user message(s)`,
+      responseMessages: [{ role: 'assistant' as const, content: 'ok' }],
+      finalized: null,
+      draft: users > 1 ? { cadenceHours: 6 } : null,
+    }
+  }
+  beforeEach(async () => {
+    freshDir = mkdtempSync(join(tmpdir(), 'orq-onb-')) // NO strategy.config.json → onboarding needed
+    onb = await startDashboard(freshDir, 0, { onboardingTurn: fakeTurn as never })
+    process.env.DASHBOARD_TOKEN = 'secret-token'
+  })
+  afterEach(async () => {
+    delete process.env.DASHBOARD_TOKEN
+    await onb.close()
+    rmSync(freshDir, { recursive: true, force: true })
+  })
+
+  const onbGet = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${onb.port}${path}`)
+    return { status: res.status, body: JSON.parse(await res.text()) }
+  }
+  const onbPost = async (path: string, body: unknown, token?: string) => {
+    const res = await fetch(`http://127.0.0.1:${onb.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { 'x-orquestra-token': token } : {}) },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, body: JSON.parse(await res.text()) }
+  }
+
+  it('status reports needed=true on a fresh data dir, false once config exists', async () => {
+    expect((await onbGet('/api/onboarding/status')).body).toMatchObject({ needed: true, chatAvailable: true, writesEnabled: true })
+    const r = await fetch(`http://127.0.0.1:${handle.port}/api/onboarding/status`) // outer server HAS a config
+    expect(((await r.json()) as { needed: boolean }).needed).toBe(false)
+  })
+
+  it('chat and confirm are token-gated (401 wrong token)', async () => {
+    expect((await onbPost('/api/onboarding/chat', {}, 'wrong')).status).toBe(401)
+    expect((await onbPost('/api/onboarding/confirm', VALID_ANSWERS, 'wrong')).status).toBe(401)
+  })
+
+  it('chat is 503 when no model and no injected turn runner', async () => {
+    const bare = await startDashboard(freshDir, 0, {})
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/api/onboarding/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-orquestra-token': 'secret-token' }, body: '{}',
+      })
+      expect(res.status).toBe(503)
+    } finally { await bare.close() }
+  })
+
+  it('chat keeps a session across turns and surfaces drafts and finalized answers', async () => {
+    const first = await onbPost('/api/onboarding/chat', {}, 'secret-token')
+    expect(first.status).toBe(200)
+    expect(first.body.reply).toMatch(/1 user message/) // seed message only
+    expect(first.body.finalized).toBeNull()
+
+    const second = await onbPost('/api/onboarding/chat', { message: 'vote on 9' }, 'secret-token')
+    expect(second.body.reply).toMatch(/2 user message/) // session grew
+    expect(second.body.draft).toMatchObject({ cadenceHours: 6 })
+
+    const third = await onbPost('/api/onboarding/chat', { message: 'finalize now' }, 'secret-token')
+    expect(third.body.finalized).toMatchObject({ notes: 'dashboard onboarding test' })
+  })
+
+  it('chat reset clears the session', async () => {
+    await onbPost('/api/onboarding/chat', { message: 'hello' }, 'secret-token')
+    await onbPost('/api/onboarding/chat', { reset: true }, 'secret-token')
+    const r = await onbPost('/api/onboarding/chat', {}, 'secret-token')
+    expect(r.body.reply).toMatch(/1 user message/)
+  })
+
+  it('confirm validates, persists config + notes, and flips status.needed', async () => {
+    expect((await onbPost('/api/onboarding/confirm', { horizonDays: -1 }, 'secret-token')).status).toBe(400)
+    const ok = await onbPost('/api/onboarding/confirm', VALID_ANSWERS, 'secret-token')
+    expect(ok.status).toBe(200)
+    expect(ok.body).toMatchObject({ saved: true })
+    const saved = JSON.parse(readFileSync(join(freshDir, 'strategy.config.json'), 'utf-8'))
+    expect(saved.cadenceHours).toBe(6)
+    expect(readFileSync(join(freshDir, 'strategy-notes.md'), 'utf-8')).toMatch(/dashboard onboarding test/)
+    expect((await onbGet('/api/onboarding/status')).body.needed).toBe(false)
   })
 })
 

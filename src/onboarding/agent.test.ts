@@ -1,7 +1,7 @@
 // src/onboarding/agent.test.ts
 import { describe, it, expect, vi } from 'vitest'
 import { MockLanguageModelV1 } from 'ai/test'
-import { runConversationalOnboarding, buildOnboardingTools, SYSTEM, type OnboardingAgentDeps } from './agent.js'
+import { runConversationalOnboarding, runOnboardingTurn, seedOnboardingMessages, buildOnboardingTools, SYSTEM, type OnboardingAgentDeps } from './agent.js'
 import type { Prompter } from './types.js'
 
 const validAnswers = {
@@ -39,6 +39,58 @@ describe('runConversationalOnboarding', () => {
     const answers = await runConversationalOnboarding(deps(model))
     expect(answers.datanets[0].id).toBe('9')
     expect(answers.notes).toBe('picky')
+  })
+})
+
+describe('runOnboardingTurn (one HTTP-shaped turn, no prompter)', () => {
+  it('returns assistant text and a null finalized when the model just replies', async () => {
+    const model = new MockLanguageModelV1({
+      doGenerate: async () => ({
+        finishReason: 'stop', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} },
+        text: 'Welcome! What should your node do?',
+      }),
+    })
+    const r = await runOnboardingTurn(deps(model), seedOnboardingMessages())
+    expect(r.text).toMatch(/Welcome/)
+    expect(r.finalized).toBeNull()
+    expect(r.responseMessages.length).toBeGreaterThan(0)
+  })
+
+  it('captures finalized answers when the model calls finalize', async () => {
+    let call = 0
+    const model = new MockLanguageModelV1({
+      doGenerate: async () => {
+        call++
+        if (call === 1) {
+          return {
+            finishReason: 'tool-calls', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} },
+            toolCalls: [{ toolCallType: 'function', toolCallId: 't1', toolName: 'finalize', args: JSON.stringify(validAnswers) }],
+          }
+        }
+        return { finishReason: 'stop', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} }, text: 'All set.' }
+      },
+    })
+    const r = await runOnboardingTurn(deps(model), seedOnboardingMessages())
+    expect(r.finalized?.notes).toBe('picky')
+  })
+
+  it('surfaces update_draft calls as the turn draft', async () => {
+    let call = 0
+    const model = new MockLanguageModelV1({
+      doGenerate: async () => {
+        call++
+        if (call === 1) {
+          return {
+            finishReason: 'tool-calls', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} },
+            toolCalls: [{ toolCallType: 'function', toolCallId: 'd1', toolName: 'update_draft', args: JSON.stringify({ cadenceHours: 6, mintReppoMax: 100 }) }],
+          }
+        }
+        return { finishReason: 'stop', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} }, text: 'Noted 6h cadence.' }
+      },
+    })
+    const r = await runOnboardingTurn(deps(model), seedOnboardingMessages())
+    expect(r.draft).toMatchObject({ cadenceHours: 6, mintReppoMax: 100 })
+    expect(r.finalized).toBeNull()
   })
 })
 

@@ -102,11 +102,30 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
 
 async function start(): Promise<void> {
   await checkReppoVersion() // warn-only preflight: old CLI fails every vote/mint cryptically
-  if (needsOnboarding(DATA_DIR)) await onboard()
-  const config: StrategyConfig = loadConfig(DATA_DIR)
+  mkdirSync(DATA_DIR, { recursive: true })
 
   const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const model = resolveModel(provider, process.env.LLM_API_KEY ?? '')
+
+  // Dashboard FIRST: on a fresh node it hosts the conversational onboarding;
+  // the scheduler starts only once a strategy config exists.
+  const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
+  const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model }) : null
+  if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
+
+  if (needsOnboarding(DATA_DIR)) {
+    if (process.stdin.isTTY) {
+      await onboard()
+    } else if (dash) {
+      console.error('orquestra: no strategy config — complete onboarding in the dashboard (or run `orquestra configure` with -it).')
+      while (needsOnboarding(DATA_DIR)) await new Promise((r) => setTimeout(r, 2000))
+      console.error('orquestra: onboarding complete — starting node.')
+    } else {
+      throw new Error('no strategy config and no TTY or dashboard to onboard with — run `orquestra configure`')
+    }
+  }
+  const config: StrategyConfig = loadConfig(DATA_DIR)
   const strategyBrief = (() => {
     try { return readFileSync(join(DATA_DIR, 'strategy-notes.md'), 'utf-8') } catch { return '' }
   })()
@@ -135,11 +154,6 @@ async function start(): Promise<void> {
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
   // reloadConfig: dashboard saves apply at the next cycle (validated; last-good on failure)
   const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), { reloadConfig: () => loadConfig(DATA_DIR) }))
-
-  const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
-  const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
-  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model }) : null
-  if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
   // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler + exit.
