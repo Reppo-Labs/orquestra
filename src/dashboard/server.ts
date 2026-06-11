@@ -1,5 +1,7 @@
 // src/dashboard/server.ts
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
+import { writeFileSync, renameSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +11,7 @@ import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
+import { StrategyConfigSchema } from '../config/schema.js'
 
 const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
 
@@ -38,9 +41,54 @@ function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body))
 }
 
-function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): void {
+/** Token gate for write routes — FAIL-CLOSED: with DASHBOARD_TOKEN unset, writes
+ *  are disabled entirely (the dashboard stays read-only by default; write access
+ *  is explicit opt-in). Constant-time compare to avoid timing probes. */
+function writeAuth(req: IncomingMessage): { ok: true } | { ok: false; code: number; error: string } {
+  const expected = (process.env.DASHBOARD_TOKEN ?? '').trim()
+  if (!expected) return { ok: false, code: 503, error: 'writes disabled — set DASHBOARD_TOKEN to enable dashboard configuration' }
+  const got = String(req.headers['x-orquestra-token'] ?? '')
+  const a = Buffer.from(got), b = Buffer.from(expected)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, code: 401, error: 'invalid token' }
+  return { ok: true }
+}
+
+/** Read a JSON body (1 MiB cap — strategy configs are tiny). */
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > 1024 * 1024) { reject(new Error('body too large')); req.destroy(); return }
+      chunks.push(c)
+    })
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))) } catch { reject(new Error('invalid JSON body')) }
+    })
+    req.on('error', reject)
+  })
+}
+
+async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
   try {
+    if (req.method === 'POST') {
+      if (url !== '/api/strategy') { json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return }
+      const auth = writeAuth(req)
+      if (!auth.ok) { json(res, auth.code, { error: auth.error }); return }
+      let body: unknown
+      try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
+      const parsed = StrategyConfigSchema.safeParse(body)
+      if (!parsed.success) { json(res, 400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) }); return }
+      // Atomic write (temp + rename) — the node hot-reloads it at the next cycle.
+      const finalPath = join(dataDir, 'strategy.config.json')
+      const tmpPath = finalPath + '.tmp'
+      writeFileSync(tmpPath, JSON.stringify(body, null, 2))
+      renameSync(tmpPath, finalPath)
+      json(res, 200, { saved: true, appliesNextCycle: true })
+      return
+    }
     if (url === '/' || url === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end(existsSync(HTML_PATH) ? readFileSync(HTML_PATH, 'utf-8') : '<h1>Orquestra</h1>')
@@ -68,7 +116,7 @@ function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): voi
 /** Start the read-only dashboard server. Binds 0.0.0.0 (docker -p maps the port);
  *  restrict exposure with `-p 127.0.0.1:7070:7070`. */
 export function startDashboard(dataDir: string, port: number): Promise<DashboardHandle> {
-  const server = createServer((req, res) => handle(dataDir, req, res))
+  const server = createServer((req, res) => { void handle(dataDir, req, res) })
   return new Promise((resolve) => {
     server.listen(port, () => {
       const actual = (server.address() as AddressInfo).port
