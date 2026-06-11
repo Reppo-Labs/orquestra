@@ -30,6 +30,9 @@ function safeConfig(dataDir: string): Record<string, unknown> {
       // raw file may omit the key; the schema defaults it to true — mirror that here
       // so the header doesn't claim "claim off" for a node that IS claiming.
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
+      // budget + stake are NOT secrets (caps already surface via the snapshot) and the
+      // strategy editor needs the FULL config to round-trip a valid Save.
+      budget: c.budget, stake: c.stake,
     }
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config

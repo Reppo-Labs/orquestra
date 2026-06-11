@@ -42,6 +42,13 @@ describe('dashboard server', () => {
     expect(r.status).toBe(200)
     expect(JSON.parse(r.body)).toHaveProperty('pnl')
   })
+  it('/api/config is a COMPLETE strategy config (grid Save must round-trip)', async () => {
+    const r = await get('/api/config')
+    const body = JSON.parse(r.body)
+    expect(body).toHaveProperty('budget')
+    expect(body).toHaveProperty('stake')
+  })
+
   it('/api/config strips secrets', async () => {
     const r = await get('/api/config')
     expect(r.status).toBe(200)
