@@ -1,5 +1,7 @@
 // src/dashboard/server.ts
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
+import { writeFileSync, renameSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +11,9 @@ import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
+import { StrategyConfigSchema } from '../config/schema.js'
+import { runStrategyChat, type ChatMessage } from './strategyChat.js'
+import type { LanguageModel } from 'ai'
 
 const HTML_PATH = join(dirname(fileURLToPath(import.meta.url)), 'index.html')
 
@@ -20,11 +25,19 @@ function safeConfig(dataDir: string): Record<string, unknown> {
   if (!existsSync(path)) return {}
   try {
     const c = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
+    // Prefer the CANONICAL schema parse (defaults + transforms applied) so the
+    // strategy editor always receives a complete, Save-able config — budget and
+    // stake are NOT secrets (caps already surface via the snapshot).
+    const parsed = StrategyConfigSchema.safeParse(c)
+    if (parsed.success) {
+      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake } = parsed.data
+      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake }
+    }
+    // tolerant fallback for a file the schema rejects (node likely won't run on it either)
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
-      // raw file may omit the key; the schema defaults it to true — mirror that here
-      // so the header doesn't claim "claim off" for a node that IS claiming.
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
+      budget: c.budget, stake: c.stake,
     }
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config
@@ -38,9 +51,68 @@ function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body))
 }
 
-function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): void {
+/** Token gate for write routes — FAIL-CLOSED: with DASHBOARD_TOKEN unset, writes
+ *  are disabled entirely (the dashboard stays read-only by default; write access
+ *  is explicit opt-in). Constant-time compare to avoid timing probes. */
+function writeAuth(req: IncomingMessage): { ok: true } | { ok: false; code: number; error: string } {
+  const expected = (process.env.DASHBOARD_TOKEN ?? '').trim()
+  if (!expected) return { ok: false, code: 503, error: 'writes disabled — set DASHBOARD_TOKEN to enable dashboard configuration' }
+  const got = String(req.headers['x-orquestra-token'] ?? '')
+  const a = Buffer.from(got), b = Buffer.from(expected)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, code: 401, error: 'invalid token' }
+  return { ok: true }
+}
+
+/** Read a JSON body (1 MiB cap — strategy configs are tiny). */
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > 1024 * 1024) { reject(new Error('body too large')); req.destroy(); return }
+      chunks.push(c)
+    })
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))) } catch { reject(new Error('invalid JSON body')) }
+    })
+    req.on('error', reject)
+  })
+}
+
+async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
   try {
+    if (req.method === 'POST') {
+      if (url !== '/api/strategy' && url !== '/api/strategy/chat') {
+        json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return
+      }
+      const auth = writeAuth(req)
+      if (!auth.ok) { json(res, auth.code, { error: auth.error }); return }
+      let body: unknown
+      try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
+
+      if (url === '/api/strategy/chat') {
+        if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
+        const messages = (body as { messages?: ChatMessage[] })?.messages
+        if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
+        const currentRaw = JSON.parse(readFileSync(join(dataDir, 'strategy.config.json'), 'utf-8')) as unknown
+        const current = StrategyConfigSchema.parse(currentRaw)
+        const result = await runStrategyChat({ messages, currentConfig: current, model: opts.chatModel })
+        json(res, 200, result)
+        return
+      }
+
+      const parsed = StrategyConfigSchema.safeParse(body)
+      if (!parsed.success) { json(res, 400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) }); return }
+      // Atomic write (temp + rename) — the node hot-reloads it at the next cycle.
+      const finalPath = join(dataDir, 'strategy.config.json')
+      const tmpPath = finalPath + '.tmp'
+      writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2))
+      renameSync(tmpPath, finalPath)
+      json(res, 200, { saved: true, appliesNextCycle: true })
+      return
+    }
     if (url === '/' || url === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end(existsSync(HTML_PATH) ? readFileSync(HTML_PATH, 'utf-8') : '<h1>Orquestra</h1>')
@@ -67,8 +139,10 @@ function handle(dataDir: string, req: IncomingMessage, res: ServerResponse): voi
 
 /** Start the read-only dashboard server. Binds 0.0.0.0 (docker -p maps the port);
  *  restrict exposure with `-p 127.0.0.1:7070:7070`. */
-export function startDashboard(dataDir: string, port: number): Promise<DashboardHandle> {
-  const server = createServer((req, res) => handle(dataDir, req, res))
+export interface DashboardOpts { chatModel?: LanguageModel }
+
+export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
+  const server = createServer((req, res) => { void handle(dataDir, req, res, opts) })
   return new Promise((resolve) => {
     server.listen(port, () => {
       const actual = (server.address() as AddressInfo).port

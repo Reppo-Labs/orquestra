@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildCycleDeps, type CycleWiring } from './wiring.js'
+import { buildCycleDeps, buildTick, type CycleWiring } from './wiring.js'
 import { DedupState } from './state.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { VoterPod } from '../voter/types.js'
@@ -103,5 +103,42 @@ describe('buildCycleDeps', () => {
     const deps = buildCycleDeps(wiring())
     expect(deps.getAdapter('gdelt')?.id).toBe('gdelt')
     expect(deps.getAdapter('nope')).toBeUndefined()
+  })
+})
+
+describe('buildTick config hot-reload', () => {
+  const altConfig = StrategyConfigSchema.parse({
+    horizonDays: 7, cadenceHours: 1,
+    stake: { lockReppo: 0, lockDurationDays: 7 },
+    budget: { voteGasEthMax: 9, voteRateMaxPerCycle: 1, mintReppoMax: 1, mintGasEthMax: 1 },
+    datanets: { '5': { vote: true, mint: false, strictness: 'balanced' } },
+  })
+
+  function tickWiring(reload: () => ReturnType<typeof StrategyConfigSchema.parse>) {
+    const w = wiring()
+    const updateCaps = vi.fn()
+    w.ledger = { startCycle: vi.fn(), updateCaps, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0, grantReppoSpent: 0 } } as unknown as CycleWiring['ledger']
+    const ranWith: string[][] = []
+    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    return { w, deps, updateCaps, ranWith, reload }
+  }
+
+  it('re-reads config each tick: a datanet set change applies on the NEXT cycle', async () => {
+    let current = config
+    const { w, deps, updateCaps } = tickWiring(() => current)
+    const tick = buildTick(w, deps, { reloadConfig: () => current, reporting: false })
+    await tick() // datanets: ['2'] from `config`
+    current = altConfig
+    await tick() // must now use altConfig (datanet 5) + push caps
+    expect(updateCaps).toHaveBeenCalledWith(altConfig.budget)
+  })
+
+  it('keeps the LAST-GOOD config when reload throws (loop never crashes)', async () => {
+    let boom = false
+    const { w, deps } = tickWiring(() => config)
+    const tick = buildTick(w, deps, { reloadConfig: () => { if (boom) throw new Error('corrupt json'); return config }, reporting: false })
+    await tick()
+    boom = true
+    await expect(tick()).resolves.toBeUndefined() // tolerated, last-good used
   })
 })

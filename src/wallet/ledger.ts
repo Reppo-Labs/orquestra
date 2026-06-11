@@ -84,7 +84,7 @@ const fresh = (): LedgerState => ({
 export class BudgetLedger {
   private _state: LedgerState
 
-  constructor(private readonly dataDir: string, private readonly caps: BudgetCaps) {
+  constructor(private readonly dataDir: string, private caps: BudgetCaps) {
     const path = join(dataDir, LEDGER_FILE)
     if (existsSync(path)) {
       let parsed: unknown
@@ -197,6 +197,10 @@ export class BudgetLedger {
     this._state.claimGasSpentEth = Math.max(0, this._state.claimGasSpentEth - res.estGasEth)
     this.save()
   }
+
+  /** Swap budget caps at a cycle boundary (config hot-reload). Spent counters are
+   *  untouched — only the ceilings move. */
+  updateCaps(caps: BudgetCaps): void { this.caps = caps }
 
   canGrant(estReppo: number): boolean {
     if (this.caps.grantReppoMax === undefined) return true // no cap: datanet membership is the consent

@@ -246,3 +246,15 @@ describe('BudgetLedger claim gas cap', () => {
     expect(l.state.claimGasSpentEth).toBeCloseTo(0)
   })
 })
+
+describe('BudgetLedger.updateCaps (config hot-reload)', () => {
+  it('swaps ceilings without touching spent counters', () => {
+    const l = new BudgetLedger(dir, { ...CAPS, mintReppoMax: 10 })
+    const r = l.reserveMint(8, 0.001)
+    expect(r).not.toBeNull()
+    expect(l.reserveMint(8, 0.001)).toBeNull()      // 8+8 > 10
+    l.updateCaps({ ...CAPS, mintReppoMax: 100 })
+    expect(l.reserveMint(8, 0.001)).not.toBeNull()  // new ceiling applies, spend kept
+    expect(l.state.mintReppoSpent).toBe(16)
+  })
+})

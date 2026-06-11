@@ -35,10 +35,28 @@
   <div id="earnBanner" class="muted" style="margin-bottom:16px"></div>
   <div class="cards" id="cards"></div>
   <h2 style="font-size:15px">Cycle health</h2>
-  <table id="healthTable"><thead><tr><th>Datanet</th><th>Votes ✓/⊘/✗</th><th>Mints ✓/⊘/✗</th><th>Skips</th><th>Top error</th></tr></thead><tbody></tbody></table>
+  <table id="healthTable"><thead><tr><th>Datanet</th><th>Votes ✓/⊘/✗</th><th>Mints ✓/⊘/✗</th><th>Tx rate</th><th>Skips</th><th>Top error</th></tr></thead><tbody></tbody></table>
+  <div id="txOverall" class="muted" style="margin:-16px 0 16px 0"></div>
   <div id="idle" style="margin-bottom:24px"></div>
   <h2 style="font-size:15px">Budget burn</h2>
   <div class="cards" id="budget"></div>
+  <h2 style="font-size:15px">Strategy <span class="muted" id="stratStatus"></span></h2>
+  <div id="strategyPanel">
+    <table id="stratGrid"><thead><tr><th>Datanet</th><th>Vote</th><th>Mint</th><th>Adapter</th><th>Strictness</th></tr></thead><tbody></tbody></table>
+    <div style="display:flex;gap:8px;margin:8px 0">
+      <input id="token" type="password" placeholder="dashboard token" style="background:#121620;color:#d7dce5;border:1px solid #1c2230;border-radius:6px;padding:6px;flex:0 0 220px">
+      <button id="saveStrat" style="background:#1c2a3a;color:#6fb3e8;border:1px solid #28405c;border-radius:6px;padding:6px 14px;cursor:pointer">Save (applies next cycle)</button>
+      <span id="saveMsg" class="muted"></span>
+    </div>
+    <div style="border:1px solid #1c2230;border-radius:8px;background:#121620;padding:10px;margin-bottom:24px">
+      <div class="k muted" style="margin-bottom:6px">Strategy assistant — describe a goal ("activate sports on 11", "be more aggressive on geopolitics"); proposals appear in the grid above, nothing applies until you Save.</div>
+      <div id="chatLog" style="max-height:180px;overflow-y:auto;font-size:13px;margin-bottom:6px"></div>
+      <div style="display:flex;gap:8px">
+        <input id="chatInput" placeholder="set a goal or ask about your strategy…" style="background:#0b0e14;color:#d7dce5;border:1px solid #1c2230;border-radius:6px;padding:6px;flex:1">
+        <button id="chatSend" style="background:#1c2230;color:#9aa7bd;border:1px solid #28405c;border-radius:6px;padding:6px 14px;cursor:pointer">Send</button>
+      </div>
+    </div>
+  </div>
   <h2 style="font-size:15px">Claimable emissions</h2>
   <table id="emTable"><thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>REPPO</th></tr></thead><tbody></tbody></table>
   <h2 style="font-size:15px">Activity
@@ -78,9 +96,16 @@ async function load() {
   // Cycle health: per-datanet outcome counts + dominant error code
   const hRows = (health?.datanets ?? [])
   const kc = (c) => `${c.executed}/${c.refused}/${c.error}`
+  const rateCell = (t) => t && t.rate !== null
+    ? `<span class="${t.rate >= 0.9 ? 'pos' : t.rate >= 0.5 ? '' : 'neg'}">${Math.round(t.rate * 100)}%</span> <span class="muted">(${t.executed}✓/${t.failed}✗)</span>`
+    : '<span class="muted">—</span>'
   document.querySelector('#healthTable tbody').innerHTML = hRows.length
-    ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
-    : '<tr><td colspan="5" class="muted">no activity yet</td></tr>'
+    ? hRows.map(d => `<tr><td>${esc(d.datanetId)}</td><td>${kc(d.votes)}</td><td>${kc(d.mints)}</td><td>${rateCell(d.txRate)}</td><td>${d.skips || ''}</td><td class="err">${d.topErrors[0] ? `${esc(d.topErrors[0].code)} × ${d.topErrors[0].count}` : ''}</td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted">no activity yet</td></tr>'
+  const ot = health?.txRate
+  document.getElementById('txOverall').innerHTML = ot && ot.rate !== null
+    ? `overall tx success: ${rateCell(ot)} over the 7-day window`
+    : ''
   // Idle datanets: why a configured datanet is doing nothing RIGHT NOW (newest entry
   // is a skip) — a stale skip reason from before activity resumed must not show.
   const idle = hRows.filter(d => d.idle && d.lastSkipReason)
@@ -107,7 +132,84 @@ async function load() {
     ? em.map(e => `<tr><td>${esc(e.podId)}</td><td>${esc(e.datanetId)}</td><td>${esc(e.epoch)}</td><td>${fmt(e.reppo)}</td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">none — all claimed</td></tr>'
   window._activity = act
+  if (!window._candidate && cfg && cfg.datanets) initStrategy(cfg)
   renderActivity()
+}
+
+// ── Strategy editor: grid + goal chat. One write path: Save → POST /api/strategy ──
+const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
+const STRICT = ['lenient', 'balanced', 'aggressive']
+function initStrategy(cfg) {
+  // candidate = full config we will save; grid/chat both mutate THIS, never the server.
+  window._candidate = JSON.parse(JSON.stringify(cfg))
+  delete window._candidate.claimEmissions // safeConfig omits schema-managed fields; keep only what we round-trip
+  window._chat = []
+  renderStrategy()
+}
+function renderStrategy() {
+  const c = window._candidate
+  if (!c) return
+  const rows = Object.entries(c.datanets).filter(([id]) => id !== '*')
+  document.querySelector('#stratGrid tbody').innerHTML = rows.map(([id, d]) => `
+    <tr data-id="${esc(id)}">
+      <td>${esc(id)}</td>
+      <td><input type="checkbox" class="sg-vote" ${d.vote ? 'checked' : ''}></td>
+      <td><input type="checkbox" class="sg-mint" ${d.mint ? 'checked' : ''}></td>
+      <td><select class="sg-adapter">${ADAPTERS.map(a => `<option value="${a}" ${(d.adapter ?? '') === a ? 'selected' : ''}>${a || '—'}</option>`).join('')}</select></td>
+      <td><select class="sg-strict">${STRICT.map(x => `<option ${d.strictness === x ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
+    </tr>`).join('') + `
+    <tr><td colspan="5"><button id="addNet" style="background:none;border:1px dashed #28405c;color:#7d8799;border-radius:6px;padding:2px 10px;cursor:pointer">+ add datanet</button></td></tr>`
+  document.getElementById('addNet').onclick = () => {
+    const id = prompt('datanet id (integer):')
+    if (id && /^\d+$/.test(id)) { window._candidate.datanets[id] = { vote: true, mint: false, strictness: 'balanced' }; renderStrategy() }
+  }
+  document.querySelectorAll('#stratGrid tr[data-id]').forEach((tr) => {
+    const d = window._candidate.datanets[tr.dataset.id]
+    tr.querySelector('.sg-vote').onchange = (e) => { d.vote = e.target.checked }
+    tr.querySelector('.sg-mint').onchange = (e) => { d.mint = e.target.checked }
+    tr.querySelector('.sg-adapter').onchange = (e) => { if (e.target.value) d.adapter = e.target.value; else delete d.adapter }
+    tr.querySelector('.sg-strict').onchange = (e) => { d.strictness = e.target.value }
+  })
+}
+function chatAppend(role, text, warn) {
+  const log = document.getElementById('chatLog')
+  log.innerHTML += `<div><span class="${role === 'user' ? 'muted' : 'pos'}">${role === 'user' ? 'you' : 'assistant'}:</span> ${esc(text)}${warn ? ` <span class="neg">(${esc(warn)})</span>` : ''}</div>`
+  log.scrollTop = log.scrollHeight
+}
+document.getElementById('chatSend').onclick = async () => {
+  const input = document.getElementById('chatInput')
+  const text = input.value.trim()
+  if (!text) return
+  input.value = ''
+  chatAppend('user', text)
+  window._chat.push({ role: 'user', content: text })
+  const r = await fetch('/api/strategy/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-orquestra-token': document.getElementById('token').value },
+    body: JSON.stringify({ messages: window._chat }),
+  })
+  const out = await r.json()
+  if (!r.ok) { chatAppend('assistant', out.error || `HTTP ${r.status}`); return }
+  window._chat.push({ role: 'assistant', content: out.reply })
+  chatAppend('assistant', out.reply, out.warning)
+  if (out.proposedConfig) {
+    window._candidate = out.proposedConfig
+    renderStrategy()
+    document.getElementById('stratStatus').textContent = '· proposal loaded — review and Save'
+  }
+}
+document.getElementById('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('chatSend').click() })
+document.getElementById('saveStrat').onclick = async () => {
+  const msg = document.getElementById('saveMsg')
+  msg.textContent = 'saving…'
+  const r = await fetch('/api/strategy', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-orquestra-token': document.getElementById('token').value },
+    body: JSON.stringify(window._candidate),
+  })
+  const out = await r.json()
+  msg.textContent = r.ok ? 'saved — applies next cycle' : `error: ${out.error || r.status}`
+  if (r.ok) document.getElementById('stratStatus').textContent = ''
 }
 function renderActivity() {
   // every field below is network-derived (LLM reasons, pod names, CLI errors) —

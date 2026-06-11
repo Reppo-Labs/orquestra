@@ -127,11 +127,12 @@ async function start(): Promise<void> {
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
-  const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring)))
+  // reloadConfig: dashboard saves apply at the next cycle (validated; last-good on failure)
+  const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), { reloadConfig: () => loadConfig(DATA_DIR) }))
 
   const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
   const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
-  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort) : null
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
