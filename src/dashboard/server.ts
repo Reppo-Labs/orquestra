@@ -14,7 +14,14 @@ import { buildHealth } from './health.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
-import type { LanguageModel } from 'ai'
+import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
+import { buildStrategyConfig } from '../onboarding/build.js'
+import { validateAnswers } from '../onboarding/schema.js'
+import { runOnboardingTurn, seedOnboardingMessages, type OnboardingTurnResult } from '../onboarding/agent.js'
+import type { OnboardingAnswers } from '../onboarding/types.js'
+import { getDatanetRubric } from '../rubric/load.js'
+import { queryBalanceJson } from '../reppo/queryBalance.js'
+import type { CoreMessage, LanguageModel } from 'ai'
 
 // The built SPA (web/ → vite build) lands in a `public/` dir next to this file.
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'public')
@@ -84,6 +91,26 @@ async function datanetNames(): Promise<Record<string, string>> {
   }
 }
 
+/** One in-memory onboarding conversation per server (single-operator node).
+ *  Lost on restart by design — restart simply restarts the interview. */
+interface OnboardingSession {
+  messages: CoreMessage[]
+  draft: Partial<OnboardingAnswers> | null
+  finalized: OnboardingAnswers | null
+}
+
+/** Production turn-runner: same live deps the CLI onboarding uses. */
+function defaultOnboardingTurn(model: LanguageModel): (m: CoreMessage[]) => Promise<OnboardingTurnResult> {
+  return (messages) => runOnboardingTurn({
+    model,
+    listDatanets: () => listDatanetsJson(),
+    getDatanetDetails: async (id) => {
+      try { return await getDatanetRubric(id) } catch (e) { return { error: (e as Error).message } }
+    },
+    getBalance: () => queryBalanceJson(),
+  }, messages)
+}
+
 function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body))
 }
@@ -117,17 +144,49 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
-async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts): Promise<void> {
+const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm'])
+
+async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts, session: OnboardingSession): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
   try {
     if (req.method === 'POST') {
-      if (url !== '/api/strategy' && url !== '/api/strategy/chat') {
+      if (!POST_ROUTES.has(url)) {
         json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return
       }
       const auth = writeAuth(req)
       if (!auth.ok) { json(res, auth.code, { error: auth.error }); return }
       let body: unknown
       try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
+
+      if (url === '/api/onboarding/chat') {
+        const turn = opts.onboardingTurn ?? (opts.chatModel ? defaultOnboardingTurn(opts.chatModel) : null)
+        if (!turn) { json(res, 503, { error: 'onboarding chat unavailable — node started without an LLM model' }); return }
+        const b = body as { message?: string; reset?: boolean }
+        if (b?.reset) {
+          session.messages = []; session.draft = null; session.finalized = null
+          json(res, 200, { reset: true }); return
+        }
+        if (session.messages.length === 0) session.messages = seedOnboardingMessages()
+        const msg = typeof b?.message === 'string' ? b.message.trim() : ''
+        if (msg) session.messages.push({ role: 'user', content: msg })
+        const r = await turn(session.messages)
+        session.messages.push(...r.responseMessages)
+        if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
+        if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
+        json(res, 200, { reply: r.text, draft: session.draft, finalized: session.finalized })
+        return
+      }
+
+      if (url === '/api/onboarding/confirm') {
+        // The single onboarding write path: validated answers → assembled config →
+        // persisted exactly like the CLI flow. The waiting node sees the file appear.
+        const v = validateAnswers(body)
+        if (!v.ok) { json(res, 400, { error: v.error }); return }
+        persistOnboarding(dataDir, buildStrategyConfig(v.answers), v.answers.notes)
+        session.messages = []; session.draft = null; session.finalized = null
+        json(res, 200, { saved: true })
+        return
+      }
 
       if (url === '/api/strategy/chat') {
         if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
@@ -148,6 +207,14 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2))
       renameSync(tmpPath, finalPath)
       json(res, 200, { saved: true, appliesNextCycle: true })
+      return
+    }
+    if (url === '/api/onboarding/status') {
+      json(res, 200, {
+        needed: needsOnboarding(dataDir),
+        chatAvailable: Boolean(opts.onboardingTurn ?? opts.chatModel),
+        writesEnabled: Boolean((process.env.DASHBOARD_TOKEN ?? '').trim()),
+      })
       return
     }
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
@@ -194,10 +261,13 @@ export interface DashboardOpts {
   chatModel?: LanguageModel
   /** Override the built-SPA dir (defaults to `public/` beside this file); tests use this. */
   publicDir?: string
+  /** Override the onboarding turn-runner (tests); defaults to the live model runner. */
+  onboardingTurn?: (messages: CoreMessage[]) => Promise<OnboardingTurnResult>
 }
 
 export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
-  const server = createServer((req, res) => { void handle(dataDir, req, res, opts) })
+  const session: OnboardingSession = { messages: [], draft: null, finalized: null }
+  const server = createServer((req, res) => { void handle(dataDir, req, res, opts, session) })
   return new Promise((resolve) => {
     server.listen(port, () => {
       const actual = (server.address() as AddressInfo).port

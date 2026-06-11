@@ -224,6 +224,105 @@ describe('static SPA serving (publicDir)', () => {
   })
 })
 
+const VALID_ANSWERS = {
+  datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
+  lockReppo: 0, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'dashboard onboarding test',
+}
+
+describe('onboarding API', () => {
+  let freshDir: string
+  let onb: DashboardHandle
+  const fakeTurn = async (messages: { role: string; content: unknown }[]) => {
+    const users = messages.filter((m) => m.role === 'user').length
+    if (String(messages[messages.length - 1]?.content).includes('finalize now')) {
+      return { text: 'Done — review and confirm.', responseMessages: [{ role: 'assistant' as const, content: 'Done — review and confirm.' }], finalized: VALID_ANSWERS as never, draft: null }
+    }
+    return {
+      text: `turn with ${users} user message(s)`,
+      responseMessages: [{ role: 'assistant' as const, content: 'ok' }],
+      finalized: null,
+      draft: users > 1 ? { cadenceHours: 6 } : null,
+    }
+  }
+  beforeEach(async () => {
+    freshDir = mkdtempSync(join(tmpdir(), 'orq-onb-')) // NO strategy.config.json → onboarding needed
+    onb = await startDashboard(freshDir, 0, { onboardingTurn: fakeTurn as never })
+    process.env.DASHBOARD_TOKEN = 'secret-token'
+  })
+  afterEach(async () => {
+    delete process.env.DASHBOARD_TOKEN
+    await onb.close()
+    rmSync(freshDir, { recursive: true, force: true })
+  })
+
+  const onbGet = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${onb.port}${path}`)
+    return { status: res.status, body: JSON.parse(await res.text()) }
+  }
+  const onbPost = async (path: string, body: unknown, token?: string) => {
+    const res = await fetch(`http://127.0.0.1:${onb.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { 'x-orquestra-token': token } : {}) },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, body: JSON.parse(await res.text()) }
+  }
+
+  it('status reports needed=true on a fresh data dir, false once config exists', async () => {
+    expect((await onbGet('/api/onboarding/status')).body).toMatchObject({ needed: true, chatAvailable: true, writesEnabled: true })
+    const r = await fetch(`http://127.0.0.1:${handle.port}/api/onboarding/status`) // outer server HAS a config
+    expect(((await r.json()) as { needed: boolean }).needed).toBe(false)
+  })
+
+  it('chat and confirm are token-gated (401 wrong token)', async () => {
+    expect((await onbPost('/api/onboarding/chat', {}, 'wrong')).status).toBe(401)
+    expect((await onbPost('/api/onboarding/confirm', VALID_ANSWERS, 'wrong')).status).toBe(401)
+  })
+
+  it('chat is 503 when no model and no injected turn runner', async () => {
+    const bare = await startDashboard(freshDir, 0, {})
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/api/onboarding/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-orquestra-token': 'secret-token' }, body: '{}',
+      })
+      expect(res.status).toBe(503)
+    } finally { await bare.close() }
+  })
+
+  it('chat keeps a session across turns and surfaces drafts and finalized answers', async () => {
+    const first = await onbPost('/api/onboarding/chat', {}, 'secret-token')
+    expect(first.status).toBe(200)
+    expect(first.body.reply).toMatch(/1 user message/) // seed message only
+    expect(first.body.finalized).toBeNull()
+
+    const second = await onbPost('/api/onboarding/chat', { message: 'vote on 9' }, 'secret-token')
+    expect(second.body.reply).toMatch(/2 user message/) // session grew
+    expect(second.body.draft).toMatchObject({ cadenceHours: 6 })
+
+    const third = await onbPost('/api/onboarding/chat', { message: 'finalize now' }, 'secret-token')
+    expect(third.body.finalized).toMatchObject({ notes: 'dashboard onboarding test' })
+  })
+
+  it('chat reset clears the session', async () => {
+    await onbPost('/api/onboarding/chat', { message: 'hello' }, 'secret-token')
+    await onbPost('/api/onboarding/chat', { reset: true }, 'secret-token')
+    const r = await onbPost('/api/onboarding/chat', {}, 'secret-token')
+    expect(r.body.reply).toMatch(/1 user message/)
+  })
+
+  it('confirm validates, persists config + notes, and flips status.needed', async () => {
+    expect((await onbPost('/api/onboarding/confirm', { horizonDays: -1 }, 'secret-token')).status).toBe(400)
+    const ok = await onbPost('/api/onboarding/confirm', VALID_ANSWERS, 'secret-token')
+    expect(ok.status).toBe(200)
+    expect(ok.body).toMatchObject({ saved: true })
+    const saved = JSON.parse(readFileSync(join(freshDir, 'strategy.config.json'), 'utf-8'))
+    expect(saved.cadenceHours).toBe(6)
+    expect(readFileSync(join(freshDir, 'strategy-notes.md'), 'utf-8')).toMatch(/dashboard onboarding test/)
+    expect((await onbGet('/api/onboarding/status')).body.needed).toBe(false)
+  })
+})
+
 describe('GET /api/datanets', () => {
   it('returns an id→name object; tolerates a missing reppo CLI by serving {}', async () => {
     const r = await get('/api/datanets')
