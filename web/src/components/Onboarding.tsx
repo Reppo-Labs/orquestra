@@ -71,10 +71,12 @@ function DraftSheet({ draft, names }: { draft: OnboardingDraft; names: Record<st
   )
 }
 
-export function Onboarding({ status, netNames, onDone }: {
+export function Onboarding({ status, netNames, onDone, onCancel }: {
   status: OnboardingStatus
   netNames: Record<string, string>
   onDone: () => void
+  /** present when reconfiguring an already-onboarded node — shows a way back */
+  onCancel?: () => void
 }) {
   const [token, setToken] = useState('')
   const [started, setStarted] = useState(false)
@@ -123,6 +125,7 @@ export function Onboarding({ status, netNames, onDone }: {
   return (
     <div className="ob-wrap">
       <div className="ob-hero">
+        {onCancel && <a href="#" onClick={(e) => { e.preventDefault(); onCancel() }}>← back to dashboard</a>}
         <h1 className="ob-title">orquestra</h1>
         <p className="ob-sub">Let's set up your node — what to vote and mint, how much to spend, and how often to run. Chat below; your strategy takes shape on the right. Nothing is saved until you confirm.</p>
       </div>

@@ -10,13 +10,40 @@ import { netLabel } from '../lib/format'
 type Candidate = StrategyConfig & { datanets: Record<string, DatanetEntry> }
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
-const STRICT = ['lenient', 'balanced', 'aggressive']
+// Must match the Strictness enum in src/config/schema.ts — anything else 400s on Save.
+const STRICT = ['conservative', 'balanced', 'aggressive']
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 interface LogEntry { role: 'user' | 'assistant'; text: string; warn?: string }
 
-export function StrategyPanel({ config, netNames }: { config: StrategyConfig; netNames: Record<string, string> }) {
+function Num({ label, value, int, onChange }: {
+  label: string
+  value: number | undefined
+  int?: boolean
+  /** undefined = field cleared (caller decides: delete the key or ignore) */
+  onChange: (n: number | undefined) => void
+}) {
+  return (
+    <label>
+      {label}
+      <input
+        type="number" min={0} step={int ? 1 : 'any'} value={value ?? ''}
+        onChange={(e) => {
+          if (e.target.value === '') { onChange(undefined); return }
+          const n = int ? parseInt(e.target.value, 10) : parseFloat(e.target.value)
+          if (!Number.isNaN(n)) onChange(n)
+        }}
+      />
+    </label>
+  )
+}
+
+export function StrategyPanel({ config, netNames, onReconfigure }: {
+  config: StrategyConfig
+  netNames: Record<string, string>
+  onReconfigure: () => void
+}) {
   const [candidate, setCandidate] = useState<Candidate | null>(null)
   const [baseline, setBaseline] = useState<Candidate | null>(null)
   const [chat, setChat] = useState<ChatMsg[]>([])
@@ -25,6 +52,7 @@ export function StrategyPanel({ config, netNames }: { config: StrategyConfig; ne
   const [input, setInput] = useState('')
   const [saveMsg, setSaveMsg] = useState('')
   const [status, setStatus] = useState('')
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const logRef = useRef<HTMLDivElement>(null)
 
   // Initialize ONCE from the first config that has datanets; later polls must not
@@ -47,25 +75,27 @@ export function StrategyPanel({ config, netNames }: { config: StrategyConfig; ne
   const diff = baseline ? configDiff(baseline, candidate) : []
   const rows = Object.entries(candidate.datanets).filter(([id]) => id !== '*')
 
-  const updateNet = (id: string, fn: (d: DatanetEntry) => void) => {
+  const edit = (fn: (c: Candidate) => void) => {
     setCandidate((prev) => {
       if (!prev) return prev
       const next = clone(prev)
-      fn(next.datanets[id])
+      fn(next)
       return next
     })
   }
+  const updateNet = (id: string, fn: (d: DatanetEntry) => void) => edit((c) => fn(c.datanets[id]))
+  const setParam = (id: string, key: 'focus' | 'angle' | 'topN' | 'minImportance', v: string | number | undefined) =>
+    updateNet(id, (d) => {
+      const p = { ...(d.adapterParams ?? {}) } as Record<string, unknown>
+      if (v === undefined || v === '') delete p[key]
+      else p[key] = v
+      if (Object.keys(p).length) d.adapterParams = p
+      else delete d.adapterParams
+    })
 
   const addNet = () => {
     const id = prompt('datanet id (integer):')
-    if (id && /^\d+$/.test(id)) {
-      setCandidate((prev) => {
-        if (!prev) return prev
-        const next = clone(prev)
-        next.datanets[id] = { vote: true, mint: false, strictness: 'balanced' }
-        return next
-      })
-    }
+    if (id && /^\d+$/.test(id)) edit((c) => { c.datanets[id] = { vote: true, mint: false, strictness: 'balanced' } })
   }
 
   const send = async () => {
@@ -99,32 +129,91 @@ export function StrategyPanel({ config, netNames }: { config: StrategyConfig; ne
     }
   }
 
+  const budget = candidate.budget ?? {}
+  const stake = candidate.stake ?? {}
+  const params = (d: DatanetEntry) => (d.adapterParams ?? {}) as { focus?: string; angle?: string; topN?: number; minImportance?: number }
+
   return (
     <>
-      <h2>Strategy <span className="muted">{status}</span></h2>
+      <h2>
+        Strategy <span className="muted">{status}</span>
+        <button className="btn ghost" style={{ float: 'right' }} onClick={onReconfigure}>↻ reconfigure with assistant</button>
+      </h2>
       <table>
-        <thead><tr><th>Datanet</th><th>Vote</th><th>Mint</th><th>Adapter</th><th>Strictness</th></tr></thead>
+        <thead><tr><th>Datanet</th><th>Vote</th><th>Mint</th><th>Adapter</th><th>Strictness</th><th></th></tr></thead>
         <tbody>
           {rows.map(([id, d]) => (
-            <tr key={id}>
-              <td title={netNames[id] || ''}>{netLabel(id, netNames)}</td>
-              <td><input type="checkbox" checked={d.vote} onChange={(e) => updateNet(id, (n) => { n.vote = e.target.checked })} /></td>
-              <td><input type="checkbox" checked={d.mint} onChange={(e) => updateNet(id, (n) => { n.mint = e.target.checked })} /></td>
-              <td>
-                <select value={d.adapter ?? ''} onChange={(e) => updateNet(id, (n) => { if (e.target.value) n.adapter = e.target.value; else delete n.adapter })}>
-                  {ADAPTERS.map((a) => <option key={a} value={a}>{a || '—'}</option>)}
-                </select>
-              </td>
-              <td>
-                <select value={d.strictness} onChange={(e) => updateNet(id, (n) => { n.strictness = e.target.value })}>
-                  {STRICT.map((x) => <option key={x}>{x}</option>)}
-                </select>
-              </td>
-            </tr>
+            [
+              <tr key={id}>
+                <td title={netNames[id] || ''}>{netLabel(id, netNames)}</td>
+                <td><input type="checkbox" checked={d.vote} onChange={(e) => updateNet(id, (n) => { n.vote = e.target.checked })} /></td>
+                <td><input type="checkbox" checked={d.mint} onChange={(e) => updateNet(id, (n) => { n.mint = e.target.checked })} /></td>
+                <td>
+                  <select value={d.adapter ?? ''} onChange={(e) => updateNet(id, (n) => { if (e.target.value) n.adapter = e.target.value; else delete n.adapter })}>
+                    {ADAPTERS.map((a) => <option key={a} value={a}>{a || '—'}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <select value={d.strictness} onChange={(e) => updateNet(id, (n) => { n.strictness = e.target.value })}>
+                    {STRICT.map((x) => <option key={x}>{x}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <button className="btn ghost" onClick={() => setExpanded((x) => ({ ...x, [id]: !x[id] }))}>
+                    {expanded[id] ? '▾' : '▸'} strategy
+                  </button>
+                </td>
+              </tr>,
+              expanded[id] ? (
+                <tr key={`${id}-params`} className="params-row">
+                  <td colSpan={6}>
+                    <div className="settings">
+                      <label>focus
+                        <input type="text" placeholder="regions / topics / keywords" value={params(d).focus ?? ''}
+                          onChange={(e) => setParam(id, 'focus', e.target.value)} />
+                      </label>
+                      <label>angle
+                        <input type="text" placeholder="stance — e.g. contrarian, risk-focused" value={params(d).angle ?? ''}
+                          onChange={(e) => setParam(id, 'angle', e.target.value)} />
+                      </label>
+                      <Num label="items / cycle (topN)" int value={params(d).topN} onChange={(n) => setParam(id, 'topN', n)} />
+                      <Num label="min importance (1-10)" int value={params(d).minImportance} onChange={(n) => setParam(id, 'minImportance', n)} />
+                    </div>
+                  </td>
+                </tr>
+              ) : null,
+            ]
           ))}
-          <tr><td colSpan={5}><button className="btn ghost" onClick={addNet}>+ add datanet</button></td></tr>
+          <tr><td colSpan={6}><button className="btn ghost" onClick={addNet}>+ add datanet</button></td></tr>
         </tbody>
       </table>
+
+      <div className="settings">
+        <Num label="cadence (hours)" int value={candidate.cadenceHours} onChange={(n) => { if (n !== undefined) edit((c) => { c.cadenceHours = n }) }} />
+        <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => { if (n !== undefined) edit((c) => { c.horizonDays = n }) }} />
+        <Num label="lock REPPO" value={stake.lockReppo} onChange={(n) => { if (n !== undefined) edit((c) => { c.stake = { ...c.stake, lockReppo: n } }) }} />
+        <Num label="lock days" int value={stake.lockDurationDays} onChange={(n) => { if (n !== undefined) edit((c) => { c.stake = { ...c.stake, lockDurationDays: n } }) }} />
+        <Num label="vote gas max (ETH)" value={budget.voteGasEthMax} onChange={(n) => { if (n !== undefined) edit((c) => { c.budget = { ...c.budget, voteGasEthMax: n } }) }} />
+        <Num label="votes / cycle" int value={budget.voteRateMaxPerCycle} onChange={(n) => { if (n !== undefined) edit((c) => { c.budget = { ...c.budget, voteRateMaxPerCycle: n } }) }} />
+        <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => { if (n !== undefined) edit((c) => { c.budget = { ...c.budget, mintReppoMax: n } }) }} />
+        <Num label="mint gas max (ETH)" value={budget.mintGasEthMax} onChange={(n) => { if (n !== undefined) edit((c) => { c.budget = { ...c.budget, mintGasEthMax: n } }) }} />
+        <Num label="claim gas max (ETH)" value={budget.claimGasEthMax} onChange={(n) => { if (n !== undefined) edit((c) => { c.budget = { ...c.budget, claimGasEthMax: n } }) }} />
+        {/* grant cap is genuinely optional: empty = uncapped (∞) */}
+        <Num label="grant REPPO max (empty = ∞)" value={budget.grantReppoMax} onChange={(n) => edit((c) => {
+          const b = { ...c.budget }
+          if (n === undefined) delete b.grantReppoMax
+          else b.grantReppoMax = n
+          c.budget = b
+        })} />
+      </div>
+      <label className="notes-label">
+        goals / strategy notes (the brief the node votes and mints by)
+        <textarea
+          rows={3} value={candidate.notes ?? ''}
+          onChange={(e) => edit((c) => { c.notes = e.target.value })}
+        />
+      </label>
+
       <div className="row m8">
         <input
           type="password" className="token-input" placeholder="dashboard token"

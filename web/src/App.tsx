@@ -13,6 +13,7 @@ export function App() {
   const [data, setData] = useState<DashData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [obStatus, setObStatus] = useState<OnboardingStatus | null>(null)
+  const [reconfiguring, setReconfiguring] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -36,8 +37,16 @@ export function App() {
   const earn = data?.earn
 
   // Fresh node: the dashboard IS the onboarding until a strategy config exists.
-  if (obStatus?.needed) {
-    return <Onboarding status={obStatus} netNames={data?.netNames ?? {}} onDone={() => void refresh()} />
+  // "Reconfigure" reopens the same flow on demand; confirming overwrites the config.
+  if (obStatus && (obStatus.needed || reconfiguring)) {
+    return (
+      <Onboarding
+        status={obStatus}
+        netNames={data?.netNames ?? {}}
+        onDone={() => { setReconfiguring(false); void refresh() }}
+        onCancel={obStatus.needed ? undefined : () => setReconfiguring(false)}
+      />
+    )
   }
 
   return (
@@ -62,7 +71,7 @@ export function App() {
         <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
         <CycleHealth health={data?.health ?? null} netNames={data?.netNames ?? {}} />
         <BudgetBurn snapshot={snap} />
-        {cfg && cfg.datanets ? <StrategyPanel config={cfg} netNames={data?.netNames ?? {}} /> : null}
+        {cfg && cfg.datanets ? <StrategyPanel config={cfg} netNames={data?.netNames ?? {}} onReconfigure={() => setReconfiguring(true)} /> : null}
         <Emissions snapshot={snap} />
         <Activity activity={data?.activity ?? []} />
       </main>

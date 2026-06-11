@@ -53,6 +53,14 @@ a { color: var(--accent); }
 .diff-line { font-size: 12px; margin-bottom: 8px; color: var(--muted); }
 .diff-line.dirty { color: var(--warn); }
 
+/* ── Strategy settings ── */
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; }
+.settings label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.settings input { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+.params-row td { background: #0e1219; }
+.notes-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); margin: 12px 0; }
+.notes-label textarea { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font: inherit; resize: vertical; }
+
 /* ── Onboarding ── */
 .ob-wrap { max-width: 1100px; margin: 0 auto; padding: 48px 24px; }
 .ob-hero { margin-bottom: 24px; animation: ob-in 600ms ease-out both; }
