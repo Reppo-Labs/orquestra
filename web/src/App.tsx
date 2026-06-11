@@ -1,26 +1,34 @@
 import { useCallback, useEffect, useState } from 'react'
-import { loadAll, onboardingStatus, type DashData, type OnboardingStatus } from './api'
-import { fmt } from './lib/format'
+import { loadAll, onboardingStatus, type ActivityRow, type DashData, type OnboardingStatus } from './api'
+import { useStrategy } from './lib/useStrategy'
+import { Nav, type TabId } from './components/Nav'
 import { PnlCards } from './components/PnlCards'
 import { CycleHealth } from './components/CycleHealth'
 import { BudgetBurn } from './components/BudgetBurn'
-import { StrategyPanel } from './components/StrategyPanel'
 import { Emissions } from './components/Emissions'
+import { StrategyTab } from './components/StrategyTab'
+import { ChatTab } from './components/ChatTab'
 import { Activity } from './components/Activity'
+import { PanelDrawer } from './components/PanelDrawer'
 import { Onboarding } from './components/Onboarding'
+import { fmt } from './lib/format'
+
+function SecHead({ title }: { title: string }) {
+  return <div className="sec-head"><h2>{title}</h2><div className="rule" /></div>
+}
 
 export function App() {
   const [data, setData] = useState<DashData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [obStatus, setObStatus] = useState<OnboardingStatus | null>(null)
   const [reconfiguring, setReconfiguring] = useState(false)
+  const [tab, setTab] = useState<TabId>('overview')
+  const [panelRow, setPanelRow] = useState<ActivityRow | null>(null)
 
   const refresh = useCallback(async () => {
     try {
       const [d, ob] = await Promise.all([loadAll(), onboardingStatus()])
-      setData(d)
-      setObStatus(ob)
-      setError(null)
+      setData(d); setObStatus(ob); setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -35,46 +43,55 @@ export function App() {
   const cfg = data?.config
   const snap = data?.snapshot ?? null
   const earn = data?.earn
+  const netNames = data?.netNames ?? {}
+  const strategy = useStrategy(cfg) // hooks run unconditionally — before any early return
 
-  // Fresh node: the dashboard IS the onboarding until a strategy config exists.
-  // "Reconfigure" reopens the same flow on demand; confirming overwrites the config.
+  // Fresh node (or reconfigure): the dashboard IS the onboarding until a config exists.
   if (obStatus && (obStatus.needed || reconfiguring)) {
     return (
       <Onboarding
         status={obStatus}
-        netNames={data?.netNames ?? {}}
+        netNames={netNames}
         onDone={() => { setReconfiguring(false); void refresh() }}
         onCancel={obStatus.needed ? undefined : () => setReconfiguring(false)}
       />
     )
   }
 
+  const asof = error ? `load error: ${error}` : snap ? `synced ${new Date(snap.ts).toLocaleTimeString()}` : 'awaiting first cycle'
+
   return (
-    <>
-      <header>
-        <h1>
-          Orquestra{' '}
-          <span className="muted">
-            {cfg ? `· ${cfg.cadenceHours}h cadence · claim ${cfg.claimEmissions ? 'on' : 'off'}` : ''}
-          </span>
-        </h1>
-        <span className="muted">
-          {error ? `load error: ${error}` : snap ? `as of ${new Date(snap.ts).toLocaleString()}` : 'PnL pending first cycle'}
-        </span>
-      </header>
-      <main>
-        <div className="muted" style={{ marginBottom: 16 }}>
-          {earn
-            ? `Earn-test: ${earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'} · ${earn.mintedPods} pod(s), ${fmt(earn.claimableReppo)} claimable + ${fmt(earn.claimedReppo)} claimed REPPO, ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
-            : 'Earn-test: pending first cycle'}
-        </div>
-        <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
-        <CycleHealth health={data?.health ?? null} netNames={data?.netNames ?? {}} />
-        <BudgetBurn snapshot={snap} />
-        {cfg && cfg.datanets ? <StrategyPanel config={cfg} netNames={data?.netNames ?? {}} onReconfigure={() => setReconfiguring(true)} /> : null}
-        <Emissions snapshot={snap} />
-        <Activity activity={data?.activity ?? []} />
+    <div className="app">
+      <Nav data={data} asof={asof} tab={tab} onTab={setTab} activityCount={data?.activity.length ?? 0} />
+      <main className="shell">
+        {tab === 'overview' && (
+          <div key="ov">
+            <div className="earn-banner">
+              <span className={`dot ${earn?.earning ? 'on' : earn && earn.totalUpVotes > 0 ? 'warm' : 'off'}`} />
+              {earn
+                ? `${earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'} · ${earn.mintedPods} pod(s) · ${fmt(earn.claimableReppo)} claimable + ${fmt(earn.claimedReppo)} claimed · ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
+                : 'earn-test pending first cycle'}
+            </div>
+            <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
+            <SecHead title="Cycle health" />
+            <CycleHealth health={data?.health ?? null} netNames={netNames} />
+            <SecHead title="Budget burn" />
+            <BudgetBurn snapshot={snap} />
+            <SecHead title="Claimable emissions" />
+            <Emissions snapshot={snap} />
+          </div>
+        )}
+        {tab === 'strategy' && (
+          <StrategyTab strategy={strategy} netNames={netNames} onReconfigure={() => setReconfiguring(true)} />
+        )}
+        {tab === 'chat' && (
+          <ChatTab strategy={strategy} onGoToStrategy={() => setTab('strategy')} />
+        )}
+        {tab === 'activity' && (
+          <Activity activity={data?.activity ?? []} netNames={netNames} onOpenPanel={setPanelRow} />
+        )}
       </main>
-    </>
+      {panelRow && <PanelDrawer row={panelRow} onClose={() => setPanelRow(null)} />}
+    </div>
   )
 }
