@@ -1,6 +1,6 @@
 // Typed client for the dashboard server's JSON API (src/dashboard/server.ts).
-// Shapes mirror what the endpoints actually emit; everything is read-only
-// except saveStrategy/strategyChat which carry the operator token.
+// Shapes mirror what the endpoints actually emit. Writes are unauthenticated —
+// the server binds localhost and exposure is the operator's responsibility.
 
 export interface Pnl {
   netReppo: number
@@ -131,10 +131,10 @@ export async function loadAll(): Promise<DashData> {
   return { pnl: pnlRes.pnl, snapshot: pnlRes.snapshot, activity, config, earn, health, netNames: netNames || {} }
 }
 
-export async function saveStrategy(candidate: unknown, token: string): Promise<{ ok: boolean; error?: string }> {
+export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {
   const r = await fetch('/api/strategy', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-orquestra-token': token },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(candidate),
   })
   const out = await r.json().catch(() => ({}))
@@ -166,7 +166,7 @@ export interface OnboardingAnswers {
 
 export type OnboardingDraft = Partial<OnboardingAnswers>
 
-export interface OnboardingStatus { needed: boolean; chatAvailable: boolean; writesEnabled: boolean }
+export interface OnboardingStatus { needed: boolean; chatAvailable: boolean }
 
 export async function onboardingStatus(): Promise<OnboardingStatus | null> {
   try { return await fetch('/api/onboarding/status').then((r) => r.json()) } catch { return null }
@@ -180,19 +180,19 @@ export interface OnboardingChatOut {
   error?: string
 }
 
-export async function onboardingChat(body: { message?: string; reset?: boolean }, token: string): Promise<{ ok: boolean; out: OnboardingChatOut }> {
+export async function onboardingChat(body: { message?: string; reset?: boolean }): Promise<{ ok: boolean; out: OnboardingChatOut }> {
   const r = await fetch('/api/onboarding/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-orquestra-token': token },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
   return { ok: r.ok, out: await r.json().catch(() => ({ error: `HTTP ${r.status}` })) }
 }
 
-export async function onboardingConfirm(answers: OnboardingAnswers, token: string): Promise<{ ok: boolean; error?: string }> {
+export async function onboardingConfirm(answers: OnboardingAnswers): Promise<{ ok: boolean; error?: string }> {
   const r = await fetch('/api/onboarding/confirm', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-orquestra-token': token },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(answers),
   })
   const out = await r.json().catch(() => ({}))
@@ -201,10 +201,10 @@ export async function onboardingConfirm(answers: OnboardingAnswers, token: strin
 
 export interface ChatResult { reply: string; warning?: string; proposedConfig?: StrategyConfig & Record<string, unknown> }
 
-export async function strategyChat(messages: ChatMsg[], token: string): Promise<{ ok: boolean; out: ChatResult & { error?: string }; status: number }> {
+export async function strategyChat(messages: ChatMsg[]): Promise<{ ok: boolean; out: ChatResult & { error?: string }; status: number }> {
   const r = await fetch('/api/strategy/chat', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-orquestra-token': token },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ messages }),
   })
   return { ok: r.ok, out: await r.json().catch(() => ({ reply: '' })), status: r.status }

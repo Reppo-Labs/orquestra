@@ -100,69 +100,33 @@ const post = async (path: string, body: unknown, headers: Record<string, string>
   return { status: res.status, body: await res.text() }
 }
 
-describe('write layer — token gate (fail-closed)', () => {
-  it('writes are DISABLED (503) when DASHBOARD_TOKEN is unset', async () => {
-    delete process.env.DASHBOARD_TOKEN
+describe('write layer (unauthenticated — localhost-bound by default)', () => {
+  it('accepts a valid strategy without any token, writes atomically, GET reflects it', async () => {
     const r = await post('/api/strategy', VALID_STRATEGY)
-    expect(r.status).toBe(503)
-    expect(r.body).toMatch(/writes disabled/i)
-  })
-
-  it('rejects a wrong/missing token with 401 when DASHBOARD_TOKEN is set', async () => {
-    process.env.DASHBOARD_TOKEN = 'secret-token'
-    try {
-      expect((await post('/api/strategy', VALID_STRATEGY)).status).toBe(401)
-      expect((await post('/api/strategy', VALID_STRATEGY, { 'x-orquestra-token': 'wrong' })).status).toBe(401)
-    } finally { delete process.env.DASHBOARD_TOKEN }
-  })
-
-  it('accepts a valid strategy with the right token, writes atomically, GET reflects it', async () => {
-    process.env.DASHBOARD_TOKEN = 'secret-token'
-    try {
-      const r = await post('/api/strategy', VALID_STRATEGY, { 'x-orquestra-token': 'secret-token' })
-      expect(r.status).toBe(200)
-      const saved = JSON.parse(readFileSync(join(dir, 'strategy.config.json'), 'utf-8'))
-      expect(saved.notes).toBe('from dashboard test')
-      const cfg = await get('/api/config')
-      expect(JSON.parse(cfg.body).notes).toBe('from dashboard test')
-    } finally { delete process.env.DASHBOARD_TOKEN }
+    expect(r.status).toBe(200)
+    const saved = JSON.parse(readFileSync(join(dir, 'strategy.config.json'), 'utf-8'))
+    expect(saved.notes).toBe('from dashboard test')
+    const cfg = await get('/api/config')
+    expect(JSON.parse(cfg.body).notes).toBe('from dashboard test')
   })
 
   it('rejects an invalid strategy with 400 + zod detail, file untouched', async () => {
-    process.env.DASHBOARD_TOKEN = 'secret-token'
-    try {
-      const before = readFileSync(join(dir, 'strategy.config.json'), 'utf-8')
-      const r = await post('/api/strategy', { horizonDays: -1 }, { 'x-orquestra-token': 'secret-token' })
-      expect(r.status).toBe(400)
-      expect(readFileSync(join(dir, 'strategy.config.json'), 'utf-8')).toBe(before) // no write
-    } finally { delete process.env.DASHBOARD_TOKEN }
+    const before = readFileSync(join(dir, 'strategy.config.json'), 'utf-8')
+    const r = await post('/api/strategy', { horizonDays: -1 })
+    expect(r.status).toBe(400)
+    expect(readFileSync(join(dir, 'strategy.config.json'), 'utf-8')).toBe(before) // no write
   })
 
   it('POST to a read-only route → 405', async () => {
-    process.env.DASHBOARD_TOKEN = 'secret-token'
-    try {
-      expect((await post('/api/health', {}, { 'x-orquestra-token': 'secret-token' })).status).toBe(405)
-    } finally { delete process.env.DASHBOARD_TOKEN }
+    expect((await post('/api/health', {})).status).toBe(405)
   })
 })
 
 describe('POST /api/strategy/chat', () => {
-  it('is token-gated like /api/strategy (503 unset, 401 wrong)', async () => {
-    delete process.env.DASHBOARD_TOKEN
-    expect((await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] })).status).toBe(503)
-    process.env.DASHBOARD_TOKEN = 'secret-token'
-    try {
-      expect((await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] }, { 'x-orquestra-token': 'nope' })).status).toBe(401)
-    } finally { delete process.env.DASHBOARD_TOKEN }
-  })
-
   it('503 when the server has no chat model (this test server passes none)', async () => {
-    process.env.DASHBOARD_TOKEN = 'secret-token'
-    try {
-      const r = await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] }, { 'x-orquestra-token': 'secret-token' })
-      expect(r.status).toBe(503)
-      expect(r.body).toMatch(/chat unavailable/i)
-    } finally { delete process.env.DASHBOARD_TOKEN }
+    const r = await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.status).toBe(503)
+    expect(r.body).toMatch(/chat unavailable/i)
   })
 })
 
@@ -248,10 +212,8 @@ describe('onboarding API', () => {
   beforeEach(async () => {
     freshDir = mkdtempSync(join(tmpdir(), 'orq-onb-')) // NO strategy.config.json → onboarding needed
     onb = await startDashboard(freshDir, 0, { onboardingTurn: fakeTurn as never })
-    process.env.DASHBOARD_TOKEN = 'secret-token'
   })
   afterEach(async () => {
-    delete process.env.DASHBOARD_TOKEN
     await onb.close()
     rmSync(freshDir, { recursive: true, force: true })
   })
@@ -260,60 +222,55 @@ describe('onboarding API', () => {
     const res = await fetch(`http://127.0.0.1:${onb.port}${path}`)
     return { status: res.status, body: JSON.parse(await res.text()) }
   }
-  const onbPost = async (path: string, body: unknown, token?: string) => {
+  const onbPost = async (path: string, body: unknown) => {
     const res = await fetch(`http://127.0.0.1:${onb.port}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(token ? { 'x-orquestra-token': token } : {}) },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
     return { status: res.status, body: JSON.parse(await res.text()) }
   }
 
   it('status reports needed=true on a fresh data dir, false once config exists', async () => {
-    expect((await onbGet('/api/onboarding/status')).body).toMatchObject({ needed: true, chatAvailable: true, writesEnabled: true })
+    expect((await onbGet('/api/onboarding/status')).body).toMatchObject({ needed: true, chatAvailable: true })
     const r = await fetch(`http://127.0.0.1:${handle.port}/api/onboarding/status`) // outer server HAS a config
     expect(((await r.json()) as { needed: boolean }).needed).toBe(false)
-  })
-
-  it('chat and confirm are token-gated (401 wrong token)', async () => {
-    expect((await onbPost('/api/onboarding/chat', {}, 'wrong')).status).toBe(401)
-    expect((await onbPost('/api/onboarding/confirm', VALID_ANSWERS, 'wrong')).status).toBe(401)
   })
 
   it('chat is 503 when no model and no injected turn runner', async () => {
     const bare = await startDashboard(freshDir, 0, {})
     try {
       const res = await fetch(`http://127.0.0.1:${bare.port}/api/onboarding/chat`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-orquestra-token': 'secret-token' }, body: '{}',
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       })
       expect(res.status).toBe(503)
     } finally { await bare.close() }
   })
 
   it('chat keeps a session across turns and surfaces drafts and finalized answers', async () => {
-    const first = await onbPost('/api/onboarding/chat', {}, 'secret-token')
+    const first = await onbPost('/api/onboarding/chat', {})
     expect(first.status).toBe(200)
     expect(first.body.reply).toMatch(/1 user message/) // seed message only
     expect(first.body.finalized).toBeNull()
 
-    const second = await onbPost('/api/onboarding/chat', { message: 'vote on 9' }, 'secret-token')
+    const second = await onbPost('/api/onboarding/chat', { message: 'vote on 9' })
     expect(second.body.reply).toMatch(/2 user message/) // session grew
     expect(second.body.draft).toMatchObject({ cadenceHours: 6 })
 
-    const third = await onbPost('/api/onboarding/chat', { message: 'finalize now' }, 'secret-token')
+    const third = await onbPost('/api/onboarding/chat', { message: 'finalize now' })
     expect(third.body.finalized).toMatchObject({ notes: 'dashboard onboarding test' })
   })
 
   it('chat reset clears the session', async () => {
-    await onbPost('/api/onboarding/chat', { message: 'hello' }, 'secret-token')
-    await onbPost('/api/onboarding/chat', { reset: true }, 'secret-token')
-    const r = await onbPost('/api/onboarding/chat', {}, 'secret-token')
+    await onbPost('/api/onboarding/chat', { message: 'hello' })
+    await onbPost('/api/onboarding/chat', { reset: true })
+    const r = await onbPost('/api/onboarding/chat', {})
     expect(r.body.reply).toMatch(/1 user message/)
   })
 
   it('confirm validates, persists config + notes, and flips status.needed', async () => {
-    expect((await onbPost('/api/onboarding/confirm', { horizonDays: -1 }, 'secret-token')).status).toBe(400)
-    const ok = await onbPost('/api/onboarding/confirm', VALID_ANSWERS, 'secret-token')
+    expect((await onbPost('/api/onboarding/confirm', { horizonDays: -1 })).status).toBe(400)
+    const ok = await onbPost('/api/onboarding/confirm', VALID_ANSWERS)
     expect(ok.status).toBe(200)
     expect(ok.body).toMatchObject({ saved: true })
     const saved = JSON.parse(readFileSync(join(freshDir, 'strategy.config.json'), 'utf-8'))

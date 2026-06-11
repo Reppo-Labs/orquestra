@@ -48,7 +48,6 @@ export function StrategyPanel({ config, netNames, onReconfigure }: {
   const [baseline, setBaseline] = useState<Candidate | null>(null)
   const [chat, setChat] = useState<ChatMsg[]>([])
   const [log, setLog] = useState<LogEntry[]>([])
-  const [token, setToken] = useState('')
   const [input, setInput] = useState('')
   const [saveMsg, setSaveMsg] = useState('')
   const [status, setStatus] = useState('')
@@ -105,7 +104,7 @@ export function StrategyPanel({ config, netNames, onReconfigure }: {
     const messages: ChatMsg[] = [...chat, { role: 'user', content: text }]
     setChat(messages)
     setLog((l) => [...l, { role: 'user', text }])
-    const { ok, out } = await strategyChat(messages, token)
+    const { ok, out } = await strategyChat(messages)
     if (!ok) {
       setLog((l) => [...l, { role: 'assistant', text: out.error || 'request failed' }])
       return
@@ -120,7 +119,7 @@ export function StrategyPanel({ config, netNames, onReconfigure }: {
 
   const save = async () => {
     setSaveMsg('saving…')
-    const res = await saveStrategy(candidate, token)
+    const res = await saveStrategy(candidate)
     setSaveMsg(res.ok ? 'saved — applies next cycle' : `error: ${res.error}`)
     if (res.ok) {
       setStatus('')
@@ -232,10 +231,6 @@ export function StrategyPanel({ config, netNames, onReconfigure }: {
       </label>
 
       <div className="row m8">
-        <input
-          type="password" className="token-input" placeholder="dashboard token"
-          value={token} onChange={(e) => setToken(e.target.value)}
-        />
         <button className="btn primary" onClick={save}>Save (applies next cycle)</button>
         <span className="muted">{saveMsg}</span>
       </div>

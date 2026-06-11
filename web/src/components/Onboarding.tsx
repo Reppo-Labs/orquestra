@@ -78,7 +78,6 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
   /** present when reconfiguring an already-onboarded node — shows a way back */
   onCancel?: () => void
 }) {
-  const [token, setToken] = useState('')
   const [started, setStarted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState<LogEntry[]>([])
@@ -95,7 +94,7 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
   const turn = async (message?: string) => {
     setBusy(true)
     try {
-      const { ok, out } = await onboardingChat(message ? { message } : {}, token)
+      const { ok, out } = await onboardingChat(message ? { message } : {})
       if (!ok) { setLog((l) => [...l, { role: 'assistant', text: out.error || 'request failed' }]); return }
       if (out.reply) setLog((l) => [...l, { role: 'assistant', text: out.reply! }])
       if (out.draft) setDraft(out.draft)
@@ -116,7 +115,7 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
   const confirm = async () => {
     if (!finalized) return
     setConfirmMsg('saving…')
-    const r = await onboardingConfirm(finalized, token)
+    const r = await onboardingConfirm(finalized)
     if (!r.ok) { setConfirmMsg(`error: ${r.error}`); return }
     setConfirmMsg('saved — the node starts its first cycle shortly')
     setTimeout(onDone, 1200)
@@ -129,11 +128,6 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
         <h1 className="ob-title">orquestra</h1>
         <p className="ob-sub">Let's set up your node — what to vote and mint, how much to spend, and how often to run. Chat below; your strategy takes shape on the right. Nothing is saved until you confirm.</p>
       </div>
-      {!status.writesEnabled && (
-        <div className="ob-warn">
-          Configuration from the dashboard is disabled — start the node with <code>DASHBOARD_TOKEN</code> set, or run <code>orquestra configure</code> in a terminal.
-        </div>
-      )}
       {!status.chatAvailable && (
         <div className="ob-warn">
           The onboarding assistant needs an LLM — start the node with <code>LLM_PROVIDER</code> + <code>LLM_API_KEY</code> set.
@@ -143,15 +137,9 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
         <div className="ob-chat">
           {!started ? (
             <div className="ob-start">
-              <input
-                type="password" placeholder="dashboard token" value={token}
-                onChange={(e) => setToken(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void begin() }}
-              />
-              <button className="btn primary" disabled={!token || !status.chatAvailable || !status.writesEnabled} onClick={() => void begin()}>
+              <button className="btn primary" disabled={!status.chatAvailable} onClick={() => void begin()}>
                 Start onboarding
               </button>
-              <div className="muted">the token is the <code>DASHBOARD_TOKEN</code> you started the node with</div>
             </div>
           ) : (
             <>
