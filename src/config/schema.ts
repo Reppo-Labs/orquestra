@@ -43,6 +43,15 @@ export const StrategyConfigSchema = z
       grantReppoMax: z.number().nonnegative().optional(),
     }),
     claimEmissions: z.boolean().default(true),
+    // Multi-agent panel deliberation (see docs/superpowers/specs/2026-06-11-multi-agent-decisions-design.md).
+    // Defaulted so configs written before this feature load unchanged.
+    deliberation: z
+      .object({
+        enabled: z.boolean().default(true),
+        // ± band around the like/dislike thresholds that convenes a vote panel; 0 = mints only.
+        voteBand: z.number().int().min(0).max(4).default(1),
+      })
+      .default({ enabled: true, voteBand: 1 }),
     datanets: z.record(z.string(), DatanetPolicy),
     notes: z.string().default(''),
   })

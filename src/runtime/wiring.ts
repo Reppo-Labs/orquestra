@@ -2,11 +2,13 @@
 // Composition factories extracted from index.ts so the wiring that decides what
 // gets signed (dedup closures, pod enrichment, adapter routing) is unit-testable.
 // index.ts stays a thin shell: env, service construction, argv dispatch, signals.
+import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
 import type { CycleDeps, CycleReport } from './cycle.js'
-import type { DatanetAdapter } from '../adapter/types.js'
+import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
 import type { PodScorer, VoterPod } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
+import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
@@ -57,7 +59,10 @@ const defaultIo: WiringIo = {
 export interface CycleWiring {
   dataDir: string
   config: StrategyConfig
+  /** the single-call screen scorer; the panel decorators (below) wrap it. */
   scorer: PodScorer
+  /** model the deliberation panel runs on (same model the screen scorer uses). */
+  model: LanguageModel
   ledger: BudgetLedger
   executor: WalletExecutor
   dedup: DedupState
@@ -108,14 +113,32 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
     },
     getAdapter: (id) => w.adapters.find((a) => a.id === id),
-    voteScorer: w.scorer,
+    // The single-call scorer screens; the panel decorators wrap it. Deliberation
+    // settings are read from w.config at CALL time so a dashboard hot-reload of the
+    // `deliberation` block takes effect on the next decision (mirrors strategyFor).
+    voteScorer: {
+      scorePod: (pod, rubric, thresholds) => {
+        const d = w.config.deliberation
+        return createPanelPodScorer(w.scorer, {
+          model: w.model, enabled: d.enabled, voteBand: d.voteBand, brief: w.strategyBrief,
+        }).scorePod(pod, rubric, thresholds)
+      },
+    },
     candidateScorer: {
       scoreCandidate: (c, r) => {
-        // Score the DATASET against the publisher spec, not just the summary line —
-        // otherwise every candidate scores low ("no trade detail / no verification")
-        // and nothing ever mints. See src/minter/score.ts.
-        const { name, description } = candidateScoreInput(c)
-        return w.scorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
+        // Base screen scorer: score the DATASET against the publisher spec, not just
+        // the summary line — otherwise every candidate scores low and nothing mints
+        // (see src/minter/score.ts). The panel (when enabled) replaces this for mints.
+        const base: CandidateScorer = {
+          scoreCandidate: (cand, rub) => {
+            const { name, description } = candidateScoreInput(cand)
+            return w.scorer.scorePod({ podId: cand.canonicalKey, validityEpoch: '', name, description }, rub)
+          },
+        }
+        const d = w.config.deliberation
+        return createPanelCandidateScorer(base, {
+          model: w.model, enabled: d.enabled, voteBand: d.voteBand, brief: w.strategyBrief,
+        }).scoreCandidate(c, r)
       },
     },
     seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),

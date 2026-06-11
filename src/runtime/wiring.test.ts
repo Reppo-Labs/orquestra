@@ -26,6 +26,7 @@ function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
   return {
     dataDir: dir, config,
     scorer: { scorePod: async () => ({ score: 8, reason: 'r' }) },
+    model: {} as CycleWiring['model'], // scorers aren't exercised in these tests
     ledger: { startCycle: vi.fn(), state: {} } as unknown as CycleWiring['ledger'],
     executor: {} as CycleWiring['executor'],
     dedup: new DedupState(dir),

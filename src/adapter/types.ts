@@ -1,5 +1,6 @@
 // src/adapter/types.ts
 import type { DatanetRubric } from '../rubric/types.js'
+import type { PanelTranscript } from '../panel/types.js'
 
 /** A mint candidate an adapter produced for a datanet. */
 export interface CandidatePod {
@@ -37,7 +38,8 @@ export interface DatanetAdapter {
   discover(ctx: AdapterContext): Promise<CandidatePod[]>
 }
 
-/** Scores a candidate 1-10 against the datanet's publisher spec. LLM by default. */
+/** Scores a candidate 1-10 against the datanet's publisher spec. LLM by default.
+ *  `panel` is present when a multi-agent panel produced the score (see src/panel). */
 export interface CandidateScorer {
-  scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric): Promise<{ score: number; reason: string }>
+  scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric): Promise<{ score: number; reason: string; panel?: PanelTranscript }>
 }

@@ -81,4 +81,24 @@ describe('selectMints (minScore 7)', () => {
     expect(intents).toHaveLength(1)           // second 'a' deduped within batch
     expect(intents[0].selfScore).toBe(8)
   })
+
+  it('threads a panel transcript from the score onto the mint intent', async () => {
+    const panel = { panelists: [{ persona: 'bear', score: 8, argument: 'a' }], judge: { score: 8, reason: 'j' } }
+    const withPanel: CandidateScorer = { scoreCandidate: async () => ({ score: 8, reason: 'j', panel }) }
+    const intents = await selectMints('9', [cand('a')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: withPanel })
+    expect(intents[0].panel).toEqual(panel)
+  })
+
+  it('per-candidate isolation: a scorer that throws on one candidate skips it, others still mint', async () => {
+    const flaky: CandidateScorer = {
+      scoreCandidate: async (c) => {
+        if (c.canonicalKey === 'bad') throw new Error('panel: all personas failed')
+        return { score: 9, reason: 'ok' }
+      },
+    }
+    const intents = await selectMints('9', [cand('bad'), cand('good')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: flaky })
+    expect(intents.map((i) => i.canonicalKey)).toEqual(['good']) // bad skipped, datanet not aborted
+  })
 })

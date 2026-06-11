@@ -133,6 +133,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
             podId: intent.podId, direction: intent.direction, conviction: intent.conviction, reason: intent.reason,
             status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+            ...(intent.panel ? { panel: intent.panel } : {}),
           })
         }
       }
@@ -169,6 +170,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
               ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
               canonicalKey: intent.canonicalKey, podName: intent.podName,
               status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+              ...(intent.panel ? { panel: intent.panel } : {}),
             })
           }
         }

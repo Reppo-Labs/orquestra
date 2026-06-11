@@ -141,6 +141,7 @@ async function start(): Promise<void> {
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     scorer: createLlmScorer(model, { brief: strategyBrief }),
+    model,
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.

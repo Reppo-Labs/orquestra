@@ -2,6 +2,7 @@
 import { appendFileSync, readFileSync, existsSync, statSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets } from '../util/redact.js'
+import type { PanelTranscript } from '../panel/types.js'
 
 export interface ActivityEntry {
   ts: string
@@ -20,6 +21,8 @@ export interface ActivityEntry {
   txHash?: string
   gasEth?: number
   detail?: string
+  /** multi-agent panel transcript when a panel produced this vote/mint (see src/panel). */
+  panel?: PanelTranscript
 }
 
 const FILE = 'activity-log.jsonl'

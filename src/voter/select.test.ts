@@ -64,6 +64,25 @@ describe('selectVotes (conservative: like>=8, dislike<=4)', () => {
     expect(votes[0].kind).toBe('vote'); expect(votes[0].datanetId).toBe('9')
   })
 
+  it('passes the strictness thresholds to the scorer (tiered/panel context)', async () => {
+    let seen: unknown
+    const capturing: PodScorer = { scorePod: async (_p, _r, t) => { seen = t; return { score: 9, reason: '' } } }
+    await selectVotes('9', [pod('a')], rubric, 'conservative', filter(), capturing)
+    expect(seen).toEqual({ like: 8, dislike: 4 })
+  })
+
+  it('threads a panel transcript from the score onto the vote intent', async () => {
+    const panel = { panelists: [{ persona: 'bull', score: 9, argument: 'a' }], judge: { score: 9, reason: 'j' } }
+    const withPanel: PodScorer = { scorePod: async () => ({ score: 9, reason: 'j', panel }) }
+    const votes = await selectVotes('9', [pod('hi')], rubric, 'conservative', filter(), withPanel)
+    expect(votes[0].panel).toEqual(panel)
+  })
+
+  it('omits panel on the intent when the score carried none', async () => {
+    const votes = await selectVotes('9', [pod('hi')], rubric, 'conservative', filter(), scorerOf({ hi: 9 }))
+    expect(votes[0].panel).toBeUndefined()
+  })
+
   it('per-pod isolation: a scorer that throws on one pod skips it, others still vote', async () => {
     const flaky: PodScorer = {
       scorePod: async (p) => {

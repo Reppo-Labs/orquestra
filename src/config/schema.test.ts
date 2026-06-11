@@ -47,6 +47,32 @@ describe('StrategyConfig claim fields', () => {
   })
 })
 
+describe('StrategyConfig deliberation', () => {
+  it('defaults deliberation for legacy configs (enabled, voteBand 1)', () => {
+    expect(StrategyConfigSchema.parse(valid).deliberation).toEqual({ enabled: true, voteBand: 1 })
+  })
+  it('accepts explicit deliberation settings', () => {
+    const cfg = StrategyConfigSchema.parse({ ...valid, deliberation: { enabled: false, voteBand: 0 } })
+    expect(cfg.deliberation).toEqual({ enabled: false, voteBand: 0 })
+  })
+  it('rejects an out-of-range voteBand', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, deliberation: { voteBand: 9 } })).toThrow()
+  })
+})
+
+describe('StrategyConfig deliberation', () => {
+  it('defaults deliberation for legacy configs (enabled, voteBand 1)', () => {
+    expect(StrategyConfigSchema.parse(valid).deliberation).toEqual({ enabled: true, voteBand: 1 })
+  })
+  it('accepts explicit deliberation settings', () => {
+    const cfg = StrategyConfigSchema.parse({ ...valid, deliberation: { enabled: false, voteBand: 0 } })
+    expect(cfg.deliberation).toEqual({ enabled: false, voteBand: 0 })
+  })
+  it('rejects an out-of-range voteBand', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, deliberation: { voteBand: 9 } })).toThrow()
+  })
+})
+
 describe('StrategyConfig adapterParams', () => {
   it('accepts optional adapterParams on a datanet policy', () => {
     const cfg = StrategyConfigSchema.parse({
