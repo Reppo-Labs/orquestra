@@ -79,6 +79,20 @@ describe('buildHealth', () => {
     expect(report.txRate).toEqual({ executed: 3, failed: 1, rate: 3 / 4 })
   })
 
+  it('CANNOT_VOTE_FOR_OWN_POD is NOT a failed tx (pre-broadcast rejection) but stays in error counts', () => {
+    const OWN = 'Command failed: reppo vote --pod 9 — {"error":{"code":"CANNOT_VOTE_FOR_OWN_POD","hint":"Publishers cannot vote on their own pods."}}'
+    const report = buildHealth([
+      e({ kind: 'vote', status: 'executed', txHash: '0x1' }),
+      e({ kind: 'vote', status: 'error', detail: OWN }),
+      e({ kind: 'vote', status: 'error', detail: LACKS_ACCESS }),
+    ])
+    const d2 = report.datanets.find((d) => d.datanetId === '2')!
+    expect(d2.votes.error).toBe(2)                                   // still counted as errors
+    expect(d2.topErrors.map((t) => t.code)).toContain('CANNOT_VOTE_FOR_OWN_POD') // still visible
+    expect(d2.txRate).toEqual({ executed: 1, failed: 1, rate: 0.5 }) // but excluded from the rate
+    expect(report.txRate).toEqual({ executed: 1, failed: 1, rate: 0.5 })
+  })
+
   it('txRate.rate is null when there were no attempts (no executed, no error)', () => {
     const report = buildHealth([e({ kind: 'skip', status: 'skipped', reason: 'r' })])
     const d2 = report.datanets.find((d) => d.datanetId === '2')!
