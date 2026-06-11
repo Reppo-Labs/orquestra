@@ -85,10 +85,16 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
   }
   const finalize = (executed: number, failed: number): TxRate =>
     ({ executed, failed, rate: executed + failed > 0 ? executed / (executed + failed) : null })
+  // Pre-broadcast rejections (no tx ever attempted) are not tx failures — they stay
+  // in the error counts and topErrors for visibility, but don't poison the rate.
+  const PRE_BROADCAST = new Set(['CANNOT_VOTE_FOR_OWN_POD'])
   let allExecuted = 0, allFailed = 0
   for (const n of nets.values()) {
     const executed = n.votes.executed + n.mints.executed + n.claims.executed
-    const failed = n.votes.error + n.mints.error + n.claims.error
+    const errors = n.votes.error + n.mints.error + n.claims.error
+    let preBroadcast = 0
+    for (const code of PRE_BROADCAST) preBroadcast += errCounts.get(n.datanetId)?.get(code) ?? 0
+    const failed = errors - preBroadcast
     n.txRate = finalize(executed, failed)
     allExecuted += executed; allFailed += failed
   }
