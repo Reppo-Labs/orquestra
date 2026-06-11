@@ -126,7 +126,7 @@ describe('buildTick config hot-reload', () => {
   it('re-reads config each tick: a datanet set change applies on the NEXT cycle', async () => {
     let current = config
     const { w, deps, updateCaps } = tickWiring(() => current)
-    const tick = buildTick(w, deps, { reloadConfig: () => current })
+    const tick = buildTick(w, deps, { reloadConfig: () => current, reporting: false })
     await tick() // datanets: ['2'] from `config`
     current = altConfig
     await tick() // must now use altConfig (datanet 5) + push caps
@@ -136,7 +136,7 @@ describe('buildTick config hot-reload', () => {
   it('keeps the LAST-GOOD config when reload throws (loop never crashes)', async () => {
     let boom = false
     const { w, deps } = tickWiring(() => config)
-    const tick = buildTick(w, deps, { reloadConfig: () => { if (boom) throw new Error('corrupt json'); return config } })
+    const tick = buildTick(w, deps, { reloadConfig: () => { if (boom) throw new Error('corrupt json'); return config }, reporting: false })
     await tick()
     boom = true
     await expect(tick()).resolves.toBeUndefined() // tolerated, last-good used
