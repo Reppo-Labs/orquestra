@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { buildCycleDeps, buildTick, type CycleWiring } from './wiring.js'
 import { DedupState } from './state.js'
 import { StrategyConfigSchema } from '../config/schema.js'
+import { appendActivity } from '../dashboard/activityLog.js'
 import type { VoterPod } from '../voter/types.js'
 
 const config = StrategyConfigSchema.parse({
@@ -55,6 +56,29 @@ describe('buildCycleDeps', () => {
     expect(filter.ownPodIds).toEqual(['own1'])
     expect(filter.votedPodIds).toEqual(['voted1'])
     expect(filter.currentEpoch).toBe('100')
+  })
+
+  it('excludes pods whose NAME matches one of our executed mints (creator field is unreliable)', async () => {
+    const w = wiring()
+    // our mint record in the activity log — the name-based own-pod backstop source
+    appendActivity(dir, {
+      ts: '2026-06-11T00:00:00.000Z', cycleId: 'c1', kind: 'mint', datanetId: '2',
+      canonicalKey: 'k1', podName: 'US sanctions Chinese firms over Iran arms', status: 'executed', txHash: '0xm',
+    })
+    const fetchContent = vi.fn(async () => 'content')
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all
+          ? [pod('p1', { url: 'https://x/1' }), pod('mine', { name: 'US sanctions Chinese firms over Iran arms', url: 'https://x/mine' })]
+          : [], // creator-based query returns NOTHING (the live failure mode)
+        fetchContent,
+      },
+    })
+    const { filter } = await deps.getPodsAndFilter('2')
+    expect(filter.ownPodIds).toContain('mine')          // name-matched into the own set
+    expect(fetchContent).toHaveBeenCalledTimes(1)       // 'mine' NOT enriched (no wasted fetch/scoring)
+    expect(fetchContent).toHaveBeenCalledWith('https://x/1')
   })
 
   it('own-pods query failure disables the guard for the cycle instead of throwing', async () => {
