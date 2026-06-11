@@ -266,3 +266,23 @@ describe('WalletExecutor.executeClaim', () => {
     expect(r.gasEth).toBeCloseTo(0.001)
   })
 })
+
+describe('actual-REPPO reconciliation (reppoFee from CLI >=0.8.4)', () => {
+  it('executeMint reconciles mintReppoSpent to the actual fee', async () => {
+    const cli = fakeCli()
+    ;(cli.mintPod as any) = vi.fn(async () => ({ txHash: '0xm', gasEth: 0.0005, reppoFee: 100 }))
+    const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    await ex.executeMint(mintIntent('k1', 0))   // est 0, actual 100
+    expect(ledger.state.mintReppoSpent).toBe(100)
+  })
+
+  it('executeGrantAccess reconciles grantReppoSpent down to the actual fee', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => ({ txHash: '0xg', gasEth: 0, reppoFee: 100 }))
+    const ledger = new BudgetLedger(dir, { ...caps, grantReppoMax: 500 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    await ex.executeGrantAccess('11')           // reserve est 200 → reconcile to 100
+    expect(ledger.state.grantReppoSpent).toBe(100)
+  })
+})

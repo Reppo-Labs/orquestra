@@ -38,6 +38,9 @@ export class WalletExecutor {
     try {
       const r = await this.cli.grantAccess(datanetId)
       if (!r.txHash) { this.ledger.releaseGrant(res); return { ok: false, status: 'error', detail: 'no txHash' } }
+      // Reconcile to the CLI-reported actual fee (>=0.8.4); the reserve was a
+      // conservative estimate (200) while the real grant fee is typically 100.
+      if (r.reppoFee !== undefined) this.ledger.reconcileGrant(res, r.reppoFee)
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       const detail = (e as Error).message
@@ -82,7 +85,7 @@ export class WalletExecutor {
         this.ledger.releaseMint(res)
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
-      this.ledger.reconcileMint(res, r.gasEth)
+      this.ledger.reconcileMint(res, r.gasEth, r.reppoFee)
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseMint(res)

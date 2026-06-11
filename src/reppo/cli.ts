@@ -16,7 +16,12 @@ export interface MintArgs {
 }
 export interface ClaimEmissionsArgs { podId: string; epoch: number; idempotencyKey: string }
 /** Result of an on-chain action: tx hash + gas spent (ETH), parsed from the CLI's --json output. */
-export interface ChainResult { txHash: string; gasEth: number }
+export interface ChainResult {
+  txHash: string
+  gasEth: number
+  /** actual REPPO paid (mint fee / grant fee), reported by reppo >=0.8.4. */
+  reppoFee?: number
+}
 
 /** The signing surface. Injected into WalletExecutor; the default shells out to `reppo`. */
 export interface ReppoCli {
@@ -49,12 +54,13 @@ export function foldExecError(e: unknown): Error {
  *  the CLI omits gasEth (reppo 0.8.0 reports only txHash) — structural, not
  *  per-call, so it must not spam every transaction. */
 export function parseChainResult(stdout: string, warn: (m: string) => void = (m) => console.warn(m)): ChainResult {
-  const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number }
+  const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number; reppoFee?: number | string }
   if (j.gasEth === undefined && !warnedNoGas) {
     warnedNoGas = true
     warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
   }
-  return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0) }
+  const fee = j.reppoFee !== undefined ? Number(j.reppoFee) : undefined
+  return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0), ...(fee !== undefined && !Number.isNaN(fee) ? { reppoFee: fee } : {}) }
 }
 
 async function run(args: string[]): Promise<ChainResult> {

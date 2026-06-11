@@ -258,3 +258,23 @@ describe('BudgetLedger.updateCaps (config hot-reload)', () => {
     expect(l.state.mintReppoSpent).toBe(16)
   })
 })
+
+describe('BudgetLedger actual-REPPO reconciliation', () => {
+  it('reconcileMint adjusts mintReppoSpent to the ACTUAL fee (est 0 → actual 100)', () => {
+    const l = new BudgetLedger(dir, { ...CAPS, mintReppoMax: 150 })
+    const r = l.reserveMint(0, 0.001)!
+    l.reconcileMint(r, 0.0005, 100)            // actual fee reported by the CLI
+    expect(l.state.mintReppoSpent).toBe(100)
+    // retrospective cap: once actuals exceed the cap, further mints refuse
+    const r2 = l.reserveMint(0, 0.001)!
+    l.reconcileMint(r2, 0.0005, 100)           // total 200 > 150
+    expect(l.reserveMint(0, 0.001)).toBeNull()
+  })
+
+  it('reconcileGrant corrects the conservative estimate to actual (est 200 → actual 100)', () => {
+    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 500 })
+    const r = l.reserveGrant(200)!
+    l.reconcileGrant(r, 100)
+    expect(l.state.grantReppoSpent).toBe(100)
+  })
+})

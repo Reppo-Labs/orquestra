@@ -160,9 +160,16 @@ export class BudgetLedger {
   }
 
   /** Adjust gas to actual after a successful sign. */
-  reconcileMint(res: MintReservation, actualGasEth: number): void {
+  /** Adjust gas AND (when the CLI reports it, >=0.8.4) the REPPO fee to actuals.
+   *  Reconciling REPPO makes mintReppoMax a real, retrospective cap: once actual
+   *  spend exceeds it, the next reserveMint refuses (at most one mint overshoot). */
+  reconcileMint(res: MintReservation, actualGasEth: number, actualReppo?: number): void {
     this._state.mintGasSpentEth += (actualGasEth - res.estGasEth)
     this._state.mintGasSpentEth = Math.max(0, this._state.mintGasSpentEth)
+    if (actualReppo !== undefined) {
+      this._state.mintReppoSpent += (actualReppo - res.estReppo)
+      this._state.mintReppoSpent = Math.max(0, this._state.mintReppoSpent)
+    }
     this.save()
   }
 
@@ -214,6 +221,13 @@ export class BudgetLedger {
     this._state.grantReppoSpent += estReppo
     this.save()
     return { kind: 'grant', estReppo }
+  }
+
+  /** Adjust the grant fee to the CLI-reported actual (est is conservative). */
+  reconcileGrant(res: GrantReservation, actualReppo: number): void {
+    this._state.grantReppoSpent += (actualReppo - res.estReppo)
+    this._state.grantReppoSpent = Math.max(0, this._state.grantReppoSpent)
+    this.save()
   }
 
   /** Roll back the reservation when signing fails (or access was already granted). */

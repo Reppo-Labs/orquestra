@@ -66,3 +66,13 @@ describe('parseChainResult', () => {
     expect(() => parseChainResult('not json', () => {})).toThrow()
   })
 })
+
+describe('parseChainResult reppoFee', () => {
+  it('parses reppoFee when the CLI reports it (0.8.4+)', () => {
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.001,"reppoFee":"100"}', () => {})
+    expect(r.reppoFee).toBe(100)
+  })
+  it('reppoFee absent → undefined (older CLI)', () => {
+    expect(parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {}).reppoFee).toBeUndefined()
+  })
+})
