@@ -1,6 +1,5 @@
 // src/dashboard/server.ts
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { timingSafeEqual } from 'node:crypto'
 import { writeFileSync, renameSync, statSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
@@ -116,18 +115,6 @@ function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body))
 }
 
-/** Token gate for write routes — FAIL-CLOSED: with DASHBOARD_TOKEN unset, writes
- *  are disabled entirely (the dashboard stays read-only by default; write access
- *  is explicit opt-in). Constant-time compare to avoid timing probes. */
-function writeAuth(req: IncomingMessage): { ok: true } | { ok: false; code: number; error: string } {
-  const expected = (process.env.DASHBOARD_TOKEN ?? '').trim()
-  if (!expected) return { ok: false, code: 503, error: 'writes disabled — set DASHBOARD_TOKEN to enable dashboard configuration' }
-  const got = String(req.headers['x-orquestra-token'] ?? '')
-  const a = Buffer.from(got), b = Buffer.from(expected)
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, code: 401, error: 'invalid token' }
-  return { ok: true }
-}
-
 /** Read a JSON body (1 MiB cap — strategy configs are tiny). */
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -154,8 +141,8 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       if (!POST_ROUTES.has(url)) {
         json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return
       }
-      const auth = writeAuth(req)
-      if (!auth.ok) { json(res, auth.code, { error: auth.error }); return }
+      // No auth on writes: the dashboard binds localhost by default; restricting
+      // exposure (the `-p 127.0.0.1:` mapping) is the operator's responsibility.
       let body: unknown
       try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
 
@@ -214,7 +201,6 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       json(res, 200, {
         needed: needsOnboarding(dataDir),
         chatAvailable: Boolean(opts.onboardingTurn ?? opts.chatModel),
-        writesEnabled: Boolean((process.env.DASHBOARD_TOKEN ?? '').trim()),
       })
       return
     }
