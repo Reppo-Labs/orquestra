@@ -1,12 +1,10 @@
 import { useState } from 'react'
 import type { ActivityRow } from '../api'
-import { fmt } from '../lib/format'
+import { fmt, netLabel } from '../lib/format'
 
-// txHash is allowlisted by SHAPE before being used in a URL (escaping isn't
-// enough for href context); React escapes all text interpolation by default.
 const txLink = (r: ActivityRow) =>
   /^0x[0-9a-fA-F]{1,64}$/.test(r.txHash ?? '') ? (
-    <a href={`https://basescan.org/tx/${r.txHash}`} target="_blank" rel="noreferrer">{r.txHash!.slice(0, 8)}…</a>
+    <a href={`https://basescan.org/tx/${r.txHash}`} target="_blank" rel="noreferrer" className="mono">{r.txHash!.slice(0, 8)}…</a>
   ) : null
 
 const pillClass = (r: ActivityRow) =>
@@ -19,64 +17,48 @@ const detail = (r: ActivityRow) =>
     : r.kind === 'skip' ? (r.reason ?? '—')
     : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
 
-function PanelDetail({ panel }: { panel: NonNullable<ActivityRow['panel']> }) {
-  return (
-    <div className="panel-transcript">
-      {panel.screenScore !== undefined && <div className="muted">screen score: {panel.screenScore} → panel convened</div>}
-      {panel.panelists.map((p) => (
-        <div key={p.persona}><span className="panel-persona">{p.persona} ({p.score})</span> {p.argument}</div>
-      ))}
-      <div className="panel-judge">judge → {panel.judge.score}: {panel.judge.reason}</div>
-    </div>
-  )
-}
-
-// Stable per-row identity so the expanded-transcript state survives filter changes
-// and 30s polls (a positional index would attach the open panel to the wrong row
-// once the list shifts).
-const rowId = (r: ActivityRow): string => `${r.ts}-${r.kind}-${r.datanetId ?? ''}-${r.podId ?? r.canonicalKey ?? ''}`
-
-export function Activity({ activity }: { activity: ActivityRow[] }) {
+export function Activity({ activity, netNames, onOpenPanel }: {
+  activity: ActivityRow[]
+  netNames: Record<string, string>
+  onOpenPanel: (r: ActivityRow) => void
+}) {
   const [kind, setKind] = useState('')
-  const [open, setOpen] = useState<string | null>(null)
   const rows = activity.filter((r) => !kind || r.kind === kind)
   return (
-    <>
-      <h2>
-        Activity{' '}
+    <div>
+      <div className="sec-head">
+        <h2>Activity</h2><div className="rule" />
         <select value={kind} onChange={(e) => setKind(e.target.value)}>
-          <option value="">all</option>
-          <option>vote</option><option>mint</option><option>claim</option><option>skip</option>
+          <option value="">all kinds</option>
+          <option value="vote">votes</option><option value="mint">mints</option>
+          <option value="claim">claims</option><option value="skip">skips</option>
         </select>
-      </h2>
-      <table>
-        <thead><tr><th>Time</th><th>Kind</th><th>Datanet</th><th>Pod</th><th>Detail</th><th>Status</th><th>Tx</th></tr></thead>
-        <tbody>
-          {rows.length ? rows.flatMap((r, i) => {
-            const id = rowId(r)
-            const main = (
-              <tr key={`${id}-${i}`}>
-                <td>{new Date(r.ts).toLocaleTimeString()}</td>
+      </div>
+      <div className="panel-box">
+        <table>
+          <thead><tr><th>Time</th><th>Kind</th><th>Datanet</th><th>Pod</th><th>Detail</th><th>Status</th><th>Tx</th></tr></thead>
+          <tbody>
+            {rows.length ? rows.map((r, i) => (
+              <tr key={i}>
+                <td className="mono faint">{new Date(r.ts).toLocaleTimeString()}</td>
                 <td>
                   <span className={`pill ${pillClass(r)}`}>{r.kind}</span>
                   {r.panel && (
-                    <button className="panel-badge" title="multi-agent panel decided this — click to expand"
-                      onClick={() => setOpen(open === id ? null : id)}>⚖ {r.panel.panelists.length}-agent</button>
+                    <button className="panel-badge" onClick={() => onOpenPanel(r)} title="multi-agent panel decided this">
+                      ⚖ {r.panel.panelists.length}
+                    </button>
                   )}
                 </td>
-                <td>{r.datanetId}</td>
-                <td>{r.podId ?? r.canonicalKey ?? ''}</td>
+                <td>{r.datanetId ? netLabel(r.datanetId, netNames) : ''}</td>
+                <td className="mono">{r.podId ?? r.canonicalKey ?? ''}</td>
                 <td>{detail(r)}</td>
-                <td className={r.status === 'executed' ? '' : 'err'}>{r.status}</td>
+                <td className={r.status === 'executed' ? 'pos' : 'neg'}>{r.status}</td>
                 <td>{txLink(r)}</td>
               </tr>
-            )
-            return r.panel && open === id
-              ? [main, <tr key={`${id}-${i}-panel`}><td colSpan={7}><PanelDetail panel={r.panel} /></td></tr>]
-              : [main]
-          }) : <tr><td colSpan={7} className="muted">no activity yet</td></tr>}
-        </tbody>
-      </table>
-    </>
+            )) : <tr><td colSpan={7} className="empty">no activity yet</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
