@@ -12,7 +12,7 @@ export function PanelDrawer({ row, onClose }: { row: ActivityRow; onClose: () =>
   }, [onClose])
 
   const panel = row.panel as PanelTranscript
-  const subject = row.podId ?? row.canonicalKey ?? ''
+  const subject = row.podName ?? row.podId ?? row.canonicalKey ?? ''
   return (
     <>
       <div className="scrim" onClick={onClose} />

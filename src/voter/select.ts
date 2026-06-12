@@ -40,10 +40,11 @@ export async function selectVotes(
       continue
     }
     const { score, reason, panel } = result
+    const named = pod.name ? { podName: pod.name } : {}
     if (score >= like) {
-      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'up', conviction: score, reason, ...(panel ? { panel } : {}) })
+      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'up', conviction: score, reason, ...named, ...(panel ? { panel } : {}) })
     } else if (score <= dislike) {
-      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'down', conviction: score, reason, ...(panel ? { panel } : {}) })
+      intents.push({ kind: 'vote', datanetId, podId: pod.podId, direction: 'down', conviction: score, reason, ...named, ...(panel ? { panel } : {}) })
     }
     // mid-range → skip (no intent)
   }

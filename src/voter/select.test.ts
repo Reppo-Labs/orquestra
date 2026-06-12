@@ -71,6 +71,11 @@ describe('selectVotes (conservative: like>=8, dislike<=4)', () => {
     expect(seen).toEqual({ like: 8, dislike: 4 })
   })
 
+  it('carries the pod name onto the vote intent (dashboard shows names, not ids)', async () => {
+    const votes = await selectVotes('9', [pod('hi')], rubric, 'conservative', filter(), scorerOf({ hi: 9 }))
+    expect(votes[0].podName).toBe('pod hi')
+  })
+
   it('threads a panel transcript from the score onto the vote intent', async () => {
     const panel = { panelists: [{ persona: 'bull', score: 9, argument: 'a' }], judge: { score: 9, reason: 'j' } }
     const withPanel: PodScorer = { scorePod: async () => ({ score: 9, reason: 'j', panel }) }

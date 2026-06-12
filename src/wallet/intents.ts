@@ -5,6 +5,8 @@ export interface VoteIntent {
   kind: 'vote'
   datanetId: string
   podId: string
+  /** human-readable pod name, carried to the activity log so the dashboard can show it. */
+  podName?: string
   direction: 'up' | 'down'
   /** 1-10 conviction from the voter; used to prioritise scarce voting power. */
   conviction: number

@@ -13,9 +13,13 @@ const pillClass = (r: ActivityRow) =>
 const detail = (r: ActivityRow) =>
   r.kind === 'vote'
     ? (r.direction ? `${r.direction} · conv ${r.conviction} · ${r.reason ?? ''}` : (r.detail || '—'))
-    : r.kind === 'mint' ? (r.podName ?? r.canonicalKey ?? '')
+    : r.kind === 'mint' ? (r.canonicalKey ?? '') // pod name moved to the Pod column
     : r.kind === 'skip' ? (r.reason ?? '—')
     : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
+
+/** Pod column: prefer the human-readable name; fall back to the id for entries
+ *  logged before names were recorded. */
+const podLabel = (r: ActivityRow) => r.podName ?? r.podId ?? r.canonicalKey ?? ''
 
 export function Activity({ activity, netNames, onOpenPanel }: {
   activity: ActivityRow[]
@@ -50,7 +54,7 @@ export function Activity({ activity, netNames, onOpenPanel }: {
                   )}
                 </td>
                 <td>{r.datanetId ? netLabel(r.datanetId, netNames) : ''}</td>
-                <td className="mono">{r.podId ?? r.canonicalKey ?? ''}</td>
+                <td>{podLabel(r)}</td>
                 <td>{detail(r)}</td>
                 <td className={r.status === 'executed' ? 'pos' : 'neg'}>{r.status}</td>
                 <td>{txLink(r)}</td>
