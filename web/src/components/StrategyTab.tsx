@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DatanetEntry } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
 import { netLabel } from '../lib/format'
@@ -10,14 +10,27 @@ const STRICT = ['conservative', 'balanced', 'aggressive']
 function Num({ label, value, int, onChange }: {
   label: string; value: number | undefined; int?: boolean; onChange: (n: number | undefined) => void
 }) {
+  // Local text buffer: a controlled type="number" reports value="" mid-typing for an
+  // incomplete decimal ("0."), which would strip the dot before the user can finish.
+  // We hold the raw string, parse on every keystroke, and re-sync from the prop only
+  // while the field isn't focused (so an external change — e.g. a chat proposal — shows).
+  const [text, setText] = useState(value === undefined ? '' : String(value))
+  const [focused, setFocused] = useState(false)
+  useEffect(() => {
+    if (!focused) setText(value === undefined ? '' : String(value))
+  }, [value, focused])
   return (
     <label className="field">
       <span>{label}</span>
       <input
-        type="number" min={0} step={int ? 1 : 'any'} value={value ?? ''}
+        type="text" inputMode={int ? 'numeric' : 'decimal'} value={text}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         onChange={(e) => {
-          if (e.target.value === '') return onChange(undefined)
-          const n = int ? parseInt(e.target.value, 10) : parseFloat(e.target.value)
+          const raw = e.target.value
+          setText(raw)
+          if (raw.trim() === '') return onChange(undefined)
+          const n = int ? parseInt(raw, 10) : parseFloat(raw)
           if (!Number.isNaN(n)) onChange(n)
         }}
       />
