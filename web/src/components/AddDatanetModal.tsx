@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { DatanetEntry } from '../api'
+import { Tip } from './Tip'
+import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
-const STRICT = ['conservative', 'balanced', 'aggressive']
 
 // "Add a datanet" dialog. The datanet is picked BY NAME from the live catalog
 // (/api/datanets id→name map) — ids never surface in the UI. Already-configured
@@ -80,9 +81,9 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
           </label>
 
           <label className="field">
-            <span>strictness</span>
+            <span>strictness <Tip label="what strictness means">{strictnessTip()}</Tip></span>
             <select value={strictness} onChange={(e) => setStrictness(e.target.value)}>
-              {STRICT.map((x) => <option key={x}>{x}</option>)}
+              {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
             </select>
           </label>
         </div>

@@ -230,6 +230,31 @@ textarea { resize: vertical; font-family: var(--body); }
 .dot.off { background: var(--faint); }
 .skipreason { color: var(--warn); font-family: var(--mono); font-size: 12px; padding: 4px 0; }
 
+/* ── Tooltip ──────────────────────────────────────────────────────────── */
+.tip { position: relative; display: inline-flex; cursor: help; outline: none; vertical-align: middle; }
+.tip-mark { color: var(--faint); font-size: 11px; transition: color 0.15s; }
+.tip:hover .tip-mark, .tip:focus .tip-mark { color: var(--accent); }
+.tip-bubble {
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
+  width: 280px; max-width: 78vw; z-index: 80; padding: 11px 13px;
+  background: var(--panel-hi); border: 1px solid var(--border-2); border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg); color: var(--text); font-size: 12px; line-height: 1.5;
+  font-weight: 400; text-transform: none; letter-spacing: normal;
+  opacity: 0; visibility: hidden; transition: opacity 0.15s, transform 0.15s; pointer-events: none;
+}
+.tip:hover .tip-bubble, .tip:focus .tip-bubble { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+.tip-bubble::after {
+  content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: 6px solid transparent; border-top-color: var(--border-2);
+}
+.tip-bubble b { color: var(--text); font-family: var(--body); }
+.tip-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-family: var(--mono); font-size: 11px; }
+.tip-table th { color: var(--faint); font-weight: 500; text-transform: none; letter-spacing: 0; padding: 2px 6px; border: 0; background: none; text-align: right; }
+.tip-table th:first-child { text-align: left; }
+.tip-table td { padding: 2px 6px; border: 0; }
+.tip-table td:first-child { color: var(--muted); }
+.tip-table td:not(:first-child) { text-align: right; color: var(--text); }
+
 /* ── Strategy: datanet cards ──────────────────────────────────────────── */
 .net-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
 .net {

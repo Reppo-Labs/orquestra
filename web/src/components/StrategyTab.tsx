@@ -3,9 +3,10 @@ import type { DatanetEntry } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
 import { netLabel } from '../lib/format'
 import { AddDatanetModal } from './AddDatanetModal'
+import { Tip } from './Tip'
+import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
-const STRICT = ['conservative', 'balanced', 'aggressive']
 
 function Num({ label, value, int, onChange }: {
   label: string; value: number | undefined; int?: boolean; onChange: (n: number | undefined) => void
@@ -75,9 +76,9 @@ function NetCard({ id, d, name, edit }: {
           </select>
         </label>
         <label className="field">
-          <span>strictness</span>
+          <span>strictness <Tip label="what strictness means">{strictnessTip()}</Tip></span>
           <select value={d.strictness} onChange={(e) => upd((n) => { n.strictness = e.target.value })}>
-            {STRICT.map((x) => <option key={x}>{x}</option>)}
+            {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
           </select>
         </label>
       </div>
