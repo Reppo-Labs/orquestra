@@ -1,0 +1,20 @@
+# Orquestra node — one-command run for operators (see ADR 0001).
+#   cp .env.example .env   # paste your wallet key + LLM key
+#   docker compose up -d
+# Then reach the dashboard over an SSH tunnel and onboard (see README / ADR 0002):
+#   ssh -L 7070:localhost:7070 <your-host>   →   http://localhost:7070
+services:
+  orquestra:
+    image: ghcr.io/reppo-labs/orquestra:latest   # pin a version (e.g. :0.1.0) in production
+    container_name: orquestra
+    env_file: .env
+    # Localhost-only by design: the dashboard is unauthenticated (ADR 0002).
+    # Do NOT change to 0.0.0.0 without adding a dashboard secret first.
+    ports:
+      - "127.0.0.1:7070:7070"
+    volumes:
+      - orquestra-data:/data
+    restart: unless-stopped
+
+volumes:
+  orquestra-data:

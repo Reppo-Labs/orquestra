@@ -117,7 +117,14 @@ async function start(): Promise<void> {
     if (process.stdin.isTTY) {
       await onboard()
     } else if (dash) {
-      console.error('orquestra: no strategy config — complete onboarding in the dashboard (or run `orquestra configure` with -it).')
+      // Blessed first-run (ADR 0001): no TTY → onboard in the dashboard. The port is
+      // localhost-bound (ADR 0002), so tell the operator exactly how to reach it.
+      console.error(
+        `orquestra: no strategy config yet — onboard in the dashboard, then the node starts automatically.\n` +
+        `           reach it over an SSH tunnel:  ssh -L ${dashPort}:localhost:${dashPort} <this-host>\n` +
+        `           then open  http://localhost:${dashPort}\n` +
+        `           (headless/CI alternative: run \`orquestra configure\` with -it)`,
+      )
       while (needsOnboarding(DATA_DIR)) await new Promise((r) => setTimeout(r, 2000))
       console.error('orquestra: onboarding complete — starting node.')
     } else {

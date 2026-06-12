@@ -9,53 +9,46 @@ See `docs/design/2026-06-02-orquestra-design.md` for the architecture and
 
 ## Run a node
 
-Prerequisites: Docker, a **dedicated** wallet funded with ETH (Base) and REPPO,
-and an LLM API key (Anthropic, OpenAI, Google, Surplus, or Virtuals).
+Prerequisites: Docker (with Compose), a **dedicated** wallet funded with ETH
+(Base) and REPPO, and an LLM API key (Anthropic, OpenAI, Google, Surplus, or
+Virtuals).
 
-1. **Configure environment** — copy [.env.example](.env.example) to `.env` and
-   fill it in. Every variable is documented inline; minimum: `REPPO_PRIVATE_KEY`,
-   `LLM_PROVIDER`, `LLM_API_KEY`. Add `PINATA_JWT` if you want to mint.
+1. **Configure secrets** — copy [.env.example](.env.example) to `.env` and fill
+   it in. Every variable is documented inline; minimum: `REPPO_PRIVATE_KEY`,
+   `LLM_PROVIDER`, `LLM_API_KEY`. Add `PINATA_JWT` if you want to mint. These are
+   the only things you set by hand — your strategy is configured later in the
+   dashboard.
 
-2. **Build the image**
-
-   ```sh
-   docker build -t orquestra .
-   ```
-
-3. **First run — onboarding interview** (interactive; writes your strategy
-   config into the data volume)
+2. **Start the node**
 
    ```sh
-   mkdir -p ./orquestra-data
-   docker run -it --rm --env-file .env \
-     -v "$PWD/orquestra-data:/data" \
-     orquestra configure
+   docker compose up -d
    ```
 
-   An example of what it produces:
-   [docs/examples/strategy.config.example.json](docs/examples/strategy.config.example.json).
+   This pulls the published image (`ghcr.io/reppo-labs/orquestra`), runs it
+   detached with a named data volume and `restart: unless-stopped`, and binds the
+   dashboard to `127.0.0.1:7070` on the host. `docker ps` shows `healthy` once it
+   answers. Pin a version in `docker-compose.yml` (e.g. `:0.1.0`) for production.
 
-4. **Run the node**
+3. **Onboard in the dashboard** — on first run the node has no strategy yet and
+   waits for you to configure one in the dashboard (no terminal interview needed).
+   The dashboard is localhost-only and unauthenticated, so reach it over an SSH
+   tunnel from your laptop:
 
    ```sh
-   docker run -d --name orquestra \
-     --env-file .env \
-     --restart unless-stopped \
-     -p 127.0.0.1:7070:7070 \
-     -v "$PWD/orquestra-data:/data" \
-     orquestra
+   ssh -L 7070:localhost:7070 <your-host>
    ```
 
-   - `-p 127.0.0.1:7070:7070` is **required to see the dashboard** — open
-     http://127.0.0.1:7070. The `127.0.0.1` prefix keeps it off your network;
-     the dashboard has no auth.
-   - `--restart unless-stopped` brings the node back after crashes/reboots.
-   - The container reports liveness via Docker healthcheck (`docker ps` shows
-     `healthy` once the dashboard answers).
+   Then open <http://localhost:7070> and chat through onboarding (which datanets
+   to vote/mint, budget caps, cadence, your strategy brief). The moment you save,
+   the node starts its first cycle. (Running locally rather than on a remote host?
+   Skip the tunnel — the dashboard is already at <http://localhost:7070>.)
 
-5. **Watch it work** — the dashboard shows balances, per-datanet cycle health,
-   budget burn vs. your caps, and why any datanet is idle. Logs:
-   `docker logs -f orquestra`.
+4. **Watch it work** — the dashboard shows balances, per-datanet cycle health,
+   budget burn vs. your caps, panel deliberations, and why any datanet is idle.
+   Logs: `docker compose logs -f`.
+
+**Updating:** `docker compose pull && docker compose up -d`.
 
 ### Safety model
 
@@ -64,6 +57,25 @@ and an LLM API key (Anthropic, OpenAI, Google, Surplus, or Virtuals).
 - Enabling a datanet (vote/mint) is the consent to pay its one-time subnet
   access grant; set `budget.grantReppoMax` to cap or disable grants.
 - Use a dedicated wallet. The private key sits in `.env` in plaintext.
+- The dashboard is **unauthenticated** and bound to localhost on purpose
+  ([ADR 0002](docs/adr/0002-dashboard-unauthenticated-localhost-bind.md)). Reach
+  it via the SSH tunnel above — never publish port 7070 to the internet, or
+  anyone could rewrite your strategy and spend your budget.
+
+### Build from source / audit
+
+The published image is built from this repo's `Dockerfile`. To build and run it
+yourself instead of pulling:
+
+```sh
+docker build -t orquestra .
+# then point docker-compose.yml's `image:` at `orquestra`, or docker run it directly
+```
+
+Headless/CI with no dashboard? Run the terminal onboarding fallback:
+`docker run -it --rm --env-file .env -v "$PWD/orquestra-data:/data" orquestra configure`.
+It produces a strategy like
+[docs/examples/strategy.config.example.json](docs/examples/strategy.config.example.json).
 
 ## Develop
 
