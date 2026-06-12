@@ -124,7 +124,7 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
 
       <div className="sec-head"><h2>Budget &amp; cadence</h2><div className="rule" /></div>
       <div className="settings">
-        <Num label="cadence (hours)" int value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })} />
+        <Num label="cadence (hours, e.g. 0.5 = 30m)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })} />
         <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => n !== undefined && edit((c) => { c.horizonDays = n })} />
         <Num label="lock REPPO" value={stake.lockReppo} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockReppo: n } })} />
         <Num label="lock days" int value={stake.lockDurationDays} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockDurationDays: n } })} />

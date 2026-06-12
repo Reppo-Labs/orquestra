@@ -27,6 +27,11 @@ describe('StrategyConfigSchema', () => {
     expect(() => StrategyConfigSchema.parse({ ...valid, horizonDays: 0 })).toThrow()
   })
 
+  it('accepts a fractional cadence (0.3h = 18 min) but rejects below the 0.1h floor', () => {
+    expect(StrategyConfigSchema.parse({ ...valid, cadenceHours: 0.3 }).cadenceHours).toBe(0.3)
+    expect(() => StrategyConfigSchema.parse({ ...valid, cadenceHours: 0.05 })).toThrow()
+  })
+
   it('exposes like/dislike thresholds per strictness on the 1-10 scale', () => {
     expect(STRICTNESS_THRESHOLDS.conservative).toEqual({ like: 8, dislike: 4 })
     expect(STRICTNESS_THRESHOLDS.aggressive.like).toBeLessThan(STRICTNESS_THRESHOLDS.conservative.like)

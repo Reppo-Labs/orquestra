@@ -24,7 +24,9 @@ const DatanetPolicy = z
 export const StrategyConfigSchema = z
   .object({
     horizonDays: z.number().int().positive(),
-    cadenceHours: z.number().int().positive(),
+    // Fractional hours allowed (0.5 = 30 min). Floor of 0.1h (6 min) keeps a typo'd
+    // 0.001 from hammering the LLM/chain with a cycle every few seconds.
+    cadenceHours: z.number().min(0.1),
     stake: z.object({
       lockReppo: z.number().nonnegative(),
       lockDurationDays: z.number().int().positive(),
