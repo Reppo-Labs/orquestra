@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { DatanetEntry } from '../api'
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
 const STRICT = ['conservative', 'balanced', 'aggressive']
 
-// Real "add a datanet" dialog (replaces window.prompt). Validates the id is an
-// integer that isn't already configured, previews the on-chain name if known, and
-// returns a fully-formed DatanetEntry.
+// "Add a datanet" dialog. The datanet is picked BY NAME from the live catalog
+// (/api/datanets id→name map) — ids never surface in the UI. Already-configured
+// datanets are excluded from the list.
 export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
   existing: string[]
   netNames: Record<string, string>
   onAdd: (id: string, entry: DatanetEntry) => void
   onClose: () => void
 }) {
-  const [id, setId] = useState('')
+  const [selectedId, setSelectedId] = useState('')
   const [vote, setVote] = useState(true)
   const [mint, setMint] = useState(false)
   const [adapter, setAdapter] = useState('')
@@ -25,17 +25,20 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const trimmed = id.trim()
-  const validId = /^\d+$/.test(trimmed)
-  const dup = validId && existing.includes(trimmed)
-  const knownName = validId ? netNames[trimmed] : undefined
-  const err = trimmed === '' ? '' : !validId ? 'datanet id must be an integer' : dup ? `datanet ${trimmed} is already configured` : ''
-  const canAdd = validId && !dup && (vote || mint)
+  // Catalog minus what's already configured, alphabetical by name.
+  const available = useMemo(
+    () => Object.entries(netNames)
+      .filter(([id]) => !existing.includes(id))
+      .sort(([, a], [, b]) => a.localeCompare(b)),
+    [netNames, existing],
+  )
+
+  const canAdd = selectedId !== '' && (vote || mint)
 
   const submit = () => {
     if (!canAdd) return
     const entry: DatanetEntry = { vote, mint, strictness, ...(adapter ? { adapter } : {}) }
-    onAdd(trimmed, entry)
+    onAdd(selectedId, entry)
     onClose()
   }
 
@@ -46,13 +49,19 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
         <div className="sub">Point the node at another Reppo datanet. It activates on the next cycle once you save.</div>
         <div className="fields">
           <label className="field">
-            <span>datanet id</span>
-            <input
-              type="text" inputMode="numeric" placeholder="e.g. 11" value={id} autoFocus
-              onChange={(e) => setId(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
-            />
-            {knownName && !dup && <span className="faint mono" style={{ fontSize: 12 }}>{knownName}</span>}
+            <span>datanet</span>
+            {available.length > 0 ? (
+              <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} autoFocus>
+                <option value="" disabled>choose a datanet…</option>
+                {available.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+              </select>
+            ) : (
+              <span className="muted" style={{ fontSize: 13 }}>
+                {Object.keys(netNames).length === 0
+                  ? 'datanet catalog still loading — try again in a moment'
+                  : 'every active datanet is already configured'}
+              </span>
+            )}
           </label>
 
           <div className="field">
@@ -76,8 +85,6 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
               {STRICT.map((x) => <option key={x}>{x}</option>)}
             </select>
           </label>
-
-          <div className="modal-err">{err}</div>
         </div>
         <div className="modal-foot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
