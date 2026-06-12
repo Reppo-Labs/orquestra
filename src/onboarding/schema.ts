@@ -25,7 +25,7 @@ export const OnboardingAnswersSchema = z.object({
   mintReppoMax: z.number().nonnegative(),
   mintGasEthMax: z.number().nonnegative(),
   horizonDays: z.number().int().positive(),
-  cadenceHours: z.number().int().positive(),
+  cadenceHours: z.number().min(0.1), // fractional ok (0.5 = 30 min); floor matches config schema
   notes: z.string().default(''),
 })
 
