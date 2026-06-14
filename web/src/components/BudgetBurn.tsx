@@ -5,10 +5,7 @@ export function BudgetBurn({ snapshot }: { snapshot: Snapshot | null }) {
   const b = snapshot?.budget
   const caps = b?.caps
   const bars: [string, number, number | null | undefined][] = b && caps ? [
-    ['Vote gas (ETH)', b.voteGasSpentEth, caps.voteGasEthMax],
     ['Mint REPPO', b.mintReppoSpent, caps.mintReppoMax],
-    ['Mint gas (ETH)', b.mintGasSpentEth, caps.mintGasEthMax],
-    ['Claim gas (ETH)', b.claimGasSpentEth, caps.claimGasEthMax],
     ['Grant REPPO', b.grantReppoSpent ?? 0, caps.grantReppoMax],
   ] : []
   if (!bars.length) return <div className="empty panel-box">budget pending first cycle</div>

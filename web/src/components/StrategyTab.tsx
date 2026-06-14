@@ -159,11 +159,8 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
         <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => n !== undefined && edit((c) => { c.horizonDays = n })} />
         <Num label="lock REPPO" value={stake.lockReppo} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockReppo: n } })} />
         <Num label="lock days" int value={stake.lockDurationDays} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockDurationDays: n } })} />
-        <Num label="vote gas max (ETH)" value={budget.voteGasEthMax} onChange={(n) => n !== undefined && setB('voteGasEthMax', n)} />
         <Num label="votes / cycle" int value={budget.voteRateMaxPerCycle} onChange={(n) => n !== undefined && setB('voteRateMaxPerCycle', n)} />
         <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)} />
-        <Num label="mint gas max (ETH)" value={budget.mintGasEthMax} onChange={(n) => n !== undefined && setB('mintGasEthMax', n)} />
-        <Num label="claim gas max (ETH)" value={budget.claimGasEthMax} onChange={(n) => n !== undefined && setB('claimGasEthMax', n)} />
         <Num label="grant REPPO max (∞ if empty)" value={budget.grantReppoMax} onChange={(n) => setB('grantReppoMax', n, true)} />
       </div>
 

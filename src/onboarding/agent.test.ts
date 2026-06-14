@@ -6,8 +6,8 @@ import type { Prompter } from './types.js'
 
 const validAnswers = {
   datanets: [{ id: '9', vote: true, mint: true, strictness: 'conservative' as const, adapter: 'hyperliquid' }],
-  lockReppo: 0, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
-  mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'picky',
+  lockReppo: 0, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'picky',
 }
 const silentPrompter: Prompter = { ask: async () => 'ok', info: () => {} }
 

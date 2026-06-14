@@ -54,10 +54,8 @@ function DraftSheet({ draft, names }: { draft: OnboardingDraft; names: Record<st
       <Field label="lock REPPO" value={draft.lockReppo} />
       <Field label="lock days" value={draft.lockDurationDays} />
       <div className="ob-section">budget</div>
-      <Field label="vote gas max (ETH)" value={draft.voteGasEthMax} />
       <Field label="votes / cycle" value={draft.voteRateMaxPerCycle} />
       <Field label="mint REPPO max" value={draft.mintReppoMax} />
-      <Field label="mint gas max (ETH)" value={draft.mintGasEthMax} />
       <div className="ob-section">rhythm</div>
       <Field label="horizon (days)" value={draft.horizonDays} />
       <Field label="cadence (hours)" value={draft.cadenceHours} />
@@ -180,7 +178,7 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
               <button className="btn primary" onClick={() => void confirm()}>Confirm & start the node</button>
               <span className="muted"> {confirmMsg}</span>
               <div className="muted" style={{ marginTop: 6 }}>
-                want changes? just keep chatting — the assistant will re-finalize. ({fmt(draft.mintReppoMax)} REPPO mint cap, {fmt(draft.voteGasEthMax)} ETH vote gas)
+                want changes? just keep chatting — the assistant will re-finalize. ({fmt(draft.mintReppoMax)} REPPO mint cap)
               </div>
             </div>
           )}

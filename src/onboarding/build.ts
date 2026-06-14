@@ -16,12 +16,10 @@ export function buildStrategyConfig(a: OnboardingAnswers): StrategyConfig {
     horizonDays: a.horizonDays,
     cadenceHours: a.cadenceHours,
     stake: { lockReppo: a.lockReppo, lockDurationDays: a.lockDurationDays },
+    // Gas caps are not operator-configured; StrategyConfigSchema fills high defaults.
     budget: {
-      voteGasEthMax: a.voteGasEthMax,
       voteRateMaxPerCycle: a.voteRateMaxPerCycle,
       mintReppoMax: a.mintReppoMax,
-      mintGasEthMax: a.mintGasEthMax,
-      claimGasEthMax: 0.05,
     },
     claimEmissions: true,
     datanets,

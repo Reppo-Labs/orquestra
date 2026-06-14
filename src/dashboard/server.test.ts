@@ -14,7 +14,7 @@ beforeEach(async () => {
   writeFileSync(join(dir, 'strategy.config.json'), JSON.stringify({
     horizonDays: 30, cadenceHours: 1, claimEmissions: true,
     stake: { lockReppo: 0, lockDurationDays: 30 },
-    budget: { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 },
+    budget: { voteRateMaxPerCycle: 30, mintReppoMax: 500, claimGasEthMax: 0.05 },
     datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } }, notes: '',
   }))
   appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'vote', datanetId: '9', podId: '1', direction: 'up', conviction: 9, reason: 'r', status: 'executed', txHash: '0x1' })
@@ -88,7 +88,7 @@ describe('dashboard server', () => {
 const VALID_STRATEGY = {
   horizonDays: 7, cadenceHours: 1,
   stake: { lockReppo: 0, lockDurationDays: 7 },
-  budget: { voteGasEthMax: 0.02, voteRateMaxPerCycle: 13, mintReppoMax: 50, mintGasEthMax: 0.01 },
+  budget: { voteRateMaxPerCycle: 13, mintReppoMax: 50, mintGasEthMax: 0.01 },
   datanets: { '2': { vote: true, mint: false, strictness: 'balanced' } },
   notes: 'from dashboard test',
 }
@@ -190,8 +190,8 @@ describe('static SPA serving (publicDir)', () => {
 
 const VALID_ANSWERS = {
   datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
-  lockReppo: 0, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
-  mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'dashboard onboarding test',
+  lockReppo: 0, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'dashboard onboarding test',
 }
 
 describe('onboarding API', () => {

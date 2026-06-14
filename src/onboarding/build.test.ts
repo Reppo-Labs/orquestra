@@ -9,8 +9,7 @@ const answers = (): OnboardingAnswers => ({
     { id: '2', vote: true, mint: false, strictness: 'balanced' },
   ],
   lockReppo: 500, lockDurationDays: 30,
-  voteGasEthMax: 0.02, voteRateMaxPerCycle: 25, mintReppoMax: 100, mintGasEthMax: 0.05,
-  horizonDays: 30, cadenceHours: 6, notes: 'be picky on TradingGym',
+  voteRateMaxPerCycle: 25, mintReppoMax: 100,   horizonDays: 30, cadenceHours: 6, notes: 'be picky on TradingGym',
 })
 
 describe('buildStrategyConfig', () => {
