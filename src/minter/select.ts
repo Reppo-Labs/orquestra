@@ -44,7 +44,7 @@ export async function selectMints(
       console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
       continue
     }
-    const { score, panel } = result
+    const { score, reason, panel } = result
     if (score < opts.minScore) continue
     const datasetPath = join(dataOut, `mint-${c.canonicalKey}.json`)
     // The dataset write is inside the per-candidate isolation too: a single disk
@@ -59,6 +59,7 @@ export async function selectMints(
       kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
       podName: clampPodName(c.podName), podDescription: clampPodName(c.podDescription, POD_DESC_MAX), datasetPath,
       estReppoCost: opts.estReppoCost ?? 0, selfScore: score,
+      ...(reason ? { reason } : {}),
       ...(c.sourceUrl ? { sourceUrl: c.sourceUrl } : {}),
       ...(c.imageUrl ? { imageUrl: c.imageUrl } : {}),
       ...(panel ? { panel } : {}),

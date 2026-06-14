@@ -170,6 +170,10 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             deps.recordActivity({
               ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
               canonicalKey: intent.canonicalKey, podName: intent.podName,
+              // conviction+reason mirror the vote entry so the dashboard shows the
+              // mint's score and rationale in Detail (not the canonical-key hash).
+              ...(intent.selfScore !== undefined ? { conviction: intent.selfScore } : {}),
+              ...(intent.reason ? { reason: intent.reason } : {}),
               status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
               ...(intent.panel ? { panel: intent.panel } : {}),
             })
