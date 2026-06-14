@@ -107,9 +107,25 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if (policy.vote && rubric.canVote) {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
         const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
-        for (const intent of intents) {
+        for (let i = 0; i < intents.length; i++) {
+          const intent = intents[i]
           const r = await deps.executor.executeVote(intent)
           votes.push(r)
+          // The vote rate/budget cap is monotonic within a cycle: once one vote
+          // is refused for budget, every remaining vote this cycle will be too.
+          // Stop here and log a SINGLE deferral note rather than one
+          // refused-budget row per deferred pod. Those pods are retried next
+          // cycle (we only record dedup on 'executed'), so per-pod refused rows
+          // otherwise pile up across cycles and read as duplicate votes.
+          if (r.status === 'refused-budget') {
+            const deferred = intents.length - i
+            deps.recordActivity({
+              ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+              reason: `vote rate/budget cap reached — ${deferred} vote${deferred === 1 ? '' : 's'} deferred to next cycle`,
+              status: 'skipped',
+            })
+            break
+          }
           // Record dedup ONLY on confirmed execution. A non-executed result (refused,
           // or an 'error' such as a validation failure / missing credential) most often
           // means the tx never submitted — recording it would PERMANENTLY block a

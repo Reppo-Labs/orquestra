@@ -282,6 +282,35 @@ describe('runCycle', () => {
     expect(errored.recordVote).not.toHaveBeenCalled()        // errored vote NOT recorded → retried next cycle (idempotency key guards double-spend)
     expect(errored.recordMint).toHaveBeenCalledWith('9', 'k1') // executed mint IS recorded
   })
+
+  it('on a vote rate/budget refusal, stops the datanet and logs ONE deferral note (not a refused row per pod)', async () => {
+    const activity: any[] = []
+    const single = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteRateMaxPerCycle: 99, mintReppoMax: 1000 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    const d = deps({
+      getPodsAndFilter: vi.fn(async () => ({
+        pods: [
+          { podId: 'a', validityEpoch: '100', name: 'A', description: 'd' },
+          { podId: 'b', validityEpoch: '100', name: 'B', description: 'd' },
+          { podId: 'c', validityEpoch: '100', name: 'C', description: 'd' },
+        ],
+        filter: { currentEpoch: '100', ownPodIds: [], votedPodIds: [] },
+      })),
+      executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn() } as unknown as CycleDeps['executor'],
+      recordActivity: (e) => { activity.push(e) },
+    })
+    await runCycle(single, 'c-defer', d)
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(1) // breaks on first refusal, does not attempt remaining pods
+    expect(activity.filter((e) => e.kind === 'vote')).toEqual([])     // no per-pod refused-budget vote rows
+    const skips = activity.filter((e) => e.kind === 'skip')
+    expect(skips).toHaveLength(1)
+    expect(skips[0].reason).toMatch(/3 votes deferred to next cycle/)
+    expect(d.recordVote).not.toHaveBeenCalled()
+  })
 })
 
 const claimExecutor = (executeClaim: CycleDeps['executor']['executeClaim']): CycleDeps['executor'] => ({
