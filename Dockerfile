@@ -1,4 +1,4 @@
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
@@ -10,7 +10,7 @@ COPY src ./src
 COPY web ./web
 RUN npm run build
 
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
  && npm i -g @reppo/cli@0.8.4

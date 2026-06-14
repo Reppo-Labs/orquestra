@@ -1,8 +1,20 @@
 // src/dashboard/activityLog.ts
-import { appendFileSync, readFileSync, existsSync, statSync, renameSync } from 'node:fs'
+// Activity history store, backed by SQLite (node:sqlite, built into Node >=22.5 —
+// zero extra deps). Replaces the append-only JSONL: reads are indexed (newest-first
+// LIMIT, or a since-window) instead of re-parsing the whole file each dashboard poll.
+// The public API (appendActivity / readActivity) is unchanged; on first open an
+// existing activity-log.jsonl is imported once so history carries over.
+import { createRequire } from 'node:module'
+import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets } from '../util/redact.js'
 import type { PanelTranscript } from '../panel/types.js'
+
+// Load node:sqlite via createRequire so the test bundler (Vite/vitest) doesn't try
+// to statically resolve it — it's newer than Vite's builtin externals list. At
+// runtime this is Node's own require, resolving the built-in module directly.
+type SqliteDb = import('node:sqlite').DatabaseSync
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')
 
 export interface ActivityEntry {
   ts: string
@@ -25,20 +37,11 @@ export interface ActivityEntry {
   panel?: PanelTranscript
 }
 
-const FILE = 'activity-log.jsonl'
-/** Rotate the log once it exceeds this. At a low cadence the file grows slowly,
- *  but it is otherwise unbounded — cap it so disk and parse cost stay finite.
- *  ONE generation of history is retained as `.jsonl.old`; readActivity spans
- *  live + `.old`. Caveat: cumulative metrics derived from the full log
- *  (pnl.ts/earnStatus.ts "claimed to date") only see live + one archive, so
- *  after a SECOND rotation the oldest realized claims roll off. At 32 MiB/gen
- *  (≈ hundreds of thousands of entries) that is years away at any real cadence;
- *  authoritative cumulative accounting should come from on-chain/ledger state. */
-const DEFAULT_MAX_BYTES = 32 * 1024 * 1024
+const DB_FILE = 'activity.db'
+const LEGACY = 'activity-log.jsonl'
 
-/** Redact every string value in a nested value, leaving non-strings (scores,
- *  booleans) untouched. redactSecrets is pattern-based (RPC keys, bearer tokens,
- *  etc.), so it never touches benign identifiers like persona ids or scores. */
+// ── redaction (defense-in-depth: error text can carry --rpc-url keys; panel text
+//    is LLM-generated from untrusted pod data) — applied on write. ──────────────
 function redactDeep(v: unknown): unknown {
   if (typeof v === 'string') return redactSecrets(v)
   if (Array.isArray(v)) return v.map(redactDeep)
@@ -53,60 +56,113 @@ function redactEntry(entry: ActivityEntry): ActivityEntry {
     ...entry,
     ...(entry.detail !== undefined ? { detail: redactSecrets(entry.detail) } : {}),
     ...(entry.reason !== undefined ? { reason: redactSecrets(entry.reason) } : {}),
-    // Panel transcript text is LLM-generated from untrusted pod data and may echo
-    // the operator brief. Redact ALL its string fields recursively — robust to a
-    // malformed shape and to any future field — before it is persisted and before
-    // /api/activity serves it to the dashboard.
-    ...(entry.panel !== undefined ? { panel: redactDeep(entry.panel) as ActivityEntry['panel'] } : {}),
+    ...(entry.panel !== undefined ? { panel: redactDeep(entry.panel) as PanelTranscript } : {}),
   }
 }
 
-/** Append one entry as a single JSON line. Crash-safe: one line per action.
- *  detail/reason are redacted as defense-in-depth: error messages can carry CLI
- *  command lines (incl. --rpc-url keys) from paths that bypass the cli.ts fold.
- *  Rotates the file to `<file>.old` once it exceeds maxBytes (history retained). */
-export function appendActivity(dataDir: string, entry: ActivityEntry, opts: { maxBytes?: number } = {}): void {
-  const path = join(dataDir, FILE)
-  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
-  if (existsSync(path) && statSync(path).size > maxBytes) {
-    renameSync(path, path + '.old') // single generation; next rotation overwrites it
-  }
-  appendFileSync(path, JSON.stringify(redactEntry(entry)) + '\n')
+// ── DB handle cache (one per dataDir; single-process node) ────────────────────
+const dbs = new Map<string, SqliteDb>()
+
+const COLUMNS = [
+  'ts', 'cycleId', 'kind', 'datanetId', 'podId', 'direction', 'conviction', 'reason',
+  'canonicalKey', 'podName', 'epoch', 'reppoClaimed', 'status', 'txHash', 'gasEth', 'detail', 'panel',
+] as const
+
+function db(dataDir: string): SqliteDb {
+  const path = join(dataDir, DB_FILE)
+  let d = dbs.get(path)
+  if (d) return d
+  d = new DatabaseSync(path)
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL, cycleId TEXT, kind TEXT, datanetId TEXT, podId TEXT,
+      direction TEXT, conviction REAL, reason TEXT, canonicalKey TEXT, podName TEXT,
+      epoch INTEGER, reppoClaimed REAL, status TEXT, txHash TEXT, gasEth REAL,
+      detail TEXT, panel TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
+  `)
+  dbs.set(path, d)
+  importLegacyJsonl(d, dataDir)
+  return d
 }
 
-// Parse cache keyed by file path: the dashboard polls /api/pnl + /api/health every
-// 30s and each re-parsed the whole (ever-growing) JSONL. The file is append-only,
-// so (size, mtime) identity means the parsed entries are still valid.
-const parseCache = new Map<string, { key: string; entries: ActivityEntry[] }>()
-
-function parseLines(text: string): ActivityEntry[] {
-  const out: ActivityEntry[] = []
-  for (const line of text.split('\n')) {
-    if (line.trim() === '') continue
-    // Redact on read too: lines appended before redaction existed (or by a future
-    // path that forgets) are sanitized before they reach the dashboard.
-    try { out.push(redactEntry(JSON.parse(line) as ActivityEntry)) } catch { /* skip torn/invalid line */ }
+/** One-time import of a pre-existing activity-log.jsonl (+ .old) into an empty DB,
+ *  preserving history. The JSONL is renamed to *.imported afterwards (kept, not
+ *  deleted). No-op once the table has rows. */
+function importLegacyJsonl(d: SqliteDb, dataDir: string): void {
+  const count = (d.prepare('SELECT COUNT(*) AS n FROM activity').get() as { n: number }).n
+  if (count > 0) return
+  const live = join(dataDir, LEGACY)
+  const old = join(dataDir, LEGACY + '.old')
+  if (!existsSync(live) && !existsSync(old)) return
+  const parse = (p: string): ActivityEntry[] => {
+    if (!existsSync(p)) return []
+    const out: ActivityEntry[] = []
+    for (const line of readFileSync(p, 'utf-8').split('\n')) {
+      if (line.trim() === '') continue
+      try { out.push(JSON.parse(line) as ActivityEntry) } catch { /* skip torn line */ }
+    }
+    return out
   }
-  return out
+  // .old is older than live; insert oldest-first so id order tracks chronology.
+  const rows = [...parse(old), ...parse(live)]
+  d.exec('BEGIN')
+  try {
+    for (const e of rows) insert(d, e)
+    d.exec('COMMIT')
+  } catch (err) {
+    d.exec('ROLLBACK')
+    throw err
+  }
+  if (existsSync(live)) renameSync(live, live + '.imported')
+  if (existsSync(old)) renameSync(old, old + '.imported')
 }
 
-/** Read the most recent `limit` entries, newest-first. Skips unparseable lines
- *  (e.g. a torn final line from a crash). Missing file → []. Includes one rotated
- *  generation (`.old`) so consumers (earn attribution) survive a rotation. Repeat
- *  reads of an unchanged live file are served from an in-process cache. */
+const PLACEHOLDERS = COLUMNS.map(() => '?').join(', ')
+function insert(d: SqliteDb, entry: ActivityEntry): void {
+  const e = redactEntry(entry)
+  const vals: (string | number | null)[] = [
+    e.ts, e.cycleId ?? null, e.kind ?? null, e.datanetId ?? null, e.podId ?? null,
+    e.direction ?? null, e.conviction ?? null, e.reason ?? null, e.canonicalKey ?? null, e.podName ?? null,
+    e.epoch ?? null, e.reppoClaimed ?? null, e.status ?? null, e.txHash ?? null, e.gasEth ?? null,
+    e.detail ?? null, e.panel ? JSON.stringify(e.panel) : null,
+  ]
+  d.prepare(`INSERT INTO activity (${COLUMNS.join(', ')}) VALUES (${PLACEHOLDERS})`).run(...vals)
+}
+
+type Row = Record<string, string | number | null>
+
+/** Reconstruct an ActivityEntry from a DB row, dropping null columns so the shape
+ *  matches what callers expect (optional fields absent, not undefined-valued). */
+function rowToEntry(r: Row): ActivityEntry {
+  const e: Record<string, unknown> = {}
+  for (const c of COLUMNS) {
+    const v = r[c]
+    if (v === null || v === undefined) continue
+    if (c === 'panel') { try { e.panel = JSON.parse(v as string) } catch { /* skip */ } }
+    else e[c] = v
+  }
+  return e as unknown as ActivityEntry
+}
+
+/** Append one activity entry. Redacts secrets before persisting. Never rotates —
+ *  SQLite handles growth; reads are indexed. */
+export function appendActivity(dataDir: string, entry: ActivityEntry): void {
+  insert(db(dataDir), entry)
+}
+
+/** Most recent `limit` entries, newest-first. Missing DB → []. */
 export function readActivity(dataDir: string, opts: { limit: number }): ActivityEntry[] {
-  const path = join(dataDir, FILE)
-  if (!existsSync(path)) return []
-  const st = statSync(path)
-  const oldPath = path + '.old'
-  const oldSt = existsSync(oldPath) ? statSync(oldPath) : null
-  const cacheKey = `${st.size}:${st.mtimeMs}:${oldSt ? `${oldSt.size}:${oldSt.mtimeMs}` : '0'}`
-  const hit = parseCache.get(path)
-  if (hit && hit.key === cacheKey) return hit.entries.slice(0, opts.limit)
-  // newest-first overall: live file (newer) reversed first, then the rotated file.
-  const live = parseLines(readFileSync(path, 'utf-8')).reverse()
-  const archived = oldSt ? parseLines(readFileSync(oldPath, 'utf-8')).reverse() : []
-  const out = [...live, ...archived]
-  parseCache.set(path, { key: cacheKey, entries: out })
-  return out.slice(0, opts.limit)
+  const rows = db(dataDir).prepare('SELECT * FROM activity ORDER BY id DESC LIMIT ?').all(opts.limit) as Row[]
+  return rows.map(rowToEntry)
+}
+
+/** Entries at or after `sinceMs` (epoch millis), newest-first. Indexed on ts, so
+ *  the dashboard health window doesn't re-read the whole history each poll. */
+export function readActivitySince(dataDir: string, sinceMs: number): ActivityEntry[] {
+  const since = new Date(sinceMs).toISOString()
+  const rows = db(dataDir).prepare('SELECT * FROM activity WHERE ts >= ? ORDER BY id DESC').all(since) as Row[]
+  return rows.map(rowToEntry)
 }

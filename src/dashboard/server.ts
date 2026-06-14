@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
-import { readActivity } from './activityLog.js'
+import { readActivity, readActivitySince } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
@@ -209,7 +209,11 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
     // 7-day window: "recent health", independent of cadence (a count-based window
     // means hours at high cadence, months at low). 100k limit is a safety ceiling.
-    if (url === '/api/health') { json(res, 200, buildHealth(readActivity(dataDir, { limit: 100_000 }), { sinceMs: Date.now() - 7 * 24 * 3600_000 })); return }
+    if (url === '/api/health') {
+      // 7-day window via an indexed since-query (no full-history scan per poll).
+      const since = Date.now() - 7 * 24 * 3600_000
+      json(res, 200, buildHealth(readActivitySince(dataDir, since), { sinceMs: since })); return
+    }
     if (url === '/api/datanets') { json(res, 200, await datanetNames()); return }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
