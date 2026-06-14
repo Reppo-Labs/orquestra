@@ -81,9 +81,11 @@ export function App() {
         {tab === 'strategy' && (
           <StrategyTab strategy={strategy} netNames={netNames} onReconfigure={() => setReconfiguring(true)} />
         )}
-        {tab === 'chat' && (
+        {/* Kept mounted (hidden when off-tab) so the conversation, draft input, and
+            scroll position survive switching tabs. */}
+        <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
           <ChatTab strategy={strategy} onGoToStrategy={() => setTab('strategy')} />
-        )}
+        </div>
         {tab === 'activity' && (
           <Activity activity={data?.activity ?? []} netNames={netNames} onOpenPanel={setPanelRow} />
         )}
