@@ -15,6 +15,10 @@ export interface SelectMintsOpts {
   scorer: CandidateScorer
   /** optional REPPO cost estimate per mint for the budget. */
   estReppoCost?: number
+  /** 'pin' (default): pin the dataset JSON to IPFS. 'url-only': register the
+   *  candidate's sourceUrl as the pod, no pinning/Pinata (candidates without a
+   *  sourceUrl are skipped). */
+  mintMode?: 'pin' | 'url-only'
 }
 
 /** Score candidates vs the publisher spec; mint those >= minScore that aren't
@@ -46,19 +50,31 @@ export async function selectMints(
     }
     const { score, reason, panel } = result
     if (score < opts.minScore) continue
-    const datasetPath = join(dataOut, `mint-${c.canonicalKey}.json`)
-    // The dataset write is inside the per-candidate isolation too: a single disk
-    // failure skips THAT candidate, it does not abort the whole datanet's batch.
-    try {
-      writeFileSync(datasetPath, JSON.stringify(c.dataset))
-    } catch (e) {
-      console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) dataset write failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
-      continue
+
+    // url-only: register the source URL as the pod, no dataset pinned (no Pinata).
+    // A candidate with no sourceUrl can't be minted this way — skip it.
+    let datasetPath: string | undefined
+    if (opts.mintMode === 'url-only') {
+      if (!c.sourceUrl) {
+        console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) skipped — url-only mint needs a sourceUrl, candidate has none`)
+        continue
+      }
+    } else {
+      // pin: write the dataset body so the CLI can pin it to IPFS. The write is
+      // inside per-candidate isolation: one disk failure skips THAT candidate.
+      datasetPath = join(dataOut, `mint-${c.canonicalKey}.json`)
+      try {
+        writeFileSync(datasetPath, JSON.stringify(c.dataset))
+      } catch (e) {
+        console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) dataset write failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+        continue
+      }
     }
     intents.push({
       kind: 'mint', datanetId, subnetUuid: rubric.subnetUuid, canonicalKey: c.canonicalKey,
-      podName: clampPodName(c.podName), podDescription: clampPodName(c.podDescription, POD_DESC_MAX), datasetPath,
+      podName: clampPodName(c.podName), podDescription: clampPodName(c.podDescription, POD_DESC_MAX),
       estReppoCost: opts.estReppoCost ?? 0, selfScore: score,
+      ...(datasetPath ? { datasetPath } : {}),
       ...(reason ? { reason } : {}),
       ...(c.sourceUrl ? { sourceUrl: c.sourceUrl } : {}),
       ...(c.imageUrl ? { imageUrl: c.imageUrl } : {}),

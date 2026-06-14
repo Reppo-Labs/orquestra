@@ -90,7 +90,8 @@ export class WalletExecutor {
     try {
       const r = await this.cli.mintPod({
         datanetId: intent.datanetId, subnetUuid: intent.subnetUuid, podName: intent.podName, podDescription: intent.podDescription,
-        datasetPath: intent.datasetPath, idempotencyKey: `mint-${intent.canonicalKey}`,
+        idempotencyKey: `mint-${intent.canonicalKey}`,
+        ...(intent.datasetPath ? { datasetPath: intent.datasetPath } : {}),
         ...(intent.sourceUrl ? { url: intent.sourceUrl } : {}),
         ...(intent.imageUrl ? { imageUrl: intent.imageUrl } : {}),
       })

@@ -15,7 +15,7 @@ describe('StrategyConfigSchema', () => {
   it('accepts a valid config and applies the wildcard default', () => {
     const parsed = StrategyConfigSchema.parse(valid)
     expect(parsed.datanets['9'].strictness).toBe('conservative')
-    expect(parsed.datanets['*']).toEqual({ vote: false, mint: false, strictness: 'balanced' })
+    expect(parsed.datanets['*']).toEqual({ vote: false, mint: false, strictness: 'balanced', mintMode: 'pin' })
   })
 
   it('rejects an unknown strictness', () => {

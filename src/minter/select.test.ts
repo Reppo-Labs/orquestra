@@ -28,8 +28,24 @@ describe('selectMints (minScore 7)', () => {
     expect(intents.map((i) => i.canonicalKey)).toEqual(['a']) // b scored 4 < 7
     expect(intents[0].kind).toBe('mint'); expect(intents[0].datanetId).toBe('9')
     expect(intents[0].subnetUuid).toBe('cm-subnet-9') // carried from rubric for mint-pod --subnet-uuid
-    expect(existsSync(intents[0].datasetPath)).toBe(true)
-    expect(JSON.parse(readFileSync(intents[0].datasetPath, 'utf-8'))).toEqual({ rows: ['a'] })
+    expect(existsSync(intents[0].datasetPath!)).toBe(true)
+    expect(JSON.parse(readFileSync(intents[0].datasetPath!, 'utf-8'))).toEqual({ rows: ['a'] })
+  })
+
+  it('url-only mode: mints with sourceUrl, no dataset file, no datasetPath', async () => {
+    const c = cand('u'); c.sourceUrl = 'https://news/x'
+    const intents = await selectMints('9', [c], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ u: 9 }), mintMode: 'url-only' })
+    expect(intents).toHaveLength(1)
+    expect(intents[0].datasetPath).toBeUndefined()
+    expect(intents[0].sourceUrl).toBe('https://news/x')
+    expect(existsSync(join(dir, 'pending-data', 'mint-u.json'))).toBe(false) // nothing pinned
+  })
+
+  it('url-only mode: skips a candidate with no sourceUrl (can not url-only mint it)', async () => {
+    const intents = await selectMints('9', [cand('nourl')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: scorerOf({ nourl: 9 }), mintMode: 'url-only' })
+    expect(intents).toEqual([])
   })
 
   it('dedups candidates whose canonicalKey is already in seenKeys (no score, no mint)', async () => {

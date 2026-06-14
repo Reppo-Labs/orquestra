@@ -57,13 +57,28 @@ describe('reppo CLI boundary (stub binary)', () => {
       datasetPath: '/tmp/d.json', idempotencyKey: 'mint-k1',
     })
     const argv = recordedArgv()
-    expect(argv.slice(0, 13)).toEqual([
-      'mint-pod', '--datanet', '2', '--subnet-uuid', 'cm-x', '--pod-name', 'Short name',
-      '--pod-description', 'Short desc', '--dataset', '/tmp/d.json', '--idempotency-key', 'mint-k1',
-    ])
+    expect(argv[0]).toBe('mint-pod')
+    expect(argv[argv.indexOf('--datanet') + 1]).toBe('2')
+    expect(argv[argv.indexOf('--subnet-uuid') + 1]).toBe('cm-x')
+    expect(argv[argv.indexOf('--pod-name') + 1]).toBe('Short name')
+    expect(argv[argv.indexOf('--pod-description') + 1]).toBe('Short desc')
+    expect(argv[argv.indexOf('--dataset') + 1]).toBe('/tmp/d.json')
+    expect(argv[argv.indexOf('--idempotency-key') + 1]).toBe('mint-k1')
     expect(argv).toContain('--agree-to-terms')
     expect(argv).not.toContain('--url')        // omitted when not provided
     expect(argv).not.toContain('--image-url')
+  })
+
+  it('mint-pod omits --dataset for a url-only mint (no Pinata)', async () => {
+    stubReppo('ok')
+    await defaultReppoCli.mintPod({
+      datanetId: '2', subnetUuid: 'cm-x', podName: 'n', podDescription: 'd',
+      idempotencyKey: 'mint-k3', url: 'https://news.example/article',
+    })
+    const argv = recordedArgv()
+    expect(argv).not.toContain('--dataset')
+    expect(argv[argv.indexOf('--url') + 1]).toBe('https://news.example/article')
+    expect(argv).toContain('--agree-to-terms')
   })
 
   it('mint-pod emits --url and --image-url when the intent carries them', async () => {
