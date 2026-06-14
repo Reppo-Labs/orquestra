@@ -151,6 +151,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
           const intents = await selectMints(datanetId, candidates, rubric, {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
+            mintMode: policy.mintMode,
           })
           // Surface the otherwise-silent case where the adapter found candidates but
           // none cleared scoring/dedup — the difference between "no data" and "data

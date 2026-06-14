@@ -24,8 +24,8 @@ export interface MintIntent {
   canonicalKey: string
   podName: string
   podDescription: string
-  /** path to the labeled dataset body the CLI pins + mints. */
-  datasetPath: string
+  /** path to the labeled dataset body the CLI pins + mints. Absent for url-only mints. */
+  datasetPath?: string
   /** optional REPPO cost estimate for budgeting; 0 if mint is gas-only. */
   estReppoCost?: number
   /** scorer's 1-10 quality score; carried for downstream digest/audit. */

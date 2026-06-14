@@ -35,7 +35,7 @@ You need:
 | **Docker** (with Compose) | the node runs as a container |
 | A **dedicated wallet** | fund with ETH on **Base** (gas) + **REPPO** (mint fees, veREPPO lock). Never your main wallet. |
 | An **LLM API key** | powers scoring, the deliberation panel, and the onboarding chat. Anthropic / OpenAI / Google / Surplus / Virtuals. |
-| A **Pinata JWT** | only if you want to **mint** (pins pod datasets to IPFS). Voting doesn't need it. |
+| A **Pinata JWT** | only to **mint in "pin" mode** (pins pod datasets to IPFS). Not needed for voting, or if you mint every datanet in **url-only** mode (§7a). |
 | A **private Base RPC** (recommended) | the public RPC rate-limits under a full cycle; Alchemy/QuickNode/Ankr remove per-datanet errors. |
 
 Funding rule of thumb for beta: a little ETH for gas (mint/vote/claim txs are
@@ -134,7 +134,8 @@ The control surface. Each datanet is a card:
   score thresholds. Short version: **conservative** = picky (only acts on strong
   signals, spends least), **aggressive** = participates widely (more votes/mints,
   spends more), **balanced** = middle.
-- **+ mint strategy** — for minted datanets, set focus / angle / items-per-cycle.
+- **+ mint strategy** — for minted datanets, set focus / angle / items-per-cycle,
+  and **mint mode** (see §7a).
 - **+ add datanet** — opens a picker of all active datanets by name.
 
 Below the cards: **budget & cadence** (caps, how often the node runs — fractional
@@ -175,6 +176,24 @@ producing net-downvoted or no-vote pods, its adapter is publishing data the crow
 doesn't value — tighten its strictness or switch it to vote-only.
 
 ---
+
+## 7a. Mint mode — pin vs url-only (do you need Pinata?)
+
+Each minted datanet has a **mint mode**, set per datanet in the Strategy tab:
+
+- **pin** (default) — the node uploads the pod's dataset JSON to IPFS via your
+  Pinata key. Use it where the dataset *is* the value (e.g. trade data) and curators
+  pull the downloadable to judge it.
+- **url-only** — the node registers the candidate's **source URL** as the pod, with
+  **no pinning and no Pinata**. Use it for link-type pods (e.g. news articles).
+  Candidates with no source URL are skipped in this mode.
+
+So **Pinata is required only if at least one minted datanet is in `pin` mode.** A
+vote-only node, or one that mints everything url-only, doesn't need a Pinata key at
+all.
+
+Tip: before switching a datanet to url-only, confirm its pods still earn — for some
+datanets curators score the pinned dataset, not just the link.
 
 ## 7. The multi-agent panel
 

@@ -93,6 +93,9 @@ export interface DatanetEntry {
   strictness: string
   adapter?: string
   adapterParams?: Record<string, unknown>
+  /** 'pin' (default) pins the dataset to IPFS (needs Pinata); 'url-only' registers
+   *  the source URL with no pinning. */
+  mintMode?: 'pin' | 'url-only'
 }
 
 /** The whitelisted subset of strategy.config.json that /api/config serves. */

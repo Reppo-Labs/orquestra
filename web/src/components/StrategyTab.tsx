@@ -8,6 +8,16 @@ import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
 
+const mintModeTip = (
+  <>
+    <b>How the minted pod's data is attached.</b> <b>pin</b> uploads the dataset JSON
+    to IPFS via your Pinata key — best when the dataset itself is the value (e.g.
+    trade data). <b>url-only</b> registers the candidate's source link as the pod
+    with no pinning and no Pinata — fine for link-type pods (e.g. news), and skips
+    candidates that have no source URL.
+  </>
+)
+
 function Num({ label, value, int, onChange }: {
   label: string; value: number | undefined; int?: boolean; onChange: (n: number | undefined) => void
 }) {
@@ -95,6 +105,13 @@ function NetCard({ id, d, name, edit }: {
           <Num label="items / cycle" int value={p.topN} onChange={(n) => setParam('topN', n)} />
           <Num label="min importance" int value={p.minImportance} onChange={(n) => setParam('minImportance', n)} />
         </div>
+        <label className="field">
+          <span>mint mode <Tip label="what mint mode means">{mintModeTip}</Tip></span>
+          <select value={d.mintMode ?? 'pin'} onChange={(e) => upd((n) => { n.mintMode = e.target.value as DatanetEntry['mintMode'] })}>
+            <option value="pin">pin dataset to IPFS (needs Pinata)</option>
+            <option value="url-only">url-only (no Pinata)</option>
+          </select>
+        </label>
       </div>
       <div className="net-foot">
         <button className="link-btn" onClick={() => setOpen((o) => !o)}>{open ? '− hide strategy' : '+ mint strategy'}</button>

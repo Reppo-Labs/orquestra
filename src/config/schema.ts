@@ -18,6 +18,11 @@ const DatanetPolicy = z
     strictness: Strictness.default('balanced'),
     adapter: z.string().optional(),
     adapterParams: z.record(z.string(), z.unknown()).optional(),
+    // How a minted pod's data is attached:
+    //   'pin'      → pin the dataset JSON to IPFS (needs PINATA_JWT). Default.
+    //   'url-only' → register the candidate's source URL as the pod, no pinning,
+    //                no Pinata. Only valid for candidates that have a sourceUrl.
+    mintMode: z.enum(['pin', 'url-only']).default('pin'),
   })
   .strict()
 
@@ -59,7 +64,7 @@ export const StrategyConfigSchema = z
   })
   .transform((cfg) => ({
     ...cfg,
-    datanets: { '*': { vote: false, mint: false, strictness: 'balanced' as const }, ...cfg.datanets } as Record<string, z.infer<typeof DatanetPolicy>>,
+    datanets: { '*': { vote: false, mint: false, strictness: 'balanced' as const, mintMode: 'pin' as const }, ...cfg.datanets } as Record<string, z.infer<typeof DatanetPolicy>>,
   }))
 
 export type StrategyConfig = z.infer<typeof StrategyConfigSchema>
