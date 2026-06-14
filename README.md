@@ -4,8 +4,11 @@ Reppo's official agentic swarm node. Run a node on your machine: it curates
 (votes) across any Datanet and mints where it has a data adapter, bounded by a
 budget you set in an LLM onboarding interview, signing with your own wallet.
 
-See `docs/design/2026-06-02-orquestra-design.md` for the architecture and
-`docs/superpowers/specs/` for feature-level designs.
+**New operator? Read the [Operator Guide](docs/operator-guide.md)** — install,
+onboarding, the dashboard, earning, and troubleshooting, end to end.
+
+See `docs/design/2026-06-02-orquestra-design.md` for the architecture,
+`docs/adr/` for key decisions, and `docs/superpowers/specs/` for feature designs.
 
 ## Run a node
 
