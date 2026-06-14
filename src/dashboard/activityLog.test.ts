@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, appendFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendActivity, readActivity, type ActivityEntry } from './activityLog.js'
+import { appendActivity, readActivity, readActivitySince, type ActivityEntry } from './activityLog.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-act-')) })
@@ -13,83 +13,81 @@ const entry = (over: Partial<ActivityEntry> = {}): ActivityEntry => ({
   podId: '1', direction: 'up', conviction: 9, reason: 'r', status: 'executed', txHash: '0xabc', ...over,
 })
 
-describe('activityLog', () => {
+describe('activityLog (sqlite)', () => {
   it('append then read returns entries newest-first', () => {
     appendActivity(dir, entry({ podId: '1' }))
     appendActivity(dir, entry({ podId: '2' }))
-    const rows = readActivity(dir, { limit: 10 })
-    expect(rows.map((r) => r.podId)).toEqual(['2', '1']) // newest first
+    expect(readActivity(dir, { limit: 10 }).map((r) => r.podId)).toEqual(['2', '1'])
   })
 
-  it('returns [] when the log does not exist', () => {
+  it('returns [] when nothing has been logged', () => {
     expect(readActivity(dir, { limit: 10 })).toEqual([])
   })
 
   it('honours the limit (most recent N)', () => {
     for (let i = 0; i < 5; i++) appendActivity(dir, entry({ podId: String(i) }))
-    const rows = readActivity(dir, { limit: 2 })
-    expect(rows.map((r) => r.podId)).toEqual(['4', '3'])
+    expect(readActivity(dir, { limit: 2 }).map((r) => r.podId)).toEqual(['4', '3'])
   })
 
-  it('tolerates a torn final line (partial write)', () => {
-    appendActivity(dir, entry({ podId: '1' }))
-    appendFileSync(join(dir, 'activity-log.jsonl'), '{"ts":"x","kind":"vote"') // no newline, invalid
-    const rows = readActivity(dir, { limit: 10 })
-    expect(rows.map((r) => r.podId)).toEqual(['1']) // bad line skipped
+  it('drops absent optional fields (shape matches the JSONL contract)', () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'skip', datanetId: '2', reason: 'x', status: 'skipped' })
+    const [row] = readActivity(dir, { limit: 1 })
+    expect(row).not.toHaveProperty('podId')
+    expect(row).not.toHaveProperty('conviction')
+    expect(row).toMatchObject({ kind: 'skip', datanetId: '2', status: 'skipped', reason: 'x' })
   })
 
-  it('rotates the live file at maxBytes but readActivity still spans the archive (history preserved)', () => {
-    appendActivity(dir, entry({ podId: 'old1' }))
-    appendActivity(dir, entry({ podId: 'old2' }), { maxBytes: 10 }) // file already > 10 bytes → rotates first
-    // live file now holds only old2; old1 is in .old
-    expect(existsSync(join(dir, 'activity-log.jsonl.old'))).toBe(true)
-    expect(readFileSync(join(dir, 'activity-log.jsonl'), 'utf-8')).not.toContain('old1')
-    // readActivity spans both, newest-first: live (old2) then archived (old1)
-    expect(readActivity(dir, { limit: 10 }).map((r) => r.podId)).toEqual(['old2', 'old1'])
-  })
-
-  it('redacts rpc-url keys from detail/reason at append time', () => {
+  it('redacts rpc-url keys from detail at append time', () => {
     appendActivity(dir, entry({
       status: 'error',
-      detail: 'Command failed: reppo vote --pod 1 --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123 — {"error":{"code":"X"}}',
+      detail: 'Command failed: reppo vote --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123 — {"error":{}}',
     }))
     const [row] = readActivity(dir, { limit: 1 })
     expect(row.detail).not.toContain('SECRET123')
     expect(row.detail).toContain('--rpc-url <redacted>')
   })
 
-  it('redacts secrets inside the panel transcript (panelist arguments + judge reason)', () => {
+  it('redacts secrets inside the panel transcript', () => {
     appendActivity(dir, entry({
       panel: {
         screenScore: 8,
         panelists: [{ persona: 'bull', score: 9, argument: 'see --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123' }],
-        judge: { score: 7, reason: 'verified via --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123' },
+        judge: { score: 7, reason: 'via --rpc-url https://base-mainnet.g.alchemy.com/v2/SECRET123' },
       },
     }))
     const [row] = readActivity(dir, { limit: 1 })
     expect(JSON.stringify(row.panel)).not.toContain('SECRET123')
     expect(row.panel!.panelists[0].argument).toContain('<redacted>')
     expect(row.panel!.judge.reason).toContain('<redacted>')
+    expect(row.panel!.screenScore).toBe(8) // non-string fields survive intact
   })
 
-  it('serves repeat reads from cache and picks up appends (cache invalidated by size/mtime)', () => {
-    appendActivity(dir, entry({ podId: '1' }))
-    expect(readActivity(dir, { limit: 10 })).toHaveLength(1)
-    // cached read with a different limit still slices correctly
-    appendActivity(dir, entry({ podId: '2' }))
-    appendActivity(dir, entry({ podId: '3' }))
-    expect(readActivity(dir, { limit: 2 }).map((r) => r.podId)).toEqual(['3', '2'])
-    expect(readActivity(dir, { limit: 10 })).toHaveLength(3) // append seen, full list intact
+  it('readActivitySince returns only entries at/after the cutoff, newest-first', () => {
+    appendActivity(dir, entry({ podId: 'old', ts: '2026-06-01T00:00:00.000Z' }))
+    appendActivity(dir, entry({ podId: 'new', ts: '2026-06-10T00:00:00.000Z' }))
+    const since = Date.parse('2026-06-05T00:00:00.000Z')
+    expect(readActivitySince(dir, since).map((r) => r.podId)).toEqual(['new'])
   })
 
-  it('round-trips a skip entry (kind skip, status skipped, reason)', () => {
-    appendActivity(dir, {
-      ts: '2026-06-09T00:00:00.000Z', cycleId: 'c1', kind: 'skip', datanetId: '2',
-      reason: 'subnet access not granted (grant-access refused-budget: grant REPPO budget exhausted)',
-      status: 'skipped',
-    })
-    const out = readActivity(dir, { limit: 10 })
-    expect(out[0]).toMatchObject({ kind: 'skip', datanetId: '2', status: 'skipped' })
-    expect(out[0].reason).toMatch(/subnet access not granted/)
+  it('round-trips a claim entry with numeric fields', () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '9', epoch: 104, reppoClaimed: 12.5, status: 'executed', txHash: '0xc' })
+    const [row] = readActivity(dir, { limit: 1 })
+    expect(row).toMatchObject({ kind: 'claim', epoch: 104, reppoClaimed: 12.5 })
+  })
+
+  it('imports a pre-existing activity-log.jsonl once, preserving history, then renames it', () => {
+    const jsonl = join(dir, 'activity-log.jsonl')
+    writeFileSync(jsonl,
+      JSON.stringify({ ts: '2026-06-01T00:00:00.000Z', cycleId: 'c0', kind: 'vote', datanetId: '2', podId: 'legacy1', status: 'executed' }) + '\n' +
+      JSON.stringify({ ts: '2026-06-02T00:00:00.000Z', cycleId: 'c0', kind: 'vote', datanetId: '2', podId: 'legacy2', status: 'executed' }) + '\n' +
+      '{"torn line' + '\n')
+    // first DB touch triggers the import
+    const rows = readActivity(dir, { limit: 10 })
+    expect(rows.map((r) => r.podId)).toEqual(['legacy2', 'legacy1']) // newest-first, torn line skipped
+    expect(existsSync(jsonl)).toBe(false)
+    expect(existsSync(jsonl + '.imported')).toBe(true)
+    // new appends coexist with imported history; import does not re-run
+    appendActivity(dir, entry({ podId: 'fresh', ts: '2026-06-03T00:00:00.000Z' }))
+    expect(readActivity(dir, { limit: 10 }).map((r) => r.podId)).toEqual(['fresh', 'legacy2', 'legacy1'])
   })
 })
