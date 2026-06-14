@@ -3,7 +3,6 @@ import { loadAll, onboardingStatus, type ActivityRow, type DashData, type Onboar
 import { useStrategy } from './lib/useStrategy'
 import { Nav, type TabId } from './components/Nav'
 import { PnlCards } from './components/PnlCards'
-import { CycleHealth } from './components/CycleHealth'
 import { BudgetBurn } from './components/BudgetBurn'
 import { Emissions } from './components/Emissions'
 import { StrategyTab } from './components/StrategyTab'
@@ -73,8 +72,6 @@ export function App() {
                 : 'earn-test pending first cycle'}
             </div>
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
-            <SecHead title="Cycle health" />
-            <CycleHealth health={data?.health ?? null} netNames={netNames} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
             <SecHead title="Claimable emissions" />

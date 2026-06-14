@@ -118,20 +118,18 @@ export interface DashData {
   activity: ActivityRow[]
   config: StrategyConfig
   earn: Earn | null
-  health: Health | null
   netNames: Record<string, string>
 }
 
 export async function loadAll(): Promise<DashData> {
-  const [pnlRes, activity, config, earn, health, netNames] = await Promise.all([
+  const [pnlRes, activity, config, earn, netNames] = await Promise.all([
     fetch('/api/pnl').then((r) => r.json()),
     fetch('/api/activity').then((r) => r.json()),
     fetch('/api/config').then((r) => r.json()),
     fetch('/api/earn').then((r) => r.json()).catch(() => null),
-    fetch('/api/health').then((r) => r.json()).catch(() => null),
     fetch('/api/datanets').then((r) => r.json()).catch(() => ({})),
   ])
-  return { pnl: pnlRes.pnl, snapshot: pnlRes.snapshot, activity, config, earn, health, netNames: netNames || {} }
+  return { pnl: pnlRes.pnl, snapshot: pnlRes.snapshot, activity, config, earn, netNames: netNames || {} }
 }
 
 export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {
