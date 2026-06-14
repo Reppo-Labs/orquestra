@@ -13,7 +13,9 @@ const pillClass = (r: ActivityRow) =>
 const detail = (r: ActivityRow) =>
   r.kind === 'vote'
     ? (r.direction ? `${r.direction} · conv ${r.conviction} · ${r.reason ?? ''}` : (r.detail || '—'))
-    : r.kind === 'mint' ? (r.canonicalKey ?? '') // pod name moved to the Pod column
+    // mint: score + reason (pod name is in the Pod column). Fall back to the
+    // executor detail, then nothing — never the canonical-key hash.
+    : r.kind === 'mint' ? (r.reason ? `score ${r.conviction ?? '?'} · ${r.reason}` : (r.detail || '—'))
     : r.kind === 'skip' ? (r.reason ?? '—')
     : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
 

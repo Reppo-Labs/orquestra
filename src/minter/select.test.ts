@@ -82,6 +82,14 @@ describe('selectMints (minScore 7)', () => {
     expect(intents[0].selfScore).toBe(8)
   })
 
+  it('carries the scorer reason onto the mint intent (shown in activity detail)', async () => {
+    const withReason: CandidateScorer = { scoreCandidate: async () => ({ score: 9, reason: 'meets the publisher spec' }) }
+    const intents = await selectMints('9', [cand('a')], rubric,
+      { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: withReason })
+    expect(intents[0].reason).toBe('meets the publisher spec')
+    expect(intents[0].selfScore).toBe(9)
+  })
+
   it('threads a panel transcript from the score onto the mint intent', async () => {
     const panel = { panelists: [{ persona: 'bear', score: 8, argument: 'a' }], judge: { score: 8, reason: 'j' } }
     const withPanel: CandidateScorer = { scoreCandidate: async () => ({ score: 8, reason: 'j', panel }) }
