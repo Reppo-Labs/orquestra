@@ -5,7 +5,8 @@ claimed, 0 due, 0 pods attributed to our wallet). Before expanding minting to mo
 datanets (the template program), prove a *good* pod earns.
 
 ## Procedure
-1. Deploy the redesigned adapter (plan `2026-06-06-orquestra-hl-adapter-redesign`) to the
+1. Deploy the redesigned adapter (design:
+   `../superpowers/specs/2026-06-06-orquestra-hl-adapter-redesign-design.md`) to the
    live node — rebuild the image and redeploy.
 2. Keep budget caps small (current: `mintReppoMax` 50, `mintGasEthMax` 0.01). Mint gas on
    Base is negligible (~0.0000013 ETH/tx observed), so exposure is tiny.
