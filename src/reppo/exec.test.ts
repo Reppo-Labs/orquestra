@@ -1,6 +1,6 @@
 // src/reppo/exec.test.ts
-import { describe, it, expect, afterEach } from 'vitest'
-import { reppoEnv, withRpcUrl } from './exec.js'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { reppoEnv, withRpcUrl, isTransientReppoError, runReppoStdout } from './exec.js'
 
 const saved = { ...process.env }
 afterEach(() => {
@@ -42,5 +42,48 @@ describe('withRpcUrl', () => {
     process.env.RPC_URL = '   '
     delete process.env.REPPO_RPC_URL
     expect(withRpcUrl(['vote'])).toEqual(['vote'])
+  })
+})
+
+describe('isTransientReppoError', () => {
+  it('matches the reppo.ai unreachable / fetch-failed blips', () => {
+    expect(isTransientReppoError('Could not reach https://reppo.ai/...: fetch failed.')).toBe(true)
+    expect(isTransientReppoError('{"error":{"code":"PUBLIC_API_UNREACHABLE"}}')).toBe(true)
+    expect(isTransientReppoError('request to https://x failed, reason: ECONNRESET')).toBe(true)
+    expect(isTransientReppoError('reppo command timed out')).toBe(true)
+  })
+  it('does NOT match permanent errors', () => {
+    expect(isTransientReppoError('CANNOT_VOTE_FOR_OWN_POD')).toBe(false)
+    expect(isTransientReppoError('invalid argument --datanet')).toBe(false)
+    expect(isTransientReppoError('VOTER_LACKS_SUBNET_ACCESS')).toBe(false)
+  })
+})
+
+describe('runReppoStdout retry', () => {
+  const noSleep = () => Promise.resolve()
+
+  it('retries a transient failure then succeeds', async () => {
+    let n = 0
+    const attempt = vi.fn(async () => {
+      if (++n < 3) throw new Error('PUBLIC_API_UNREACHABLE: fetch failed')
+      return 'ok'
+    })
+    const out = await runReppoStdout(['list', 'pods'], 60_000, { attempt, sleepFn: noSleep, backoffMs: 1 })
+    expect(out).toBe('ok')
+    expect(attempt).toHaveBeenCalledTimes(3) // 1 + 2 retries
+  })
+
+  it('gives up after the retry budget on a persistent transient failure', async () => {
+    const attempt = vi.fn(async () => { throw new Error('fetch failed') })
+    await expect(runReppoStdout(['list', 'pods'], 60_000, { attempt, sleepFn: noSleep, retries: 2 }))
+      .rejects.toThrow(/fetch failed/)
+    expect(attempt).toHaveBeenCalledTimes(3)
+  })
+
+  it('does NOT retry a permanent error (fails fast)', async () => {
+    const attempt = vi.fn(async () => { throw new Error('CANNOT_VOTE_FOR_OWN_POD') })
+    await expect(runReppoStdout(['vote'], 60_000, { attempt, sleepFn: noSleep }))
+      .rejects.toThrow(/CANNOT_VOTE_FOR_OWN_POD/)
+    expect(attempt).toHaveBeenCalledTimes(1)
   })
 })
