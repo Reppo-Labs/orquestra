@@ -4,8 +4,8 @@ import { OnboardingAnswersSchema, validateAnswers } from './schema.js'
 
 const good = {
   datanets: [{ id: '9', vote: true, mint: true, strictness: 'conservative', adapter: 'hyperliquid' }],
-  lockReppo: 500, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
-  mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'x',
+  lockReppo: 500, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'x',
 }
 
 describe('OnboardingAnswersSchema / validateAnswers', () => {
@@ -24,8 +24,8 @@ describe('OnboardingAnswersSchema adapterParams', () => {
   const base = {
     datanets: [{ id: '2', vote: true, mint: true, strictness: 'balanced' as const, adapter: 'gdelt',
       adapterParams: { focus: 'Middle East', angle: 'contrarian', topN: 4, minImportance: 7 } }],
-    lockReppo: 500, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
-    mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'n',
+    lockReppo: 500, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+    mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'n',
   }
   it('accepts a datanet choice with adapterParams', () => {
     const parsed = OnboardingAnswersSchema.parse(base)

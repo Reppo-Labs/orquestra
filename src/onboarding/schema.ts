@@ -20,10 +20,8 @@ export const OnboardingAnswersSchema = z.object({
   })),
   lockReppo: z.number().nonnegative(),
   lockDurationDays: z.number().int().positive(),
-  voteGasEthMax: z.number().nonnegative(),
   voteRateMaxPerCycle: z.number().int().nonnegative(),
   mintReppoMax: z.number().nonnegative(),
-  mintGasEthMax: z.number().nonnegative(),
   horizonDays: z.number().int().positive(),
   cadenceHours: z.number().min(0.1), // fractional ok (0.5 = 30 min); floor matches config schema
   notes: z.string().default(''),

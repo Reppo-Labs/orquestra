@@ -21,10 +21,8 @@ export interface OnboardingAnswers {
   datanets: DatanetChoice[]
   lockReppo: number
   lockDurationDays: number
-  voteGasEthMax: number
   voteRateMaxPerCycle: number
   mintReppoMax: number
-  mintGasEthMax: number
   horizonDays: number
   cadenceHours: number
   notes: string

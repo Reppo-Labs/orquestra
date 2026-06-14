@@ -10,8 +10,8 @@ import type { OnboardingAnswers } from './types.js'
 
 const ans: OnboardingAnswers = {
   datanets: [{ id: '9', vote: true, mint: true, strictness: 'balanced', adapter: 'hyperliquid' }],
-  lockReppo: 500, lockDurationDays: 30, voteGasEthMax: 0.02, voteRateMaxPerCycle: 25,
-  mintReppoMax: 100, mintGasEthMax: 0.05, horizonDays: 30, cadenceHours: 6, notes: 'hi',
+  lockReppo: 500, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'hi',
 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-onb-')) })

@@ -37,12 +37,14 @@ export const StrategyConfigSchema = z
       lockDurationDays: z.number().int().positive(),
     }),
     budget: z.object({
-      voteGasEthMax: z.number().nonnegative(),
       voteRateMaxPerCycle: z.number().int().nonnegative(),
       mintReppoMax: z.number().nonnegative(),
-      mintGasEthMax: z.number().nonnegative(),
-      // Defaulted (not required) so configs written before this cap existed still load.
-      claimGasEthMax: z.number().nonnegative().default(0.05),
+      // Gas caps are no longer operator-configured — gas on Base is negligible. They
+      // default to a high value that never bites in practice but still bounds a
+      // runaway loop, and the ledger keeps enforcing them as a safety backstop.
+      voteGasEthMax: z.number().nonnegative().default(1),
+      mintGasEthMax: z.number().nonnegative().default(1),
+      claimGasEthMax: z.number().nonnegative().default(1),
       // Cumulative REPPO the node may spend on one-time subnet-access grants (fee is
       // 100-200 REPPO each). Unset = no cap: enabling a datanet (vote/mint) IS the
       // consent to pay its grant fee, so joined datanets get access automatically.
