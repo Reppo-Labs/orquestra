@@ -205,6 +205,7 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       try {
         const fresh = opts.reloadConfig()
         if (JSON.stringify(fresh.budget) !== JSON.stringify(config.budget)) w.ledger.updateCaps(fresh.budget)
+        if (fresh.horizonDays !== config.horizonDays) w.ledger.updateHorizonDays(fresh.horizonDays)
         config = fresh
         w.config = fresh // buildCycleDeps closures (strategyFor) read w.config at call time
       } catch (e) {
