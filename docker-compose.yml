@@ -8,8 +8,15 @@ services:
     image: ghcr.io/reppo-labs/orquestra:latest   # pin a version (e.g. :0.1.0) in production
     container_name: orquestra
     env_file: .env
+    # The image defaults the dashboard bind to 127.0.0.1; inside this bridge-networked
+    # container the host mapping below forwards to the container's bridge IP, so the
+    # server must bind all interfaces to be reachable. Set here (overrides .env) so the
+    # 0.0.0.0 bind lives right next to the 127.0.0.1 host mapping that is the real
+    # exposure boundary (ADR 0002).
+    environment:
+      - DASHBOARD_HOST=0.0.0.0
     # Localhost-only by design: the dashboard is unauthenticated (ADR 0002).
-    # Do NOT change to 0.0.0.0 without adding a dashboard secret first.
+    # Do NOT change the mapping below to 0.0.0.0 without adding a dashboard secret first.
     ports:
       - "127.0.0.1:7070:7070"
     volumes:

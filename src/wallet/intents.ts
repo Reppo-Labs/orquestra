@@ -26,7 +26,10 @@ export interface MintIntent {
   podDescription: string
   /** path to the labeled dataset body the CLI pins + mints. Absent for url-only mints. */
   datasetPath?: string
-  /** optional REPPO cost estimate for budgeting; 0 if mint is gas-only. */
+  /** Optional per-mint REPPO estimate for budgeting. Currently no caller threads a
+   *  value (selectMints leaves it 0), so in practice 0/undefined both mean "no
+   *  estimate" and executeMint reserves the conservative MINT_REPPO_FALLBACK instead.
+   *  Only a positive value here overrides that default. */
   estReppoCost?: number
   /** scorer's 1-10 quality score; carried for downstream digest/audit. */
   selfScore?: number

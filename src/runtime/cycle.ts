@@ -4,6 +4,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 import type { DatanetAdapter, CandidateScorer } from '../adapter/types.js'
 import type { PodScorer, VoterPod, VoteFilter } from '../voter/types.js'
 import type { WalletExecutor } from '../wallet/executor.js'
+import { MINT_REPPO_FALLBACK } from '../wallet/executor.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult } from '../wallet/intents.js'
 import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
@@ -195,11 +196,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         const adapter = deps.getAdapter(policy.adapter)
         if (!adapter) {
           recordSkip(`mint enabled but adapter "${policy.adapter}" is not registered on this node`, { activity: idleThisCycle })
-        } else if (!deps.ledger.canMint(0)) {
-          // Mint REPPO/gas budget already exhausted this horizon — discovering + LLM-scoring
-          // candidates that can't be minted is wasted spend. Skip discovery, but record a
-          // skip when otherwise idle so the dashboard still explains the silence.
-          recordSkip('mint budget exhausted — skipping mint discovery', { activity: idleThisCycle })
+        } else if (!deps.ledger.canMint(MINT_REPPO_FALLBACK)) {
+          // Mint budget can't fit even one conservative reserve (executeMint reserves
+          // MINT_REPPO_FALLBACK pre-sign) — discovering + LLM-scoring candidates that
+          // would all be refused is wasted spend. Use the fallback, not 0: canMint(0)
+          // would pass with 1-199 REPPO of headroom and then every mint still refuses.
+          // Record a skip when otherwise idle so the dashboard still explains the silence.
+          recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
         } else {
           const candidates = await adapter.discover({
             datanetId, rubric, topN: deps.topN,

@@ -54,12 +54,14 @@ async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, par
 }
 
 const ONE_REPPO = 10n ** 18n
-/** Convert wei (18-decimal) to REPPO with fractional precision. Splitting the
- *  integer and fractional parts keeps full precision without truncating (the old
- *  `Number(wei / ONE)` dropped sub-1-REPPO amounts) and without the float error of
- *  `Number(wei)/1e18` on values past 2^53. */
+const FRAC_SCALE = 10n ** 9n // 9-decimal precision for the fractional REPPO part
+/** Convert wei (18-decimal) to REPPO with fractional precision. Integer REPPO comes
+ *  from exact bigint division; the fractional part is scaled DOWN in bigint to 9
+ *  decimals before the Number conversion, so the operand stays < 2^53 (a bare
+ *  `Number(wei % ONE)` could be ~1e18, past the safe-integer limit, and lose
+ *  precision — the very error this avoids). 9 decimals far exceeds REPPO fee needs. */
 function weiToReppo(wei: bigint): number {
-  return Number(wei / ONE_REPPO) + Number(wei % ONE_REPPO) / 1e18
+  return Number(wei / ONE_REPPO) + Number((wei % ONE_REPPO) / FRAC_SCALE) / 1e9
 }
 
 /** Read the actual REPPO mint fee from a landed mint tx by summing the REPPO that
