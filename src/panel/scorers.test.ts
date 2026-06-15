@@ -82,6 +82,28 @@ describe('createPanelPodScorer (votes, tiered)', () => {
     expect(r.score).toBe(8)
     expect(r.panel).toBeUndefined()
   })
+
+  it('injects the per-datanet lessons block into the JUDGE prompt only (personas stay lesson-free)', async () => {
+    let judgePrompt = ''
+    let personaPrompt = ''
+    const capGen: PanelGenerate = (async ({ system, prompt }) => {
+      if (system.includes('You are the JUDGE')) { judgePrompt = prompt; return { score: 6, reason: 'r' } }
+      personaPrompt = prompt
+      return { score: 6, argument: 'a' }
+    }) as PanelGenerate
+    const rub = { ...rubric, datanetId: '9' } as DatanetRubric
+    const o: PanelScorerOpts = {
+      model,
+      getDeliberation: () => ({ enabled: true, voteBand: 1 }),
+      generate: capGen,
+      getLessons: (id) => (id === '9' ? '\n## Learned lessons (trusted)\n1. tighten the unsourced read (misaligned 7/9)\n' : ''),
+    }
+    const s = createPanelPodScorer(basePod(8), o) // 8 = ambiguous → panel convenes
+    await s.scorePod(pod, rub, { like: 7, dislike: 3 })
+    expect(judgePrompt).toContain('Learned lessons')
+    expect(judgePrompt).toContain('tighten the unsourced read')
+    expect(personaPrompt).not.toContain('Learned lessons')
+  })
 })
 
 describe('createPanelCandidateScorer (mints, always panel)', () => {

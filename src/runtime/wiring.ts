@@ -26,6 +26,19 @@ import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, type SnapshotBudget } from '../dashboard/snapshot.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
+import { collectOutcomes } from '../learn/collect.js'
+import { runReflection } from '../learn/reflect.js'
+import { buildLessonsBlock } from '../learn/inject.js'
+import { getLearnEnabled } from '../learn/store.js'
+
+/** Bound a promise so a hung reflection/collection can't stall the next cycle. The
+ *  underlying work may continue in the background; we only stop waiting on it. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms)
+    p.then((v) => { clearTimeout(t); resolve(v) }, (e) => { clearTimeout(t); reject(e) })
+  })
+}
 
 /** Fetch a pod's external content for scoring context; '' on any failure (15s cap). */
 export async function fetchPodContent(url: string): Promise<string> {
@@ -66,6 +79,9 @@ export interface CycleWiring {
   executor: WalletExecutor
   dedup: DedupState
   adapters: DatanetAdapter[]
+  /** Model the self-learning reflection runs on (same model as `model` in production).
+   *  Omitted in tests → reflection is skipped entirely. */
+  learnModel?: LanguageModel
   io?: Partial<WiringIo>
 }
 
@@ -81,13 +97,18 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     const p = (w.config.datanets[id] as { adapterParams?: Record<string, unknown> } | undefined)?.adapterParams ?? {}
     return { brief: liveBrief(), ...p }
   }
+  // Per-datanet learned-lessons block for the judge, read live from the DB so a new
+  // reflection or an operator veto/disable takes effect on the next decision.
+  const liveLessons = (id: string): string => {
+    try { return buildLessonsBlock(w.dataDir, id) } catch { return '' }
+  }
 
   // Screen scorer + panel decorators are built ONCE. They read the brief and the
   // deliberation settings live (via getters / liveBrief) so a hot-reload of either
   // takes effect on the next decision without rebuilding anything.
   const screenScorer = createLlmScorer(w.model, { brief: liveBrief })
   const getDeliberation = () => w.config.deliberation
-  const voteScorer = createPanelPodScorer(screenScorer, { model: w.model, getDeliberation, getBrief: liveBrief })
+  const voteScorer = createPanelPodScorer(screenScorer, { model: w.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
   // Mint base scorer: score the DATASET against the publisher spec, not just the
   // summary line — otherwise every candidate scores low and nothing mints (see
   // src/minter/score.ts). The panel (when enabled) replaces this for mints.
@@ -97,7 +118,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       return screenScorer.scorePod({ podId: cand.canonicalKey, validityEpoch: '', name, description }, rub)
     },
   }
-  const candidateScorer = createPanelCandidateScorer(candidateBase, { model: w.model, getDeliberation, getBrief: liveBrief })
+  const candidateScorer = createPanelCandidateScorer(candidateBase, { model: w.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
   return {
     dataDir: w.dataDir,
     topN: 12,
@@ -165,6 +186,8 @@ export interface TickOpts {
  *  snapshot + earn-status for the dashboard. Reporting failures never abort the loop. */
 export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}): () => Promise<void> {
   let config = w.config // last-good
+  let lastReflectedEpoch = -1 // reflect at most once per epoch boundary (this process)
+  const reflecting = new Set<string>() // datanets with an in-flight reflection (mutual exclusion)
   return async () => {
     if (opts.reloadConfig) {
       try {
@@ -211,21 +234,52 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
     try {
       const snap = readSnapshot(w.dataDir)
       const activity = readActivity(w.dataDir, { limit: 100_000 })
-      const mintDatanets = Object.entries(config.datanets).filter(([k, d]) => k !== '*' && d.mint).map(([k]) => k)
+      // All datanets we vote OR mint on — the self-learning observe step covers votes
+      // (cast on others' pods) too, not just our own mints.
+      const learnDatanets = Object.entries(config.datanets).filter(([k, d]) => k !== '*' && (d.vote || d.mint)).map(([k]) => k)
       // On-chain `creator` is empty on our pods, so identify ours by the mint names we
       // recorded, matched against the full datanet pod list.
       const ourNames = activity
         .filter((e) => e.kind === 'mint' && e.status === 'executed' && e.cycleId !== 'backfill' && e.podName)
         .map((e) => e.podName as string)
+      const currentEpoch = Number(snap?.epoch?.epoch ?? -1)
       const votes: OwnPodVote[] = []
-      for (const id of mintDatanets) {
-        try { votes.push(...selectOurPods(await queryDatanetPodVotes(id), ourNames)) } catch (e) { console.error(`orquestra: earn pod-votes query failed for datanet ${id}: ${(e as Error).message}`) }
+      for (const id of learnDatanets) {
+        let all: OwnPodVote[]
+        try { all = await queryDatanetPodVotes(id) } catch (e) { console.error(`orquestra: pod-votes query failed for datanet ${id}: ${(e as Error).message}`); continue }
+        if (config.datanets[id]?.mint) votes.push(...selectOurPods(all, ourNames)) // earn signal: our minted pods only
+        // Observe step: match matured votes/mints to these tallies. Best-effort, and
+        // reusing the array we just fetched — no extra CLI call. Skipped when learning is
+        // disabled for the datanet (operator veto stops DB churn, not just injection) or
+        // when the epoch is unknown (epoch query failed → placeholder 0; never matures).
+        if (currentEpoch > 0 && getLearnEnabled(w.dataDir, id)) {
+          try { collectOutcomes(w.dataDir, id, all, currentEpoch) } catch (e) { console.error(`orquestra: learn collect failed for ${id} (non-fatal): ${(e as Error).message}`) }
+        }
       }
       const summary = earnSummary(activity, snap?.emissionsDue ?? { totalReppo: 0, pods: [] }, votes)
       writeEarnStatus(w.dataDir, { ...summary, ts: new Date().toISOString() })
       console.error(formatEarnStatus(summary))
+
+      // Reflect once per epoch boundary: one LLM call per learn-datanet, gated again by
+      // a cold-start sample floor inside runReflection. Best-effort + a hard timeout so
+      // a slow reflection can never stall the next cycle. Skipped when no learnModel.
+      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch && w.learnModel) {
+        const model = w.learnModel
+        for (const id of learnDatanets) {
+          if (!getLearnEnabled(w.dataDir, id)) continue        // operator veto: no LLM spend
+          if (reflecting.has(id)) continue                     // prior run still in flight — don't race the supersede
+          reflecting.add(id)
+          // .finally clears the guard when the REAL promise settles (not when withTimeout
+          // gives up); the timeout only bounds how long we WAIT, so a slow reflection can't
+          // stall the next cycle but also can't start a second concurrent run for this datanet.
+          const run = runReflection(w.dataDir, model, id, config, currentEpoch).finally(() => reflecting.delete(id))
+          try { await withTimeout(run, 60_000) }
+          catch (e) { console.error(`orquestra: reflection failed for ${id} (non-fatal): ${(e as Error).message}`) }
+        }
+        lastReflectedEpoch = currentEpoch
+      }
     } catch (e) {
-      console.error(`orquestra: earn-status update failed (non-fatal): ${(e as Error).message}`)
+      console.error(`orquestra: earn-status / learn update failed (non-fatal): ${(e as Error).message}`)
     }
   }
 }

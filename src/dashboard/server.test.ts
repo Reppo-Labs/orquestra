@@ -1,22 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { startDashboard, type DashboardHandle } from './server.js'
 import { appendActivity } from './activityLog.js'
 import { writeEarnStatus } from './earnStatus.js'
+import { writeConfig, readConfigText } from '../config/load.js'
+import { readNotes } from '../onboarding/persist.js'
 
 let dir: string
 let handle: DashboardHandle
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'orq-srv-'))
-  writeFileSync(join(dir, 'strategy.config.json'), JSON.stringify({
+  writeConfig(dir, {
     horizonDays: 30, cadenceHours: 1, claimEmissions: true,
     stake: { lockReppo: 0, lockDurationDays: 30 },
     budget: { voteRateMaxPerCycle: 30, mintReppoMax: 500, claimGasEthMax: 0.05 },
     datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } }, notes: '',
-  }))
+  } as never)
   appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'vote', datanetId: '9', podId: '1', direction: 'up', conviction: 9, reason: 'r', status: 'executed', txHash: '0x1' })
   handle = await startDashboard(dir, 0)
 })
@@ -104,17 +106,17 @@ describe('write layer (unauthenticated — localhost-bound by default)', () => {
   it('accepts a valid strategy without any token, writes atomically, GET reflects it', async () => {
     const r = await post('/api/strategy', VALID_STRATEGY)
     expect(r.status).toBe(200)
-    const saved = JSON.parse(readFileSync(join(dir, 'strategy.config.json'), 'utf-8'))
+    const saved = JSON.parse(readConfigText(dir)!)
     expect(saved.notes).toBe('from dashboard test')
     const cfg = await get('/api/config')
     expect(JSON.parse(cfg.body).notes).toBe('from dashboard test')
   })
 
   it('rejects an invalid strategy with 400 + zod detail, file untouched', async () => {
-    const before = readFileSync(join(dir, 'strategy.config.json'), 'utf-8')
+    const before = readConfigText(dir)
     const r = await post('/api/strategy', { horizonDays: -1 })
     expect(r.status).toBe(400)
-    expect(readFileSync(join(dir, 'strategy.config.json'), 'utf-8')).toBe(before) // no write
+    expect(readConfigText(dir)).toBe(before) // no write
   })
 
   it('POST to a read-only route → 405', async () => {
@@ -273,9 +275,9 @@ describe('onboarding API', () => {
     const ok = await onbPost('/api/onboarding/confirm', VALID_ANSWERS)
     expect(ok.status).toBe(200)
     expect(ok.body).toMatchObject({ saved: true })
-    const saved = JSON.parse(readFileSync(join(freshDir, 'strategy.config.json'), 'utf-8'))
+    const saved = JSON.parse(readConfigText(freshDir)!)
     expect(saved.cadenceHours).toBe(6)
-    expect(readFileSync(join(freshDir, 'strategy-notes.md'), 'utf-8')).toMatch(/dashboard onboarding test/)
+    expect(readNotes(freshDir)).toMatch(/dashboard onboarding test/)
     expect((await onbGet('/api/onboarding/status')).body.needed).toBe(false)
   })
 })

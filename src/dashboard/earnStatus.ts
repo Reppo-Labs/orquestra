@@ -1,27 +1,55 @@
 // src/dashboard/earnStatus.ts
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
+import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { getDb, type SqliteDb } from './db.js'
 import type { ActivityEntry } from './activityLog.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
 
-const FILE = 'earn-status.json'
+const LEGACY = 'earn-status.json'
 
 /** EarnSummary plus the cycle timestamp it was computed at (persisted each cycle). */
 export type PersistedEarn = EarnSummary & { ts: string }
 
-/** Atomic write (tmp + rename), matching the snapshot/ledger persistence pattern. */
+// The `earn_status` table is owned by db.ts; one row per cycle (history), read-latest.
+const earnImported = new Set<string>()
+function conn(dataDir: string): SqliteDb {
+  const d = getDb(dataDir)
+  if (!earnImported.has(dataDir)) {
+    importLegacyEarn(d, dataDir)
+    earnImported.add(dataDir)
+  }
+  return d
+}
+
+/** One-time import of a pre-existing earn-status.json into an empty table, then
+ *  rename it to *.imported. No-op once the table has rows. */
+function importLegacyEarn(d: SqliteDb, dataDir: string): void {
+  const count = (d.prepare('SELECT COUNT(*) AS n FROM earn_status').get() as { n: number }).n
+  if (count > 0) return
+  const live = join(dataDir, LEGACY)
+  if (!existsSync(live)) return
+  try {
+    const earn = JSON.parse(readFileSync(live, 'utf-8')) as PersistedEarn
+    d.prepare('INSERT INTO earn_status (ts, cycleId, data) VALUES (?, ?, ?)')
+      .run(earn.ts ?? new Date().toISOString(), null, JSON.stringify(earn))
+  } catch { /* corrupt legacy file — skip the import, still rename so we don't retry */ }
+  renameSync(live, live + '.imported')
+}
+
+/** Append the cycle's earn status as a new row (history kept; dashboard reads latest). */
 export function writeEarnStatus(dataDir: string, earn: PersistedEarn): void {
-  const path = join(dataDir, FILE)
-  writeFileSync(`${path}.tmp`, JSON.stringify(earn, null, 2))
-  renameSync(`${path}.tmp`, path)
+  conn(dataDir).prepare('INSERT INTO earn_status (ts, cycleId, data) VALUES (?, ?, ?)')
+    .run(earn.ts, null, JSON.stringify(earn))
 }
 
 /** Read the last persisted earn status; null if absent/corrupt. */
 export function readEarnStatus(dataDir: string): PersistedEarn | null {
-  const path = join(dataDir, FILE)
-  if (!existsSync(path)) return null
+  const row = conn(dataDir).prepare('SELECT data FROM earn_status ORDER BY id DESC LIMIT 1').get() as
+    | { data: string }
+    | undefined
+  if (!row) return null
   try {
-    return JSON.parse(readFileSync(path, 'utf-8')) as PersistedEarn
+    return JSON.parse(row.data) as PersistedEarn
   } catch {
     return null
   }

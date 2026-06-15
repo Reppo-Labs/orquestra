@@ -1,9 +1,10 @@
 // src/reppo/agent.ts
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
+import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { getDb, type SqliteDb } from '../dashboard/db.js'
 import { runReppoStdout } from './exec.js'
 
-const FILE = 'agent.json'
+const LEGACY_AGENT = 'agent.json'
 
 /** Reppo platform agent identity. `mint-pod` requires REPPO_AGENT_ID (>=0.8.0);
  *  registration also yields an apiKey, persisted for completeness. */
@@ -18,23 +19,45 @@ export function parseAgentRegistration(raw: unknown): AgentCreds {
   }
 }
 
-/** Read persisted agent creds from the data dir; null if absent/empty/corrupt. */
-export function readAgentStore(dataDir: string): AgentCreds | null {
-  const path = join(dataDir, FILE)
-  if (!existsSync(path)) return null
-  try {
-    const c = parseAgentRegistration(JSON.parse(readFileSync(path, 'utf-8')))
-    return c.agentId ? c : null
-  } catch {
-    return null
+const agentImported = new Set<string>()
+function conn(dataDir: string): SqliteDb {
+  const d = getDb(dataDir)
+  if (!agentImported.has(dataDir)) {
+    importLegacyAgent(d, dataDir)
+    agentImported.add(dataDir)
   }
+  return d
 }
 
-/** Atomic write (tmp + rename), matching the ledger/state persistence pattern. */
+/** One-time import of a pre-existing agent.json into the empty `agent` row, then
+ *  rename it *.imported. A corrupt file imports nothing, still renamed. */
+function importLegacyAgent(d: SqliteDb, dataDir: string): void {
+  const n = (d.prepare('SELECT COUNT(*) AS n FROM agent').get() as { n: number }).n
+  if (n > 0) return
+  const path = join(dataDir, LEGACY_AGENT)
+  if (!existsSync(path)) return
+  try {
+    const c = parseAgentRegistration(JSON.parse(readFileSync(path, 'utf-8')))
+    if (c.agentId) d.prepare('INSERT INTO agent (id, agentId, apiKey) VALUES (1, ?, ?)').run(c.agentId, c.apiKey)
+  } catch { /* corrupt legacy file — skip the import, still rename so we don't retry */ }
+  renameSync(path, path + '.imported')
+}
+
+/** Read persisted agent creds from the data dir; null if absent/empty/corrupt. */
+export function readAgentStore(dataDir: string): AgentCreds | null {
+  const row = conn(dataDir).prepare('SELECT agentId, apiKey FROM agent WHERE id = 1').get() as
+    | { agentId: string; apiKey: string }
+    | undefined
+  if (!row) return null
+  const c = { agentId: String(row.agentId ?? ''), apiKey: String(row.apiKey ?? '') }
+  return c.agentId ? c : null
+}
+
+/** Persist agent creds to the single `agent` row (one atomic UPSERT). */
 export function writeAgentStore(dataDir: string, creds: AgentCreds): void {
-  const path = join(dataDir, FILE)
-  writeFileSync(`${path}.tmp`, JSON.stringify(creds, null, 2))
-  renameSync(`${path}.tmp`, path)
+  conn(dataDir)
+    .prepare('INSERT INTO agent (id, agentId, apiKey) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET agentId = excluded.agentId, apiKey = excluded.apiKey')
+    .run(creds.agentId, creds.apiKey)
 }
 
 /** Parse register-agent output. The CLI prints a human-readable block even with

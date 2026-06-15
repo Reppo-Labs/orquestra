@@ -8,6 +8,7 @@ import { Emissions } from './components/Emissions'
 import { StrategyTab } from './components/StrategyTab'
 import { ChatTab } from './components/ChatTab'
 import { Activity } from './components/Activity'
+import { LearningTab } from './components/LearningTab'
 import { PanelDrawer } from './components/PanelDrawer'
 import { Onboarding } from './components/Onboarding'
 import { fmt } from './lib/format'
@@ -88,6 +89,9 @@ export function App() {
         </div>
         {tab === 'activity' && (
           <Activity activity={data?.activity ?? []} netNames={netNames} onOpenPanel={setPanelRow} />
+        )}
+        {tab === 'learning' && (
+          <LearningTab netNames={netNames} onConfigChanged={() => void refresh()} />
         )}
       </main>
       {panelRow && <PanelDrawer row={panelRow} onClose={() => setPanelRow(null)} />}

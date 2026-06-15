@@ -1,9 +1,9 @@
 // src/onboarding/persist.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { persistOnboarding, needsOnboarding } from './persist.js'
+import { persistOnboarding, needsOnboarding, readNotes } from './persist.js'
 import { loadConfig } from '../config/load.js'
 import { buildStrategyConfig } from './build.js'
 import type { OnboardingAnswers } from './types.js'
@@ -24,10 +24,10 @@ describe('onboarding persistence', () => {
     expect(needsOnboarding(dir)).toBe(false)
   })
 
-  it('writes a config loadConfig can read back, plus strategy-notes.md', () => {
+  it('writes a config loadConfig can read back, plus notes', () => {
     persistOnboarding(dir, buildStrategyConfig(ans), 'my strategy notes')
     const cfg = loadConfig(dir)
     expect(cfg.datanets['9'].adapter).toBe('hyperliquid')
-    expect(readFileSync(join(dir, 'strategy-notes.md'), 'utf-8')).toContain('my strategy notes')
+    expect(readNotes(dir)).toContain('my strategy notes')
   })
 })
