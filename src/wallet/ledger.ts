@@ -20,11 +20,14 @@ export interface BudgetCaps {
 export interface LedgerState {
   cycleId: string
   votesCastThisCycle: number
-  voteGasSpentEth: number // cumulative over horizon
-  mintReppoSpent: number // cumulative
-  mintGasSpentEth: number // cumulative
-  claimGasSpentEth: number // cumulative
-  grantReppoSpent: number // cumulative REPPO spent on subnet-access grants
+  voteGasSpentEth: number // cumulative within the current horizon window
+  mintReppoSpent: number // cumulative within the current horizon window
+  mintGasSpentEth: number // cumulative within the current horizon window
+  claimGasSpentEth: number // cumulative within the current horizon window
+  grantReppoSpent: number // cumulative REPPO spent on subnet-access grants (current window)
+  /** ISO start of the current budget horizon window; cumulative spend resets when
+   *  horizonDays elapse past this. '' until the first cycle initializes it. */
+  horizonStart: string
 }
 
 export interface VoteReservation {
@@ -69,10 +72,11 @@ const LedgerSchema = z.object({
   mintGasSpentEth: nonNegativeFinite,
   claimGasSpentEth: nonNegativeFinite.default(0),
   grantReppoSpent: nonNegativeFinite.default(0),
+  horizonStart: z.string().default(''),
 })
 
 const fresh = (): LedgerState => ({
-  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, grantReppoSpent: 0,
+  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, grantReppoSpent: 0, horizonStart: '',
 })
 
 /** Persisted per-pool budget enforcement. The ONLY authority on whether an
@@ -86,7 +90,7 @@ export class BudgetLedger {
   private _state: LedgerState
   private readonly db: SqliteDb
 
-  constructor(private readonly dataDir: string, private caps: BudgetCaps) {
+  constructor(private readonly dataDir: string, private caps: BudgetCaps, private horizonDays = 0) {
     this.db = getDb(dataDir)
     this.importLegacy()
     const row = this.db.prepare('SELECT data FROM budget_ledger WHERE id = 1').get() as { data: string } | undefined
@@ -134,14 +138,39 @@ export class BudgetLedger {
     return Object.freeze({ ...this._state })
   }
 
-  /** Reset per-cycle counters when entering a new cycle. Cumulative totals persist. */
+  /** Reset per-cycle counters when entering a new cycle. Cumulative totals persist
+   *  until the horizon window rolls over (see rollHorizonIfElapsed). */
   startCycle(cycleId: string): void {
+    this.rollHorizonIfElapsed(cycleId)
     if (cycleId !== this._state.cycleId) {
       this._state.cycleId = cycleId
       this._state.votesCastThisCycle = 0
       this.save()
     }
   }
+
+  /** Roll the budget window: when horizonDays elapse past horizonStart, the cumulative
+   *  spend counters reset to 0 — so the caps are "spend per horizon window", not lifetime.
+   *  `cycleId` is the cycle's ISO timestamp (the clock source); non-timestamp cycleIds
+   *  (tests) and horizonDays<=0 disable rollover. First valid cycle just seeds the start. */
+  private rollHorizonIfElapsed(cycleId: string): void {
+    if (this.horizonDays <= 0) return
+    const now = Date.parse(cycleId)
+    if (Number.isNaN(now)) return
+    const start = Date.parse(this._state.horizonStart)
+    if (Number.isNaN(start)) { this._state.horizonStart = cycleId; this.save(); return }
+    if (now - start < this.horizonDays * 86_400_000) return
+    this._state.voteGasSpentEth = 0
+    this._state.mintReppoSpent = 0
+    this._state.mintGasSpentEth = 0
+    this._state.claimGasSpentEth = 0
+    this._state.grantReppoSpent = 0
+    this._state.horizonStart = cycleId
+    this.save()
+  }
+
+  /** Hot-reload the horizon window length (config change). Caps move via updateCaps. */
+  updateHorizonDays(days: number): void { this.horizonDays = days }
 
   canVote(): boolean {
     return this._state.votesCastThisCycle < this.caps.voteRateMaxPerCycle

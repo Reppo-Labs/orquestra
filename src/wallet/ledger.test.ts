@@ -292,3 +292,43 @@ describe('BudgetLedger actual-REPPO reconciliation', () => {
     expect(l.state.grantReppoSpent).toBe(100)
   })
 })
+
+describe('BudgetLedger horizon window (caps are per-horizon, not lifetime)', () => {
+  const iso = (d: string) => `${d}T00:00:00.000Z`
+
+  it('resets cumulative spend when horizonDays elapse, keeping caps within-window', () => {
+    const l = new BudgetLedger(dir, CAPS, 30) // 30-day horizon
+    l.startCycle(iso('2026-06-01'))            // seeds horizonStart
+    l.reserveMint(300, 0.01)
+    expect(l.state.mintReppoSpent).toBe(300)
+    l.startCycle(iso('2026-06-20'))            // 19 days — same window, no reset
+    expect(l.state.mintReppoSpent).toBe(300)
+    l.startCycle(iso('2026-07-05'))            // 34 days from start — window rolled
+    expect(l.state.mintReppoSpent).toBe(0)
+    expect(l.state.grantReppoSpent).toBe(0)
+  })
+
+  it('horizonDays = 0 (or default) never rolls — lifetime cumulative', () => {
+    const l = new BudgetLedger(dir, CAPS) // no horizon
+    l.startCycle(iso('2026-06-01'))
+    l.reserveMint(300, 0.01)
+    l.startCycle(iso('2027-06-01')) // a year later — still cumulative
+    expect(l.state.mintReppoSpent).toBe(300)
+  })
+
+  it('a non-timestamp cycleId never triggers a rollover (tests / odd ids)', () => {
+    const l = new BudgetLedger(dir, CAPS, 1)
+    l.startCycle('c1'); l.reserveMint(50, 0.01)
+    l.startCycle('c2')
+    expect(l.state.mintReppoSpent).toBe(50)
+  })
+
+  it('updateHorizonDays hot-reloads the window length', () => {
+    const l = new BudgetLedger(dir, CAPS, 0)
+    l.startCycle(iso('2026-06-01')); l.reserveMint(300, 0.01)
+    l.updateHorizonDays(10)
+    l.startCycle(iso('2026-06-02')) // seeds horizonStart now that horizon is active
+    l.startCycle(iso('2026-06-20')) // 18 days later → rolled
+    expect(l.state.mintReppoSpent).toBe(0)
+  })
+})

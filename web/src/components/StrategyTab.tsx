@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { DatanetEntry } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
 import { netLabel } from '../lib/format'
@@ -18,8 +18,8 @@ const mintModeTip = (
   </>
 )
 
-function Num({ label, value, int, onChange }: {
-  label: string; value: number | undefined; int?: boolean; onChange: (n: number | undefined) => void
+function Num({ label, value, int, onChange, hint }: {
+  label: string; value: number | undefined; int?: boolean; onChange: (n: number | undefined) => void; hint?: ReactNode
 }) {
   // Local text buffer: a controlled type="number" reports value="" mid-typing for an
   // incomplete decimal ("0."), which would strip the dot before the user can finish.
@@ -32,7 +32,7 @@ function Num({ label, value, int, onChange }: {
   }, [value, focused])
   return (
     <label className="field">
-      <span>{label}</span>
+      <span>{label}{hint != null && <Tip label={label}>{hint}</Tip>}</span>
       <input
         type="text" inputMode={int ? 'numeric' : 'decimal'} value={text}
         onFocus={() => setFocused(true)}
@@ -74,6 +74,7 @@ function NetCard({ id, d, name, edit }: {
           <div className="net-name">{name || '—'}</div>
         </div>
         <div className="net-acts">
+          <Tip label="vote vs mint">vote = cast up/down votes on OTHER people's pods in this datanet (earns voter emissions). mint = publish your OWN pods here (costs a REPPO fee; earns pod-owner emissions if upvoted).</Tip>
           <span role="button" tabIndex={0} aria-pressed={d.vote} className={`chip-toggle vote ${d.vote ? 'on' : ''}`}
             onClick={() => upd((n) => { n.vote = !n.vote })}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); upd((n) => { n.vote = !n.vote }) } }}>vote</span>
@@ -84,7 +85,7 @@ function NetCard({ id, d, name, edit }: {
       </div>
       <div className="net-row">
         <label className="field">
-          <span>adapter</span>
+          <span>adapter <Tip label="what the adapter does">Where mint candidates come from for this datanet: gdelt = world news, hyperliquid = on-chain trades, sports = sports signals. Blank = no minting source (vote-only).</Tip></span>
           <select value={d.adapter ?? ''} onChange={(e) => upd((n) => { if (e.target.value) n.adapter = e.target.value; else delete n.adapter })}>
             {ADAPTERS.map((a) => <option key={a} value={a}>{a || '—'}</option>)}
           </select>
@@ -98,16 +99,18 @@ function NetCard({ id, d, name, edit }: {
       </div>
       <div className={`net-strategy ${open ? '' : 'collapsed'}`}>
         <label className="field">
-          <span>focus</span>
+          <span>focus <Tip label="what focus does">Free-text steer for the adapter — regions, topics, or keywords to prioritize when pulling mint candidates (e.g. "energy markets, Middle East").</Tip></span>
           <input type="text" placeholder="regions / topics / keywords" value={p.focus ?? ''} onChange={(e) => setParam('focus', e.target.value)} />
         </label>
         <label className="field">
-          <span>angle</span>
+          <span>angle <Tip label="what angle does">Editorial stance passed into scoring for this datanet — e.g. "contrarian", "risk-focused". Shapes how candidates are judged, not which are fetched.</Tip></span>
           <input type="text" placeholder="stance — e.g. contrarian, risk-focused" value={p.angle ?? ''} onChange={(e) => setParam('angle', e.target.value)} />
         </label>
         <div className="net-row">
-          <Num label="items / cycle" int value={p.topN} onChange={(n) => setParam('topN', n)} />
-          <Num label="min importance" int value={p.minImportance} onChange={(n) => setParam('minImportance', n)} />
+          <Num label="items / cycle" int value={p.topN} onChange={(n) => setParam('topN', n)}
+            hint="Max candidate items this adapter pulls per cycle before scoring. Higher = more coverage but more LLM scoring calls." />
+          <Num label="min importance" int value={p.minImportance} onChange={(n) => setParam('minImportance', n)}
+            hint="Adapter pre-filter: drop candidates scoring below this importance before the node spends LLM calls scoring them. Higher = stricter, fewer candidates." />
         </div>
         <label className="field">
           <span>mint mode <Tip label="what mint mode means">{mintModeTip}</Tip></span>
@@ -159,19 +162,26 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
 
       <div className="sec-head"><h2>Budget &amp; cadence</h2><div className="rule" /></div>
       <div className="settings">
-        <Num label="cadence (hours, e.g. 0.5 = 30m)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })} />
-        <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => n !== undefined && edit((c) => { c.horizonDays = n })} />
-        <Num label="lock REPPO" value={stake.lockReppo} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockReppo: n } })} />
-        <Num label="lock days" int value={stake.lockDurationDays} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockDurationDays: n } })} />
-        <Num label="votes / cycle" int value={budget.voteRateMaxPerCycle} onChange={(n) => n !== undefined && setB('voteRateMaxPerCycle', n)} />
-        <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)} />
-        <Num label="grant REPPO max (∞ if empty)" value={budget.grantReppoMax} onChange={(n) => setB('grantReppoMax', n, true)} />
+        <Num label="cadence (hours, e.g. 0.5 = 30m)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })}
+          hint="How often the node runs a full cycle (vote → mint → claim). 0.5 = every 30 min, 6 = every 6h. Lower is more responsive but spends more on LLM calls and gas." />
+        <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => n !== undefined && edit((c) => { c.horizonDays = n })}
+          hint="Budget window, in days. The spend caps below (mint REPPO, gas) apply PER this window — the counters reset to 0 when it elapses, then a fresh window starts. e.g. 30 = a monthly budget." />
+        <Num label="lock REPPO" value={stake.lockReppo} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockReppo: n } })}
+          hint="REPPO locked as veREPPO for voting power (a one-time lock at startup). More locked = more weight behind each vote. 0 = don't lock." />
+        <Num label="lock days" int value={stake.lockDurationDays} onChange={(n) => n !== undefined && edit((c) => { c.stake = { ...c.stake, lockDurationDays: n } })}
+          hint="How long the veREPPO lock holds before REPPO can be withdrawn. Longer locks generally grant more voting power." />
+        <Num label="votes / cycle" int value={budget.voteRateMaxPerCycle} onChange={(n) => n !== undefined && setB('voteRateMaxPerCycle', n)}
+          hint="Max votes the node casts in one cycle. Once hit, remaining candidates are deferred to the next cycle. Caps vote volume and gas." />
+        <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)}
+          hint="Max REPPO spent on mint fees per horizon window. At the cap, further mints are refused before signing. (Mint fees run ~100–200 REPPO each.)" />
+        <Num label="grant REPPO max (∞ if empty)" value={budget.grantReppoMax} onChange={(n) => setB('grantReppoMax', n, true)}
+          hint="Cap on REPPO for one-time subnet-access grants (paid once to join a datanet). Empty = no cap (joining IS the consent to its fee); 0 = grants disabled." />
       </div>
 
       <div className="sec-head"><h2>Deliberation</h2><div className="rule" /></div>
       <div className="settings">
         <label className="field">
-          <span>multi-agent panel</span>
+          <span>multi-agent panel <Tip label="what the panel is">When on, scores are decided by a panel — a bull, a bear, and a rubric-purist argue, then a judge rules — instead of one LLM call. Off = a single scorer for every vote and mint.</Tip></span>
           <div className="row">
             <label className="switch">
               <input type="checkbox" checked={delib.enabled !== false}
@@ -182,7 +192,7 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
           </div>
         </label>
         <label className="field">
-          <span>panel all votes</span>
+          <span>panel all votes <Tip label="what panel all votes means">On = EVERY vote goes through the panel (most thorough, ~4× the LLM calls per vote). Off = votes use the single scorer; mints still always use the panel. Needs the panel enabled.</Tip></span>
           <div className="row">
             <label className="switch">
               <input type="checkbox" disabled={delib.enabled === false} checked={delib.enabled !== false && delib.votePanel !== false}
@@ -198,7 +208,7 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
 
       <div className="sec-head"><h2>Strategy brief</h2><div className="rule" /></div>
       <label className="notes-label">
-        <span className="field-label">the goals the node votes and mints by — the panel judge applies this stance</span>
+        <span className="field-label">the goals the node votes and mints by — the panel judge applies this stance <Tip label="how the brief is used">Your strategy in plain language. It's injected as the operator stance into the judge (and single scorer) when scoring every vote and mint — e.g. "favor verifiable on-chain data, avoid hype." Leave blank to score purely by each datanet's rubric.</Tip></span>
         <textarea rows={4} value={candidate.notes ?? ''} onChange={(e) => edit((c) => { c.notes = e.target.value })} />
       </label>
 

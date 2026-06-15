@@ -134,7 +134,7 @@ async function start(): Promise<void> {
   const config: StrategyConfig = loadConfig(DATA_DIR)
   // One shared BudgetLedger instance: the executor reserves/records spend on it,
   // and runCycle calls startCycle on it — the single source of budget truth.
-  const ledger = new BudgetLedger(DATA_DIR, config.budget)
+  const ledger = new BudgetLedger(DATA_DIR, config.budget, config.horizonDays)
   // The reppo CLI omits the mint REPPO fee; read it from the tx receipt so the
   // ledger reconciles to real spend and mintReppoMax is a live cap. Same RPC the
   // CLI uses; no RPC configured => reader omitted (mint spend keeps the reserved est).
