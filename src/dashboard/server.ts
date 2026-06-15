@@ -159,6 +159,13 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         if (msg) session.messages.push({ role: 'user', content: msg })
         const r = await turn(session.messages)
         session.messages.push(...r.responseMessages)
+        // Bound the retained transcript: onboarding is a short first-run window, so a very
+        // long (or scripted/hostile) chat should not grow memory or per-turn token cost
+        // without limit. Keep the seed system message + the most recent turns.
+        const MAX_ONBOARDING_MESSAGES = 60
+        if (session.messages.length > MAX_ONBOARDING_MESSAGES) {
+          session.messages = [session.messages[0], ...session.messages.slice(-(MAX_ONBOARDING_MESSAGES - 1))]
+        }
         if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
         if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
         json(res, 200, { reply: r.text, draft: session.draft, finalized: session.finalized })
@@ -180,9 +187,18 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
         const messages = (body as { messages?: ChatMessage[] })?.messages
         if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
-        const currentRaw = JSON.parse(readFileSync(join(dataDir, 'strategy.config.json'), 'utf-8')) as unknown
-        const current = StrategyConfigSchema.parse(currentRaw)
-        const result = await runStrategyChat({ messages, currentConfig: current, model: opts.chatModel })
+        // Tolerant read (mirrors safeConfig / the write path): a missing or corrupt
+        // config returns a clean 409 rather than a 500 that leaks the data-dir path.
+        const cfgPath = join(dataDir, 'strategy.config.json')
+        if (!existsSync(cfgPath)) { json(res, 409, { error: 'no strategy config yet — finish onboarding before using the assistant' }); return }
+        let parsedCfg
+        try {
+          parsedCfg = StrategyConfigSchema.safeParse(JSON.parse(readFileSync(cfgPath, 'utf-8')))
+        } catch {
+          json(res, 409, { error: 'strategy config is unreadable — fix or re-onboard before using the assistant' }); return
+        }
+        if (!parsedCfg.success) { json(res, 409, { error: 'strategy config is invalid — fix or re-onboard before using the assistant' }); return }
+        const result = await runStrategyChat({ messages, currentConfig: parsedCfg.data, model: opts.chatModel })
         json(res, 200, result)
         return
       }

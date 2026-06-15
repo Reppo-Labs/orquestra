@@ -82,6 +82,13 @@ describe('readMintReppoFee', () => {
     expect(fee).toBe(150)
   })
 
+  it('preserves fractional REPPO precision (does not truncate sub-1-REPPO amounts)', async () => {
+    const wei = 1509n * 10n ** 17n // 150.9 REPPO
+    const fracLog = { address: REPPO_TOKEN_MAINNET, topics: [TRANSFER, topic(WALLET), topic(POD_MGR)], data: '0x' + wei.toString(16).padStart(64, '0') }
+    const fee = await readMintReppoFee('https://rpc', '0xmint', { fetchImpl: fakeRpc(txOf(WALLET), receiptOf([fracLog])) })
+    expect(fee).toBeCloseTo(150.9, 6)
+  })
+
   it('returns undefined when the receipt status is failed (reverted tx pays no fee)', async () => {
     const logs = [transferLog(REPPO_TOKEN_MAINNET, WALLET, POD_MGR, 150n)]
     const fee = await readMintReppoFee('https://rpc', '0xmint', { fetchImpl: fakeRpc(txOf(WALLET), receiptOf(logs, '0x0')) })

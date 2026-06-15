@@ -44,14 +44,28 @@ async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, par
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   })
+  // Distinguish a transport/RPC failure (rate-limit, 5xx, JSON-RPC error) from a
+  // genuinely feeless tx: throw so the caller logs a distinct warning rather than
+  // silently treating an error body as "no fee".
+  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`)
   const json = await res.json()
+  if (json?.error) throw new Error(`RPC ${method} error: ${json.error.message ?? JSON.stringify(json.error)}`)
   return json.result
 }
 
+const ONE_REPPO = 10n ** 18n
+/** Convert wei (18-decimal) to REPPO with fractional precision. Splitting the
+ *  integer and fractional parts keeps full precision without truncating (the old
+ *  `Number(wei / ONE)` dropped sub-1-REPPO amounts) and without the float error of
+ *  `Number(wei)/1e18` on values past 2^53. */
+function weiToReppo(wei: bigint): number {
+  return Number(wei / ONE_REPPO) + Number(wei % ONE_REPPO) / 1e18
+}
+
 /** Read the actual REPPO mint fee from a landed mint tx by summing the REPPO that
- *  left the signer's wallet. Returns whole REPPO (fee assets have 18 decimals).
- *  Returns undefined on any failure (RPC down, tx not found, reverted) so the
- *  caller can fall back conservatively rather than under-count to 0. */
+ *  left the signer's wallet, in REPPO (fractional precision; fee assets have 18
+ *  decimals). Returns undefined on any failure (RPC down, tx not found, reverted) so
+ *  the caller can fall back conservatively rather than under-count to 0. */
 export async function readMintReppoFee(rpcUrl: string, txHash: string, opts: ReadOpts = {}): Promise<number | undefined> {
   const fetchImpl = opts.fetchImpl ?? fetch
   const reppoToken = opts.reppoToken ?? REPPO_TOKEN_MAINNET
@@ -61,8 +75,11 @@ export async function readMintReppoFee(rpcUrl: string, txHash: string, opts: Rea
     const receipt = await rpcCall(fetchImpl, rpcUrl, 'eth_getTransactionReceipt', [txHash])
     if (!receipt?.logs || receipt.status !== '0x1') return undefined
     const wei = sumReppoOutflow(receipt.logs, tx.from, reppoToken)
-    return Number(wei / 10n ** 18n)
-  } catch {
+    return weiToReppo(wei)
+  } catch (e) {
+    // A transport/RPC error (vs a feeless tx): surface it so a misconfigured or
+    // rate-limited RPC is distinguishable from a genuinely zero-fee mint.
+    console.warn(`orquestra: mint-fee RPC read failed for ${txHash} — ${(e as Error).message}`)
     return undefined
   }
 }

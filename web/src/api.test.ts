@@ -30,14 +30,9 @@ describe('loadAll resilience', () => {
     expect(data.activity).toEqual([])
   })
 
-  it('survives a network rejection (backend unreachable) — exercises the catch branch', async () => {
+  it('rejects when the load-critical /api/pnl endpoint is unreachable (so App shows a load error, not a fake fresh node)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
-    const data = await loadAll()
-    expect(data.pnl).toBeNull()
-    expect(data.activity).toEqual([])
-    expect(data.config).toEqual({})
-    expect(data.earn).toBeNull()
-    expect(data.netNames).toEqual({})
+    await expect(loadAll()).rejects.toThrow()
   })
 
   it('coerces a 200 whose body is unexpectedly a non-array for activity', async () => {

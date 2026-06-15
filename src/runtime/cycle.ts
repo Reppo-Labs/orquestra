@@ -125,7 +125,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if (policy.vote && !rubric.canVote) {
         recordSkip('vote enabled but this datanet has no on-chain voter rubric (onboardingVoters) — voting not possible')
       }
-      if (policy.vote && rubric.canVote) {
+      // Pre-scoring budget gate: per-cycle vote rate/gas is shared across datanets, so
+      // once it's exhausted (e.g. by an earlier datanet this cycle) scoring more pods is
+      // pure wasted LLM spend — every vote would be refused. Skip the scoring entirely.
+      if (policy.vote && rubric.canVote && !deps.ledger.canVote()) {
+        // Skip the scoring (saves LLM spend) but keep the dashboard breadcrumb: before
+        // this gate, refused votes surfaced as refused-budget activity → health. Record a
+        // skip so an otherwise-idle datanet still explains why it produced nothing.
+        recordSkip('per-cycle vote budget/rate exhausted — skipping vote scoring', { activity: votes.length === 0 })
+      } else if (policy.vote && rubric.canVote) {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
         const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
         for (let i = 0; i < intents.length; i++) {
@@ -187,6 +195,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         const adapter = deps.getAdapter(policy.adapter)
         if (!adapter) {
           recordSkip(`mint enabled but adapter "${policy.adapter}" is not registered on this node`, { activity: idleThisCycle })
+        } else if (!deps.ledger.canMint(0)) {
+          // Mint REPPO/gas budget already exhausted this horizon — discovering + LLM-scoring
+          // candidates that can't be minted is wasted spend. Skip discovery, but record a
+          // skip when otherwise idle so the dashboard still explains the silence.
+          recordSkip('mint budget exhausted — skipping mint discovery', { activity: idleThisCycle })
         } else {
           const candidates = await adapter.discover({
             datanetId, rubric, topN: deps.topN,

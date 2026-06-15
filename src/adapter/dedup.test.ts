@@ -40,4 +40,11 @@ describe('filterNovel', () => {
     const existing = ['Celtics defense collapses without Porzingis rim protection']
     expect(filterNovel([c], existing)).toEqual([]) // take overlaps → dropped
   })
+  it('does NOT collapse two short same-topic claims that share only two significant words', () => {
+    // "Celtics defense collapse" vs "Celtics offense collapse": shares celtics+collapse
+    // (coeff 0.67) but only 2 words — a distinct claim that must survive (requires >=3).
+    const c: CandidatePod = { canonicalKey: 'k', podName: 'x', podDescription: '', dataset: { take: 'Celtics offense collapse' } }
+    const existing = ['Celtics defense collapse']
+    expect(filterNovel([c], existing)).toHaveLength(1)
+  })
 })

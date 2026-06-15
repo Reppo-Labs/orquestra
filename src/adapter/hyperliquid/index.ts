@@ -39,7 +39,11 @@ export async function fetchFillsPaged(
       if (!seen.has(key)) { seen.add(key); all.push(f); added++ }
     }
     if (batch.length < pageSize) break
-    const lastT = finite(batch[batch.length - 1]!.time)
+    // Boundary = MAX time in the batch, not the last element: HL returns ascending
+    // today (max == last), but taking the max keeps paging correct even if a page is
+    // returned descending or unordered (otherwise the cursor could stall and silently
+    // truncate every fill past the first page).
+    const lastT = Math.max(...batch.map((f) => finite(f.time)))
     // Re-request from lastT (inclusive) so same-ms fills beyond the page boundary are
     // captured; dedup above removes the overlap. If a full page made no progress, stop.
     if (lastT <= cursor && added === 0) break

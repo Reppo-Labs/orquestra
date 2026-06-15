@@ -33,6 +33,18 @@ describe('fetchFillsPaged', () => {
     expect(out).toHaveLength(4)            // x1,x2,x3,x4 — x3 not double-counted
   })
 
+  it('advances correctly when a page is returned newest-first (descending) — cursor uses max time, not last element', async () => {
+    // Page 1 descending: [30,20,10]. Last element is the EARLIEST (10); using it as the
+    // cursor would stall and drop page 2. Max (30) advances correctly.
+    const pages = [
+      [fill(30, 'd2'), fill(20, 'd1'), fill(10, 'd0')], // full page, descending
+      [fill(40, 'e0')],                                  // short page → stop
+    ]
+    let p = 0
+    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3 })
+    expect(out).toHaveLength(4) // all of page 1 + page 2, none truncated
+  })
+
   it('stops (no infinite loop) when a full page is stuck at one timestamp with all-dup hashes', async () => {
     const stuck = Array.from({ length: 3 }, (_, i) => fill(50, `s${i}`)) // all same ts, full page
     let calls = 0

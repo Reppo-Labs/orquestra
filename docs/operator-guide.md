@@ -35,7 +35,7 @@ You need:
 | **Docker** (with Compose) | the node runs as a container |
 | A **dedicated wallet** | fund with ETH on **Base** (gas) + **REPPO** (mint fees, veREPPO lock). Never your main wallet. |
 | An **LLM API key** | powers scoring, the deliberation panel, and the onboarding chat. Anthropic / OpenAI / Google / Surplus / Virtuals. |
-| A **Pinata JWT** | only to **mint in "pin" mode** (pins pod datasets to IPFS). Not needed for voting, or if you mint every datanet in **url-only** mode (§7a). |
+| A **Pinata JWT** | only to **mint in "pin" mode** (pins pod datasets to IPFS). Not needed for voting, or if you mint every datanet in **url-only** mode (§7). |
 | A **private Base RPC** (recommended) | the public RPC rate-limits under a full cycle; Alchemy/QuickNode/Ankr remove per-datanet errors. |
 
 Funding rule of thumb for beta: a little ETH for gas (mint/vote/claim txs are
@@ -140,7 +140,7 @@ The control surface. Each datanet is a card:
   signals, spends least), **aggressive** = participates widely (more votes/mints,
   spends more), **balanced** = middle.
 - **+ mint strategy** — for minted datanets, set focus / angle / items-per-cycle,
-  and **mint mode** (see §7a).
+  and **mint mode** (see §7).
 - **+ add datanet** — opens a picker of all active datanets by name.
 
 Below the cards: **budget & cadence** (caps, how often the node runs — fractional
@@ -187,7 +187,7 @@ doesn't value — tighten its strictness or switch it to vote-only.
 
 ---
 
-## 7a. Mint mode — pin vs url-only (do you need Pinata?)
+## 7. Mint mode — pin vs url-only (do you need Pinata?)
 
 Each minted datanet has a **mint mode**, set per datanet in the Strategy tab:
 
@@ -205,7 +205,7 @@ all.
 Tip: before switching a datanet to url-only, confirm its pods still earn — for some
 datanets curators score the pinned dataset, not just the link.
 
-## 7. The multi-agent panel
+## 8. The multi-agent panel
 
 For close calls (and every mint), the node can convene a panel — **bull**, **bear**,
 and a **rubric-purist** each argue a score, and a **judge** rules. It catches
@@ -219,7 +219,7 @@ cheap; only ambiguous votes and mints pay the full cost.
 
 ---
 
-## 8. Updating
+## 9. Updating
 
 ```sh
 docker compose pull && docker compose up -d
@@ -229,7 +229,7 @@ Your data volume (strategy, ledgers, activity log) persists across updates.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
@@ -245,7 +245,7 @@ Logs: `docker compose logs -f`.
 
 ---
 
-## 10. Safety & cost model
+## 11. Safety & cost model
 
 - The node **cannot spend beyond your budget caps** — the budget ledger refuses
   before signing, not after.
@@ -258,7 +258,7 @@ Logs: `docker compose logs -f`.
 
 ---
 
-## 11. FAQ
+## 12. FAQ
 
 **Do I need to keep my laptop open?** No — the node runs on its host (VPS or
 machine) independently. The SSH tunnel is only for viewing/configuring the

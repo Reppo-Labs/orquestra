@@ -170,15 +170,26 @@ async function start(): Promise<void> {
   const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), { reloadConfig: () => loadConfig(DATA_DIR) }))
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
-  // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler + exit.
-  const shutdown = (sig: string): void => {
+  // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler, drain any
+  // in-flight cycle so a mint/vote between submit and dedup-persist isn't cut mid-write
+  // (bounded so `docker stop`'s grace period is respected), then close the dashboard.
+  const SHUTDOWN_DRAIN_MS = 10_000
+  let shuttingDown = false
+  const shutdown = async (sig: string): Promise<void> => {
+    if (shuttingDown) return
+    shuttingDown = true
     console.error(`\norquestra: received ${sig} — stopping scheduler and exiting.`)
     handle.stop()
-    if (dash) void dash.close()
+    const inflight = handle.current()
+    if (inflight) {
+      console.error(`orquestra: draining in-flight cycle (up to ${SHUTDOWN_DRAIN_MS / 1000}s)…`)
+      await Promise.race([inflight, new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS))])
+    }
+    if (dash) await dash.close().catch(() => {})
     process.exit(0)
   }
-  process.once('SIGINT', () => shutdown('SIGINT'))
-  process.once('SIGTERM', () => shutdown('SIGTERM'))
+  process.once('SIGINT', () => void shutdown('SIGINT'))
+  process.once('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
 const cmd = process.argv[2]

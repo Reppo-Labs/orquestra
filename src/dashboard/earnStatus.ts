@@ -82,10 +82,11 @@ export function earnSummary(activity: ActivityEntry[], emissionsDue: EmissionsDu
   }
 }
 
-/** Human-readable one-screen earn report for `orquestra earn-status`. */
+/** Human-readable one-screen earn report, logged each cycle and persisted to
+ *  earn-status.json (served at /api/earn). There is no `earn-status` subcommand. */
 export function formatEarnStatus(s: EarnSummary): string {
   const lines = [
-    '── orquestra earn-status ──',
+    '── orquestra · earn status ──',
     `minted pods (executed): ${s.mintedPods}`,
     `claimable REPPO (now):  ${s.claimableReppo}`,
     `claimed REPPO (to date): ${s.claimedReppo}`,

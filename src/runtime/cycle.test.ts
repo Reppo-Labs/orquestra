@@ -49,7 +49,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
       executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvote' })),
       executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
     } as unknown as CycleDeps['executor'],
-    ledger: { startCycle: vi.fn() } as unknown as CycleDeps['ledger'],
+    ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => true } as unknown as CycleDeps['ledger'],
     recordVote: vi.fn(),
     recordMint: vi.fn(),
     getEmissionsDue: async () => [],
@@ -145,6 +145,33 @@ describe('runCycle', () => {
     await runCycle(cfg, 'c-nomint', d)
     expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(true)
   })
+
+  it('skips vote scoring entirely when the per-cycle vote budget is already exhausted', async () => {
+    const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
+    const d = deps({
+      voteScorer: { scorePod },
+      ledger: { startCycle: vi.fn(), canVote: () => false, canMint: () => true } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(config, 'c-novotebudget', d)
+    expect(scorePod).not.toHaveBeenCalled() // no wasted LLM spend
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
+    // but the dashboard still learns why the datanet is idle
+    expect(skipReasons(d.recordActivity as any).some((r) => /vote budget\/rate exhausted/.test(r))).toBe(true)
+  })
+
+  it('skips mint discovery when the mint budget is exhausted (no wasted adapter/LLM work)', async () => {
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'p', podDescription: 'd', dataset: {} }])
+    const d = deps({
+      getAdapter: () => ({ id: 'hyperliquid', matches: () => true, discover }),
+      ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => false } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(config, 'c-nomintbudget', d)
+    expect(discover).not.toHaveBeenCalled()
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+  })
+
+  // Note: datanet 9 votes in `config`, so the mint-budget skip activity entry is
+  // suppressed for it (idleThisCycle false) — covered by the idle-suppression test above.
 
   it('does NOT write a mint-incapability skip entry for a datanet that voted this cycle (keeps dashboard idle correct)', async () => {
     // vote:true + mint:true, canVote true but canMint false: it votes, so it is NOT idle.
