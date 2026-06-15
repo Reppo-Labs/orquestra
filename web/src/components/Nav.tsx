@@ -2,13 +2,14 @@ import type { ReactNode } from 'react'
 import type { DashData } from '../api'
 import { fmt, epochLabel, sign } from '../lib/format'
 
-export type TabId = 'overview' | 'strategy' | 'chat' | 'activity'
+export type TabId = 'overview' | 'strategy' | 'chat' | 'activity' | 'learning'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'strategy', label: 'Strategy' },
   { id: 'chat', label: 'Assistant' },
   { id: 'activity', label: 'Activity' },
+  { id: 'learning', label: 'Learning' },
 ]
 
 export function Nav({ data, asof, tab, onTab, activityCount }: {

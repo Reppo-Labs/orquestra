@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeSnapshot, readSnapshot, collectSnapshot, type Snapshot } from './snapshot.js'
@@ -26,6 +26,20 @@ describe('snapshot', () => {
 
   it('readSnapshot returns null when absent', () => {
     expect(readSnapshot(dir)).toBeNull()
+  })
+
+  it('keeps history and reads the latest write', () => {
+    writeSnapshot(dir, snap({ ts: '2026-06-03T21:38:40.000Z', balance: { eth: 1, reppo: 1, veReppo: 1, usdc: 1 } }))
+    writeSnapshot(dir, snap({ ts: '2026-06-04T21:38:40.000Z', balance: { eth: 2, reppo: 2, veReppo: 2, usdc: 2 } }))
+    expect(readSnapshot(dir)?.balance.reppo).toBe(2)
+    expect(readSnapshot(dir)?.ts).toBe('2026-06-04T21:38:40.000Z')
+  })
+
+  it('imports a legacy snapshot.json once, then renames it .imported', () => {
+    writeFileSync(join(dir, 'snapshot.json'), JSON.stringify(snap()))
+    expect(readSnapshot(dir)?.balance.reppo).toBe(1850)               // first read triggers import
+    expect(existsSync(join(dir, 'snapshot.json'))).toBe(false)
+    expect(existsSync(join(dir, 'snapshot.json.imported'))).toBe(true)
   })
 
   it('collectSnapshot merges over the last snapshot when a sub-call fails', async () => {

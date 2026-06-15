@@ -22,6 +22,9 @@ export interface PanelScorerOpts {
   getDeliberation: () => { enabled: boolean; voteBand: number }
   /** Operator strategy brief for the judge, read live (dashboard notes edits hot-reload). */
   getBrief?: () => string
+  /** Learned-lessons block for the judge, per datanet, read live (operator veto/disable
+   *  and new reflections take effect on the next decision). */
+  getLessons?: (datanetId: string) => string
   /** override the panel's generation backend (tests). */
   generate?: PanelGenerate
 }
@@ -43,7 +46,7 @@ export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): Po
       // decisively outside the band → the cheap screen result stands.
       if (voteBand <= 0 || !thresholds || !withinBand(screen.score, thresholds, voteBand)) return screen
       try {
-        const r = await runPanel(opts.model, { name: pod.name, description: pod.description, rubric }, { brief: opts.getBrief?.(), screenScore: screen.score, generate: opts.generate })
+        const r = await runPanel(opts.model, { name: pod.name, description: pod.description, rubric }, { brief: opts.getBrief?.(), lessons: opts.getLessons?.(rubric.datanetId), screenScore: screen.score, generate: opts.generate })
         return { score: r.score, reason: r.reason, panel: r.transcript }
       } catch (e) {
         // Panel failed entirely — fall back to the screen result (never more fragile
@@ -62,7 +65,7 @@ export function createPanelCandidateScorer(base: CandidateScorer, opts: PanelSco
     async scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric) {
       if (!opts.getDeliberation().enabled) return base.scoreCandidate(candidate, rubric)
       const { name, description } = candidateScoreInput(candidate)
-      const r = await runPanel(opts.model, { name, description, rubric }, { brief: opts.getBrief?.(), generate: opts.generate })
+      const r = await runPanel(opts.model, { name, description, rubric }, { brief: opts.getBrief?.(), lessons: opts.getLessons?.(rubric.datanetId), generate: opts.generate })
       return { score: r.score, reason: r.reason, panel: r.transcript }
     },
   }

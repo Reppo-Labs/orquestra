@@ -1,7 +1,10 @@
 // src/runtime/state.ts
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
+import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { getDb, type SqliteDb } from '../dashboard/db.js'
 
+// Dedup rows live in the shared `dedup` table (kind, datanetId, key), owned by db.ts.
+//
 // claimedKeys is a FLAT `${podId}:${epoch}` set, NOT datanet-scoped: emissions are
 // claimed on-chain by (pod, epoch) alone (the CLI takes only --pod --epoch), and a pod
 // belongs to exactly one datanet, so the datanet dimension is redundant and would risk
@@ -9,76 +12,76 @@ import { join } from 'node:path'
 // grantedSubnets is a FLAT set of subnet UUIDs (not datanet-scoped): subnet access is
 // granted to the wallet per-subnet, and a subnet maps 1:1 to a datanet, so the datanet
 // dimension is redundant. Prevents re-granting (a one-time on-chain setup) every cycle.
+// Both flat sets use the sentinel datanetId '' below.
 interface Shape { votedPodIds: Record<string, string[]>; mintedKeys: Record<string, string[]>; claimedKeys: string[]; grantedSubnets: string[] }
-const FILE = 'vote-state.json'
-const fresh = (): Shape => ({ votedPodIds: {}, mintedKeys: {}, claimedKeys: [], grantedSubnets: [] })
+const LEGACY = 'vote-state.json'
+const FLAT = '' // datanetId sentinel for wallet-global (claim / grant) sets
 
 /** Persisted dedup state: which pods we've voted on + which dataset keys we've
  *  minted, per datanet. Prevents re-voting (gas/power waste) + re-minting. */
 export class DedupState {
-  private state: Shape
+  private readonly db: SqliteDb
   constructor(private readonly dataDir: string) {
-    const path = join(dataDir, FILE)
-    if (!existsSync(path)) { this.state = fresh(); return }
-    try {
-      const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<Shape>
-      this.state = {
-        votedPodIds: parsed.votedPodIds ?? {},
-        mintedKeys: parsed.mintedKeys ?? {},
-        // tolerate a legacy/absent value: only accept a flat array, else start empty
-        claimedKeys: Array.isArray(parsed.claimedKeys) ? parsed.claimedKeys : [],
-        grantedSubnets: Array.isArray(parsed.grantedSubnets) ? parsed.grantedSubnets : [],
-      }
-    } catch {
-      this.state = fresh() // corrupt → start empty (worst case a re-vote attempt, which the chain dedups by epoch)
-    }
+    this.db = getDb(dataDir)
+    this.importLegacy()
   }
-  getVotedPodIds(datanetId: string): string[] { return this.state.votedPodIds[datanetId] ?? [] }
-  getMintedKeys(datanetId: string): string[] { return this.state.mintedKeys[datanetId] ?? [] }
-  recordVote(datanetId: string, podId: string): void { this.add(this.state.votedPodIds, datanetId, podId) }
-  recordMint(datanetId: string, key: string): void { this.add(this.state.mintedKeys, datanetId, key) }
+
+  /** One-time import of a pre-existing vote-state.json into the empty table, then
+   *  rename it *.imported. A corrupt file imports nothing (start empty — worst case a
+   *  re-vote attempt, which the chain dedups by epoch), still renamed so we don't retry. */
+  private importLegacy(): void {
+    const n = (this.db.prepare('SELECT COUNT(*) AS n FROM dedup').get() as { n: number }).n
+    if (n > 0) return
+    const path = join(this.dataDir, LEGACY)
+    if (!existsSync(path)) return
+    let parsed: Partial<Shape> | null = null
+    try { parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<Shape> } catch { parsed = null }
+    if (parsed) {
+      const ins = this.db.prepare('INSERT OR IGNORE INTO dedup (kind, datanetId, key) VALUES (?, ?, ?)')
+      this.db.exec('BEGIN')
+      try {
+        for (const [dn, ids] of Object.entries(parsed.votedPodIds ?? {})) for (const id of ids) ins.run('vote', dn, id)
+        for (const [dn, keys] of Object.entries(parsed.mintedKeys ?? {})) for (const k of keys) ins.run('mint', dn, k)
+        for (const k of Array.isArray(parsed.claimedKeys) ? parsed.claimedKeys : []) ins.run('claim', FLAT, k)
+        for (const s of Array.isArray(parsed.grantedSubnets) ? parsed.grantedSubnets : []) ins.run('grant', FLAT, s)
+        this.db.exec('COMMIT')
+      } catch (e) { this.db.exec('ROLLBACK'); throw e }
+    }
+    renameSync(path, path + '.imported')
+  }
+
+  getVotedPodIds(datanetId: string): string[] { return this.keys('vote', datanetId) }
+  getMintedKeys(datanetId: string): string[] { return this.keys('mint', datanetId) }
+  recordVote(datanetId: string, podId: string): void { this.put('vote', datanetId, podId) }
+  recordMint(datanetId: string, key: string): void { this.put('mint', datanetId, key) }
   /** Flat (podId:epoch) claim set — see note on Shape; not datanet-scoped. */
-  getClaimedKeys(): string[] { return this.state.claimedKeys }
+  getClaimedKeys(): string[] { return this.keys('claim', FLAT) }
   /** Flat set of subnet UUIDs the wallet has been granted access to. */
-  getGrantedSubnets(): string[] { return this.state.grantedSubnets }
-  recordGrant(subnetId: string): void {
-    const set = new Set(this.state.grantedSubnets); set.add(subnetId); this.state.grantedSubnets = [...set]
-    try {
-      this.save()
-    } catch (e) {
-      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
-    }
-  }
+  getGrantedSubnets(): string[] { return this.keys('grant', FLAT) }
+  recordClaim(key: string): void { this.put('claim', FLAT, key) }
+  recordGrant(subnetId: string): void { this.put('grant', FLAT, subnetId) }
   /** Evict a stale grant-cache entry (on-chain access disagreed with the cache). */
   removeGrant(subnetId: string): void {
-    const set = new Set(this.state.grantedSubnets); set.delete(subnetId); this.state.grantedSubnets = [...set]
     try {
-      this.save()
+      this.db.prepare('DELETE FROM dedup WHERE kind = ? AND datanetId = ? AND key = ?').run('grant', FLAT, subnetId)
     } catch (e) {
-      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
+      console.error(`orquestra: failed to persist dedup state: ${(e as Error).message}`)
     }
   }
-  recordClaim(key: string): void {
-    const set = new Set(this.state.claimedKeys); set.add(key); this.state.claimedKeys = [...set]
-    try {
-      this.save()
-    } catch (e) {
-      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
-    }
+
+  private keys(kind: string, datanetId: string): string[] {
+    const rows = this.db.prepare('SELECT key FROM dedup WHERE kind = ? AND datanetId = ?').all(kind, datanetId) as { key: string }[]
+    return rows.map((r) => r.key)
   }
-  private add(map: Record<string, string[]>, dn: string, v: string): void {
-    // Update in-memory FIRST so reads stay correct this session even if the disk
-    // write fails; persistence is best-effort and must never throw into the caller
-    // (a throw here would crash the cycle and orphan a just-landed on-chain action).
-    const set = new Set(map[dn] ?? []); set.add(v); map[dn] = [...set]
+
+  /** INSERT OR IGNORE — the PRIMARY KEY (kind, datanetId, key) makes this idempotent.
+   *  Best-effort: never throw into the caller (a throw would crash the cycle and orphan
+   *  a just-landed on-chain action; the chain dedups by epoch as the backstop). */
+  private put(kind: string, datanetId: string, key: string): void {
     try {
-      this.save()
+      this.db.prepare('INSERT OR IGNORE INTO dedup (kind, datanetId, key) VALUES (?, ?, ?)').run(kind, datanetId, key)
     } catch (e) {
-      console.error(`orquestra: failed to persist dedup state (in-memory dedup still holds): ${(e as Error).message}`)
+      console.error(`orquestra: failed to persist dedup state: ${(e as Error).message}`)
     }
-  }
-  private save(): void {
-    const path = join(this.dataDir, FILE)
-    writeFileSync(`${path}.tmp`, JSON.stringify(this.state, null, 2)); renameSync(`${path}.tmp`, path)
   }
 }

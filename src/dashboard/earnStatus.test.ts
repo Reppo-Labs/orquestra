@@ -1,6 +1,6 @@
 // src/dashboard/earnStatus.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { earnSummary, formatEarnStatus, writeEarnStatus, readEarnStatus, selectOurPods, type OwnPodVote } from './earnStatus.js'
@@ -83,5 +83,20 @@ describe('earn-status persistence', () => {
   })
   it('returns null when absent', () => {
     expect(readEarnStatus(dir)).toBeNull()
+  })
+  it('keeps history and reads the latest write', () => {
+    const a = { ...earnSummary([mint()], due(1), []), ts: '2026-06-07T00:00:00.000Z' }
+    const b = { ...earnSummary([mint(), mint()], due(2), []), ts: '2026-06-08T00:00:00.000Z' }
+    writeEarnStatus(dir, a)
+    writeEarnStatus(dir, b)
+    expect(readEarnStatus(dir)?.ts).toBe('2026-06-08T00:00:00.000Z')
+    expect(readEarnStatus(dir)?.claimableReppo).toBe(2)
+  })
+  it('imports a legacy earn-status.json once, then renames it .imported', () => {
+    const earn = { ...earnSummary([mint()], due(5), [pod({ upVotes: 2 })]), ts: '2026-06-07T00:00:00.000Z' }
+    writeFileSync(join(dir, 'earn-status.json'), JSON.stringify(earn))
+    expect(readEarnStatus(dir)).toEqual(earn)                         // first read triggers import
+    expect(existsSync(join(dir, 'earn-status.json'))).toBe(false)
+    expect(existsSync(join(dir, 'earn-status.json.imported'))).toBe(true)
   })
 })

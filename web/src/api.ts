@@ -208,3 +208,57 @@ export async function strategyChat(messages: ChatMsg[]): Promise<{ ok: boolean; 
   })
   return { ok: r.ok, out: await r.json().catch(() => ({ reply: '' })), status: r.status }
 }
+
+// ── Self-learning (mirrors src/learn/* + /api/learn) ──
+export interface LearnLesson { id: number; text: string; source: string; createdEpoch: number; createdTs: string }
+export interface LearnStatsView {
+  maturedTotal: number
+  voteTotal: number
+  voteAlignmentPct: number
+  upVoteAlignedPct: number
+  downVoteAlignedPct: number
+  mintTotal: number
+  mintAlignmentPct: number
+  highConvictionTotal: number
+  highConvictionAlignedPct: number
+  lowConvictionAlignedPct: number
+  highConvictionReversals: number
+  sampleEpochs: number
+}
+export interface LearnDatanetView { enabled: boolean; lessons: LearnLesson[]; stats: LearnStatsView }
+export interface LearnProposal {
+  id: number
+  datanetId: string
+  field: 'strictness' | 'voteBand'
+  fromValue: string
+  toValue: string
+  rationale: string
+  createdTs: string
+}
+export interface LearnData { datanets: Record<string, LearnDatanetView>; proposals: LearnProposal[] }
+
+export async function loadLearn(): Promise<LearnData> {
+  return fetch('/api/learn').then((r) => r.json())
+}
+
+export async function decideProposal(id: number, decision: 'accept' | 'reject'): Promise<{ ok: boolean; status?: string; error?: string }> {
+  const r = await fetch(`/api/learn/proposals/${id}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision }),
+  })
+  const out = await r.json().catch(() => ({}))
+  return { ok: r.ok, ...(out as object) }
+}
+
+export async function setLearnEnabled(datanetId: string, enabled: boolean): Promise<{ ok: boolean }> {
+  const r = await fetch('/api/learn/disable', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ datanetId, enabled }),
+  })
+  return { ok: r.ok }
+}
+
+export async function vetoLessons(datanetId: string): Promise<{ ok: boolean }> {
+  const r = await fetch('/api/learn/veto', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ datanetId }),
+  })
+  return { ok: r.ok }
+}

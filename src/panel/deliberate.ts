@@ -15,6 +15,8 @@ export type PanelGenerate = <T>(args: { schema: ZodType<T>; system: string; prom
 export interface RunPanelOpts {
   /** operator strategy brief — passed to the judge only */
   brief?: string
+  /** learned-lessons block (trusted, node-authored) — passed to the judge only */
+  lessons?: string
   /** screen score that triggered the panel; recorded in the transcript (votes only) */
   screenScore?: number
   /** override the generation backend (tests); defaults to a `generateObject` call on `model`. */
@@ -56,7 +58,9 @@ export async function runPanel(model: LanguageModel, input: PanelInput, opts: Ru
   if (panelists.length === 0) throw new Error('panel: all personas failed')
 
   const missing = PERSONAS.filter((p) => !panelists.some((v) => v.persona === p.id)).map((p) => p.id)
-  const { system, prompt } = buildJudgePrompt(input, panelists, missing)
+  // Forward the operator brief + learned lessons to the judge (the panelists argue
+  // evidence only; the judge applies stance + calibration).
+  const { system, prompt } = buildJudgePrompt({ ...input, brief: opts.brief, lessons: opts.lessons }, panelists, missing)
   const judge = await generate({ schema: JudgeSchema, system, prompt }) // throws → caller falls back
 
   const transcript: PanelTranscript = {

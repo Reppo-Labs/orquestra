@@ -8,6 +8,23 @@ import { StrategyConfigSchema } from '../config/schema.js'
 import { appendActivity } from '../dashboard/activityLog.js'
 import type { VoterPod } from '../voter/types.js'
 
+// Mocks for the post-cycle reporting/learning path (the reporting=false tests below
+// never reach these). Shared spies via vi.hoisted so the factories can reference them.
+const h = vi.hoisted(() => ({
+  collectOutcomes: vi.fn(() => 0),
+  runReflection: vi.fn(async () => {}),
+  queryDatanetPodVotes: vi.fn(async () => [] as unknown[]),
+  snap: { ts: 't', cycleId: 'c', balance: {}, votingPower: {}, emissionsDue: { totalReppo: 0, pods: [] }, budget: {}, epoch: { epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 } },
+}))
+vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
+vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
+vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))
+vi.mock('../dashboard/snapshot.js', () => ({
+  collectSnapshot: vi.fn(async () => h.snap),
+  writeSnapshot: vi.fn(),
+  readSnapshot: vi.fn(() => h.snap),
+}))
+
 const config = StrategyConfigSchema.parse({
   horizonDays: 7, cadenceHours: 1,
   stake: { lockReppo: 0, lockDurationDays: 7 },
@@ -173,5 +190,44 @@ describe('buildTick config hot-reload', () => {
     await tick()
     boom = true
     await expect(tick()).resolves.toBeUndefined() // tolerated, last-good used
+  })
+})
+
+describe('buildTick self-learning (reporting path)', () => {
+  beforeEach(() => {
+    h.collectOutcomes.mockClear()
+    h.runReflection.mockClear()
+    h.queryDatanetPodVotes.mockClear()
+    h.collectOutcomes.mockImplementation(() => 0)
+  })
+
+  const learnDeps = (w: CycleWiring) => buildCycleDeps({
+    ...w,
+    io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) },
+  })
+
+  it('collects outcomes per learn-datanet and reflects once per epoch when a learnModel is set', async () => {
+    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await tick()
+    expect(h.collectOutcomes).toHaveBeenCalledWith(dir, '2', [], 5)
+    expect(h.runReflection).toHaveBeenCalledTimes(1)
+    await tick()                                       // same epoch → no second reflection
+    expect(h.runReflection).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips reflection entirely when no learnModel is configured (observe still runs)', async () => {
+    const w = wiring() // no learnModel
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await tick()
+    expect(h.collectOutcomes).toHaveBeenCalled()
+    expect(h.runReflection).not.toHaveBeenCalled()
+  })
+
+  it('a thrown collectOutcomes never aborts the tick (best-effort)', async () => {
+    h.collectOutcomes.mockImplementation(() => { throw new Error('boom') })
+    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await expect(tick()).resolves.toBeUndefined()
   })
 })

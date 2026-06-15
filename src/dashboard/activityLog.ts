@@ -4,17 +4,11 @@
 // LIMIT, or a since-window) instead of re-parsing the whole file each dashboard poll.
 // The public API (appendActivity / readActivity) is unchanged; on first open an
 // existing activity-log.jsonl is imported once so history carries over.
-import { createRequire } from 'node:module'
 import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { redactSecrets } from '../util/redact.js'
 import type { PanelTranscript } from '../panel/types.js'
-
-// Load node:sqlite via createRequire so the test bundler (Vite/vitest) doesn't try
-// to statically resolve it — it's newer than Vite's builtin externals list. At
-// runtime this is Node's own require, resolving the built-in module directly.
-type SqliteDb = import('node:sqlite').DatabaseSync
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')
+import { getDb, type SqliteDb } from './db.js'
 
 export interface ActivityEntry {
   ts: string
@@ -37,7 +31,6 @@ export interface ActivityEntry {
   panel?: PanelTranscript
 }
 
-const DB_FILE = 'activity.db'
 const LEGACY = 'activity-log.jsonl'
 
 // ── redaction (defense-in-depth: error text can carry --rpc-url keys; panel text
@@ -60,31 +53,21 @@ function redactEntry(entry: ActivityEntry): ActivityEntry {
   }
 }
 
-// ── DB handle cache (one per dataDir; single-process node) ────────────────────
-const dbs = new Map<string, SqliteDb>()
-
 const COLUMNS = [
   'ts', 'cycleId', 'kind', 'datanetId', 'podId', 'direction', 'conviction', 'reason',
   'canonicalKey', 'podName', 'epoch', 'reppoClaimed', 'status', 'txHash', 'gasEth', 'detail', 'panel',
 ] as const
 
-function db(dataDir: string): SqliteDb {
-  const path = join(dataDir, DB_FILE)
-  let d = dbs.get(path)
-  if (d) return d
-  d = new DatabaseSync(path)
-  d.exec(`
-    CREATE TABLE IF NOT EXISTS activity (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts TEXT NOT NULL, cycleId TEXT, kind TEXT, datanetId TEXT, podId TEXT,
-      direction TEXT, conviction REAL, reason TEXT, canonicalKey TEXT, podName TEXT,
-      epoch INTEGER, reppoClaimed REAL, status TEXT, txHash TEXT, gasEth REAL,
-      detail TEXT, panel TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
-  `)
-  dbs.set(path, d)
-  importLegacyJsonl(d, dataDir)
+// The `activity` table is owned by db.ts. We run the one-time JSONL import on first
+// touch per dataDir; the import itself is also guarded by a table-empty check, so it
+// stays a no-op across restarts.
+const imported = new Set<string>()
+function conn(dataDir: string): SqliteDb {
+  const d = getDb(dataDir)
+  if (!imported.has(dataDir)) {
+    importLegacyJsonl(d, dataDir)
+    imported.add(dataDir)
+  }
   return d
 }
 
@@ -150,12 +133,12 @@ function rowToEntry(r: Row): ActivityEntry {
 /** Append one activity entry. Redacts secrets before persisting. Never rotates —
  *  SQLite handles growth; reads are indexed. */
 export function appendActivity(dataDir: string, entry: ActivityEntry): void {
-  insert(db(dataDir), entry)
+  insert(conn(dataDir), entry)
 }
 
 /** Most recent `limit` entries, newest-first. Missing DB → []. */
 export function readActivity(dataDir: string, opts: { limit: number }): ActivityEntry[] {
-  const rows = db(dataDir).prepare('SELECT * FROM activity ORDER BY id DESC LIMIT ?').all(opts.limit) as Row[]
+  const rows = conn(dataDir).prepare('SELECT * FROM activity ORDER BY id DESC LIMIT ?').all(opts.limit) as Row[]
   return rows.map(rowToEntry)
 }
 
@@ -163,6 +146,6 @@ export function readActivity(dataDir: string, opts: { limit: number }): Activity
  *  the dashboard health window doesn't re-read the whole history each poll. */
 export function readActivitySince(dataDir: string, sinceMs: number): ActivityEntry[] {
   const since = new Date(sinceMs).toISOString()
-  const rows = db(dataDir).prepare('SELECT * FROM activity WHERE ts >= ? ORDER BY id DESC').all(since) as Row[]
+  const rows = conn(dataDir).prepare('SELECT * FROM activity WHERE ts >= ? ORDER BY id DESC').all(since) as Row[]
   return rows.map(rowToEntry)
 }

@@ -1,6 +1,7 @@
 // src/dashboard/snapshot.ts
-import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs'
+import { readFileSync, renameSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { getDb, type SqliteDb } from './db.js'
 import type { WalletBalance } from '../reppo/queryBalance.js'
 import type { VotingPower } from '../reppo/queryVotingPower.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
@@ -27,17 +28,45 @@ export interface Snapshot {
   epoch?: EpochInfo
 }
 
-const FILE = 'snapshot.json'
+const LEGACY = 'snapshot.json'
+
+// The `snapshot` table is owned by db.ts; one row per cycle (history), read-latest.
+const snapImported = new Set<string>()
+function conn(dataDir: string): SqliteDb {
+  const d = getDb(dataDir)
+  if (!snapImported.has(dataDir)) {
+    importLegacySnapshot(d, dataDir)
+    snapImported.add(dataDir)
+  }
+  return d
+}
+
+/** One-time import of a pre-existing snapshot.json into an empty table, then rename
+ *  it to *.imported. No-op once the table has rows. */
+function importLegacySnapshot(d: SqliteDb, dataDir: string): void {
+  const count = (d.prepare('SELECT COUNT(*) AS n FROM snapshot').get() as { n: number }).n
+  if (count > 0) return
+  const live = join(dataDir, LEGACY)
+  if (!existsSync(live)) return
+  try {
+    const snap = JSON.parse(readFileSync(live, 'utf-8')) as Snapshot
+    d.prepare('INSERT INTO snapshot (ts, cycleId, data) VALUES (?, ?, ?)')
+      .run(snap.ts ?? new Date().toISOString(), snap.cycleId ?? null, JSON.stringify(snap))
+  } catch { /* corrupt legacy file — skip the import, still rename so we don't retry */ }
+  renameSync(live, live + '.imported')
+}
 
 export function writeSnapshot(dataDir: string, snap: Snapshot): void {
-  const path = join(dataDir, FILE)
-  writeFileSync(`${path}.tmp`, JSON.stringify(snap, null, 2)); renameSync(`${path}.tmp`, path)
+  conn(dataDir).prepare('INSERT INTO snapshot (ts, cycleId, data) VALUES (?, ?, ?)')
+    .run(snap.ts, snap.cycleId ?? null, JSON.stringify(snap))
 }
 
 export function readSnapshot(dataDir: string): Snapshot | null {
-  const path = join(dataDir, FILE)
-  if (!existsSync(path)) return null
-  try { return JSON.parse(readFileSync(path, 'utf-8')) as Snapshot } catch { return null }
+  const row = conn(dataDir).prepare('SELECT data FROM snapshot ORDER BY id DESC LIMIT 1').get() as
+    | { data: string }
+    | undefined
+  if (!row) return null
+  try { return JSON.parse(row.data) as Snapshot } catch { return null }
 }
 
 export interface SnapshotReaders {

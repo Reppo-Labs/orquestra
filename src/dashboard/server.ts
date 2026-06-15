@@ -1,8 +1,8 @@
 // src/dashboard/server.ts
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { writeFileSync, renameSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { readActivity, readActivitySince } from './activityLog.js'
@@ -10,7 +10,10 @@ import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
-import { StrategyConfigSchema } from '../config/schema.js'
+import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
+import { loadConfig, readConfigText, writeConfig } from '../config/load.js'
+import { buildLearnView } from '../learn/view.js'
+import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from '../learn/store.js'
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
@@ -48,12 +51,12 @@ function staticFile(publicDir: string, url: string): string | null {
 
 export interface DashboardHandle { close(): Promise<void>; port: number }
 
-/** A safe subset of strategy.config.json — explicitly whitelisted fields only. */
+/** A safe subset of the strategy config — explicitly whitelisted fields only. */
 function safeConfig(dataDir: string): Record<string, unknown> {
-  const path = join(dataDir, 'strategy.config.json')
-  if (!existsSync(path)) return {}
+  const text = readConfigText(dataDir)
+  if (text === null) return {}
   try {
-    const c = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
+    const c = JSON.parse(text) as Record<string, unknown>
     // Prefer the CANONICAL schema parse (defaults + transforms applied) so the
     // strategy editor always receives a complete, Save-able config — budget and
     // stake are NOT secrets (caps already surface via the snapshot).
@@ -132,13 +135,51 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
-const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm'])
+type ProposalDecisionResult = { ok: boolean; status?: string; error?: string; appliesNextCycle?: boolean }
+
+/** Apply an operator decision to a learning proposal. Accept goes through the validated
+ *  config writer with an optimistic-concurrency check: if the live config value no longer
+ *  matches the proposal's fromValue (a manual edit landed since), the proposal is marked
+ *  stale rather than clobbering the newer value. The reflection module never writes config
+ *  — only this operator-driven path does. */
+function decideProposal(dataDir: string, id: number, decision: 'accept' | 'reject'): ProposalDecisionResult {
+  const prop = readProposals(dataDir).find((p) => p.id === id)
+  if (!prop) return { ok: false, error: 'proposal not found' }
+  if (prop.status !== 'pending') return { ok: false, error: `proposal already ${prop.status}` }
+  if (decision === 'reject') { setProposalStatus(dataDir, id, 'rejected'); return { ok: true, status: 'rejected' } }
+
+  let cfg: StrategyConfig
+  try { cfg = loadConfig(dataDir) } catch (e) { return { ok: false, error: `config unavailable: ${(e as Error).message}` } }
+  const liveValue = prop.field === 'strictness'
+    ? (cfg.datanets[prop.datanetId]?.strictness ?? 'balanced')
+    : String(cfg.deliberation.voteBand)
+  if (liveValue !== prop.fromValue) {
+    setProposalStatus(dataDir, id, 'stale')
+    return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+  }
+  const updated = structuredClone(cfg) as StrategyConfig
+  if (prop.field === 'strictness') {
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.strictness = prop.toValue as typeof dn.strictness
+  } else {
+    updated.deliberation = { ...updated.deliberation, voteBand: Number(prop.toValue) }
+  }
+  const parsed = StrategyConfigSchema.safeParse(updated)
+  if (!parsed.success) return { ok: false, error: 'resulting config failed validation' }
+  writeConfig(dataDir, parsed.data)
+  setProposalStatus(dataDir, id, 'accepted')
+  return { ok: true, status: 'accepted', appliesNextCycle: true }
+}
+
+const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm', '/api/learn/disable', '/api/learn/veto'])
 
 async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts, session: OnboardingSession): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
   try {
     if (req.method === 'POST') {
-      if (!POST_ROUTES.has(url)) {
+      const isLearnProposal = url.startsWith('/api/learn/proposals/')
+      if (!POST_ROUTES.has(url) && !isLearnProposal) {
         json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return
       }
       // No auth on writes: the dashboard binds localhost by default; restricting
@@ -180,20 +221,40 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
         const messages = (body as { messages?: ChatMessage[] })?.messages
         if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
-        const currentRaw = JSON.parse(readFileSync(join(dataDir, 'strategy.config.json'), 'utf-8')) as unknown
-        const current = StrategyConfigSchema.parse(currentRaw)
+        const current = loadConfig(dataDir)
         const result = await runStrategyChat({ messages, currentConfig: current, model: opts.chatModel })
         json(res, 200, result)
         return
       }
 
+      if (url === '/api/learn/disable') {
+        const b = body as { datanetId?: string; enabled?: boolean }
+        if (!b?.datanetId || typeof b.enabled !== 'boolean') { json(res, 400, { error: 'datanetId and enabled required' }); return }
+        setLearnEnabled(dataDir, b.datanetId, b.enabled)
+        json(res, 200, { ok: true }); return
+      }
+
+      if (url === '/api/learn/veto') {
+        const b = body as { datanetId?: string }
+        if (!b?.datanetId) { json(res, 400, { error: 'datanetId required' }); return }
+        clearLessons(dataDir, b.datanetId)
+        json(res, 200, { ok: true }); return
+      }
+
+      if (isLearnProposal) {
+        const id = Number(url.slice('/api/learn/proposals/'.length))
+        const b = body as { decision?: 'accept' | 'reject' }
+        if (!Number.isInteger(id) || (b?.decision !== 'accept' && b?.decision !== 'reject')) {
+          json(res, 400, { error: 'numeric id and decision (accept|reject) required' }); return
+        }
+        const result = decideProposal(dataDir, id, b.decision)
+        json(res, result.ok ? 200 : 409, result); return
+      }
+
       const parsed = StrategyConfigSchema.safeParse(body)
       if (!parsed.success) { json(res, 400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) }); return }
-      // Atomic write (temp + rename) — the node hot-reloads it at the next cycle.
-      const finalPath = join(dataDir, 'strategy.config.json')
-      const tmpPath = finalPath + '.tmp'
-      writeFileSync(tmpPath, JSON.stringify(parsed.data, null, 2))
-      renameSync(tmpPath, finalPath)
+      // Persist to the config row — the node hot-reloads it at the next cycle.
+      writeConfig(dataDir, parsed.data)
       json(res, 200, { saved: true, appliesNextCycle: true })
       return
     }
@@ -207,6 +268,14 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
     if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
     if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
+    if (url === '/api/learn') {
+      let ids: string[] = []
+      try {
+        const cfg = loadConfig(dataDir)
+        ids = Object.entries(cfg.datanets).filter(([k, d]) => k !== '*' && (d.vote || d.mint)).map(([k]) => k)
+      } catch { ids = [] } // no/invalid config (onboarding) → empty learn view
+      json(res, 200, buildLearnView(dataDir, ids)); return
+    }
     // 7-day window: "recent health", independent of cadence (a count-based window
     // means hours at high cadence, months at low). 100k limit is a safety ceiling.
     if (url === '/api/health') {

@@ -1,7 +1,8 @@
 // src/wallet/ledger.ts
-import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs'
+import { readFileSync, renameSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { getDb, type SqliteDb } from '../dashboard/db.js'
 
 export interface BudgetCaps {
   voteGasEthMax: number
@@ -56,7 +57,7 @@ export class LedgerCorruptError extends Error {
   }
 }
 
-const LEDGER_FILE = 'budget-ledger.json'
+const LEGACY_LEDGER = 'budget-ledger.json'
 
 const nonNegativeFinite = z.number().finite().nonnegative()
 
@@ -83,24 +84,49 @@ const fresh = (): LedgerState => ({
  *  back when signing fails. */
 export class BudgetLedger {
   private _state: LedgerState
+  private readonly db: SqliteDb
 
   constructor(private readonly dataDir: string, private caps: BudgetCaps) {
-    const path = join(dataDir, LEDGER_FILE)
-    if (existsSync(path)) {
+    this.db = getDb(dataDir)
+    this.importLegacy()
+    const row = this.db.prepare('SELECT data FROM budget_ledger WHERE id = 1').get() as { data: string } | undefined
+    if (row) {
       let parsed: unknown
       try {
-        parsed = JSON.parse(readFileSync(path, 'utf-8'))
+        parsed = JSON.parse(row.data)
       } catch (e) {
-        throw new LedgerCorruptError(`budget-ledger.json is not valid JSON: ${(e as Error).message}`)
+        throw new LedgerCorruptError(`budget_ledger row is not valid JSON: ${(e as Error).message}`)
       }
       const result = LedgerSchema.safeParse(parsed)
       if (!result.success) {
-        throw new LedgerCorruptError(`budget-ledger.json failed validation: ${result.error.message}`)
+        throw new LedgerCorruptError(`budget_ledger row failed validation: ${result.error.message}`)
       }
       this._state = result.data
     } else {
       this._state = fresh()
     }
+  }
+
+  /** One-time import of a pre-existing budget-ledger.json into the empty table, then
+   *  rename it *.imported. A corrupt legacy file throws (fail-closed: never continue
+   *  with an unknown spend state). No-op once the row exists. */
+  private importLegacy(): void {
+    const n = (this.db.prepare('SELECT COUNT(*) AS n FROM budget_ledger').get() as { n: number }).n
+    if (n > 0) return
+    const path = join(this.dataDir, LEGACY_LEDGER)
+    if (!existsSync(path)) return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    } catch (e) {
+      throw new LedgerCorruptError(`budget-ledger.json is not valid JSON: ${(e as Error).message}`)
+    }
+    const result = LedgerSchema.safeParse(parsed)
+    if (!result.success) {
+      throw new LedgerCorruptError(`budget-ledger.json failed validation: ${result.error.message}`)
+    }
+    this.db.prepare('INSERT INTO budget_ledger (id, data) VALUES (1, ?)').run(JSON.stringify(result.data))
+    renameSync(path, path + '.imported')
   }
 
   /** Returns a frozen copy of the current ledger state. */
@@ -236,11 +262,11 @@ export class BudgetLedger {
     this.save()
   }
 
-  /** Atomic write: write to .tmp then rename to final path. */
+  /** Persist the single ledger row. One UPSERT statement is atomic in SQLite —
+   *  same crash-safety as the old tmp+rename, with no torn writes. */
   private save(): void {
-    const finalPath = join(this.dataDir, LEDGER_FILE)
-    const tmpPath = finalPath + '.tmp'
-    writeFileSync(tmpPath, JSON.stringify(this._state, null, 2))
-    renameSync(tmpPath, finalPath)
+    this.db
+      .prepare('INSERT INTO budget_ledger (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data')
+      .run(JSON.stringify(this._state))
   }
 }

@@ -59,8 +59,9 @@ describe('BudgetLedger', () => {
     const a = new BudgetLedger(dir, caps)
     a.startCycle('c1'); a.reserveMint(70, 0.01)
     const b = new BudgetLedger(dir, caps) // fresh instance, same dir
-    expect(b.canMint(40)).toBe(false) // 70 + 40 > 100, loaded from disk
-    expect(existsSync(join(dir, 'budget-ledger.json'))).toBe(true)
+    expect(b.canMint(40)).toBe(false) // 70 + 40 > 100, loaded from the DB
+    expect(existsSync(join(dir, 'budget-ledger.json'))).toBe(false) // persisted in SQLite, not JSON
+    expect(existsSync(join(dir, 'activity.db'))).toBe(true)
   })
 
   // --- crash-safety: reservation persists before sign ---
@@ -165,15 +166,28 @@ describe('BudgetLedger', () => {
     expect(() => new BudgetLedger(dir, caps)).toThrowError(LedgerCorruptError)
   })
 
+  it('imports a legacy budget-ledger.json once, then renames it .imported', () => {
+    writeFileSync(join(dir, 'budget-ledger.json'), JSON.stringify({
+      cycleId: 'c1', votesCastThisCycle: 2, voteGasSpentEth: 0.002, mintReppoSpent: 70,
+      mintGasSpentEth: 0.01, claimGasSpentEth: 0, grantReppoSpent: 0,
+    }))
+    const l = new BudgetLedger(dir, caps)
+    expect(l.state.mintReppoSpent).toBe(70)
+    expect(l.state.votesCastThisCycle).toBe(2)
+    expect(existsSync(join(dir, 'budget-ledger.json'))).toBe(false)
+    expect(existsSync(join(dir, 'budget-ledger.json.imported'))).toBe(true)
+  })
+
   // --- atomic write: no .tmp file left behind ---
 
-  it('save() leaves no .tmp file behind', () => {
+  it('save() persists to the SQLite DB, leaving no .tmp or JSON file behind', () => {
     const l = new BudgetLedger(dir, caps)
     l.startCycle('c1')
     l.reserveVote(0.001)
     const files = readdirSync(dir)
     expect(files.some(f => f.endsWith('.tmp'))).toBe(false)
-    expect(files).toContain('budget-ledger.json')
+    expect(files).not.toContain('budget-ledger.json')
+    expect(files).toContain('activity.db')
   })
 
   // --- reserveVote returns null when over budget ---

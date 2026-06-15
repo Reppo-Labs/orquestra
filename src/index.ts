@@ -92,7 +92,7 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
         if (c.apiKey) process.env.REPPO_API_KEY = c.apiKey
       },
     })
-    if (res.source === 'registered') console.error(`orquestra: registered Reppo agent ${res.agentId} — persisted to ${DATA_DIR}/agent.json`)
+    if (res.source === 'registered') console.error(`orquestra: registered Reppo agent ${res.agentId} — persisted to ${DATA_DIR}/activity.db`)
     else if (res.source !== 'skipped') console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
   } catch (e) {
     console.error(`orquestra: agent registration failed — mints will error until REPPO_AGENT_ID is set (run \`reppo register-agent\`): ${(e as Error).message}`)
@@ -144,6 +144,8 @@ async function start(): Promise<void> {
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,
+    // Self-learning reflection runs on the same model as the scorer/panel.
+    learnModel: model,
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.
@@ -176,8 +178,8 @@ run().catch((e) => {
   console.error('orquestra: fatal:', err.message)
   if (err.name === 'LedgerCorruptError') {
     console.error(
-      `orquestra: the budget ledger at ${DATA_DIR}/budget-ledger.json is corrupt; the node refuses to run rather than ` +
-        `lose track of spend. Inspect it, or delete it to reset budget accounting to zero (caps restart from 0).`,
+      `orquestra: the budget ledger in ${DATA_DIR}/activity.db is corrupt; the node refuses to run rather than ` +
+        `lose track of spend. Inspect the budget_ledger row, or clear it to reset budget accounting to zero (caps restart from 0).`,
     )
   }
   process.exitCode = 1

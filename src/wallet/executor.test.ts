@@ -1,6 +1,6 @@
 // src/wallet/executor.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BudgetLedger } from './ledger.js'
@@ -101,7 +101,7 @@ describe('WalletExecutor', () => {
     const cli: ReppoCli = {
       lock: vi.fn(async () => ({ txHash: '0xlock', gasEth: 0 })),
       vote: vi.fn(async () => {
-        const persisted = JSON.parse(readFileSync(join(dir, 'budget-ledger.json'), 'utf-8'))
+        const persisted = new BudgetLedger(dir, caps).state   // reads the committed row from the DB
         countSeenByCli = persisted.votesCastThisCycle
         return { txHash: '0xvote', gasEth: 0.001 }
       }),
@@ -124,7 +124,7 @@ describe('WalletExecutor', () => {
       lock: vi.fn(async () => ({ txHash: '0xlock', gasEth: 0 })),
       vote: vi.fn(async () => ({ txHash: '0xvote', gasEth: 0 })),
       mintPod: vi.fn(async () => {
-        const persisted = JSON.parse(readFileSync(join(dir, 'budget-ledger.json'), 'utf-8'))
+        const persisted = new BudgetLedger(dir, caps).state   // reads the committed row from the DB
         reppoSeenByCli = persisted.mintReppoSpent
         return { txHash: '0xmint', gasEth: 0.01 }
       }),
