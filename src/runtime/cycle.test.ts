@@ -49,7 +49,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
       executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvote' })),
       executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
     } as unknown as CycleDeps['executor'],
-    ledger: { startCycle: vi.fn() } as unknown as CycleDeps['ledger'],
+    ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => true } as unknown as CycleDeps['ledger'],
     recordVote: vi.fn(),
     recordMint: vi.fn(),
     getEmissionsDue: async () => [],
@@ -124,6 +124,85 @@ describe('runCycle', () => {
     const d = deps()
     await runCycle(cfg, 'c3', d)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+  })
+
+  // --- observability: a structurally-incapable datanet must explain WHY it is idle ---
+  const skipReasons = (rec: ReturnType<typeof vi.fn>): string[] =>
+    rec.mock.calls.map((c) => c[0]).filter((e) => e.kind === 'skip').map((e) => e.reason as string)
+
+  it('records a skip reason when vote is enabled but the datanet has no voter rubric', async () => {
+    const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: false })) })
+    await runCycle(config, 'c-novote', d)
+    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain voter rubric/.test(r))).toBe(true)
+  })
+
+  it('records a skip reason when mint is enabled but the datanet has no publisher spec', async () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...config,
+      datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+    })
+    const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canMint: false })) })
+    await runCycle(cfg, 'c-nomint', d)
+    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(true)
+  })
+
+  it('skips vote scoring entirely when the per-cycle vote budget is already exhausted', async () => {
+    const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
+    const d = deps({
+      voteScorer: { scorePod },
+      ledger: { startCycle: vi.fn(), canVote: () => false, canMint: () => true } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(config, 'c-novotebudget', d)
+    expect(scorePod).not.toHaveBeenCalled() // no wasted LLM spend
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
+    // but the dashboard still learns why the datanet is idle
+    expect(skipReasons(d.recordActivity as any).some((r) => /vote budget\/rate exhausted/.test(r))).toBe(true)
+  })
+
+  it('skips mint discovery when the mint budget is exhausted (no wasted adapter/LLM work)', async () => {
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'p', podDescription: 'd', dataset: {} }])
+    const d = deps({
+      getAdapter: () => ({ id: 'hyperliquid', matches: () => true, discover }),
+      ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => false } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(config, 'c-nomintbudget', d)
+    expect(discover).not.toHaveBeenCalled()
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+  })
+
+  // Note: datanet 9 votes in `config`, so the mint-budget skip activity entry is
+  // suppressed for it (idleThisCycle false) — covered by the idle-suppression test above.
+
+  it('does NOT write a mint-incapability skip entry for a datanet that voted this cycle (keeps dashboard idle correct)', async () => {
+    // vote:true + mint:true, canVote true but canMint false: it votes, so it is NOT idle.
+    const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: true, canMint: false })) })
+    await runCycle(config, 'c-voted-nomint', d)
+    // votes happened (datanet 9 + 2 both vote), so no publisher-spec skip should be persisted
+    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(false)
+    expect((d.executor.executeVote as any).mock.calls.length).toBeGreaterThan(0)
+  })
+
+  it('records a skip reason when the configured adapter id is not registered', async () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...config,
+      datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'typo-adapter' } },
+    })
+    const d = deps()
+    await runCycle(cfg, 'c-badadapter', d)
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+    expect(skipReasons(d.recordActivity as any).some((r) => /adapter "typo-adapter" is not registered/.test(r))).toBe(true)
+  })
+
+  it('records a skip reason when candidates are discovered but none pass scoring/dedup', async () => {
+    // mint-only datanet (vote:false) so it is idle this cycle and the skip is surfaced.
+    const cfg = StrategyConfigSchema.parse({
+      ...config,
+      datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+    })
+    const d = deps({ candidateScorer: { scoreCandidate: async () => ({ score: 1, reason: 'weak' }) } }) // below aggressive like-threshold
+    await runCycle(cfg, 'c-allrejected', d)
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+    expect(skipReasons(d.recordActivity as any).some((r) => /discovered but none passed scoring\/dedup/.test(r))).toBe(true)
   })
 
   it('isolates a per-datanet failure: a throwing getRubric skips that datanet, others proceed', async () => {

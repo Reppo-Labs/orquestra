@@ -52,7 +52,7 @@ export const StrategyConfigSchema = z
       grantReppoMax: z.number().nonnegative().optional(),
     }),
     claimEmissions: z.boolean().default(true),
-    // Multi-agent panel deliberation (see docs/superpowers/specs/2026-06-11-multi-agent-decisions-design.md).
+    // Multi-agent panel deliberation (personas + judge; see src/panel/).
     // Defaulted so configs written before this feature load unchanged.
     deliberation: z
       .object({

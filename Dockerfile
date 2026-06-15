@@ -20,6 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
+# The dashboard bind is NOT set here on purpose: the code defaults to 127.0.0.1
+# (loopback), so a bare `docker run -p 7070:7070 <image>` does NOT expose the
+# unauthenticated panel (ADR 0002). The provided docker-compose.yml sets
+# DASHBOARD_HOST=0.0.0.0 itself, because its `127.0.0.1:7070:7070` host mapping forwards
+# to the container's bridge IP — there the host mapping is the exposure boundary, and
+# the override lives next to it. Do NOT bake 0.0.0.0 into the image default.
 ENV ORQUESTRA_DATA_DIR=/data DASHBOARD_PORT=7070
 # Ownership BEFORE `VOLUME /data` — filesystem changes after a VOLUME declaration
 # are discarded by some builders (kaniko, buildah, legacy). With this ordering the

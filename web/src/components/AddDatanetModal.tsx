@@ -45,7 +45,7 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
 
   return (
     <div className="modal-scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Add a datanet" onClick={(e) => e.stopPropagation()}>
         <h3>Add a datanet</h3>
         <div className="sub">Point the node at another Reppo datanet. It activates on the next cycle once you save.</div>
         <div className="fields">
@@ -68,8 +68,12 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
           <div className="field">
             <span>actions</span>
             <div className="row">
-              <span className={`chip-toggle vote ${vote ? 'on' : ''}`} onClick={() => setVote((v) => !v)}>vote</span>
-              <span className={`chip-toggle mint ${mint ? 'on' : ''}`} onClick={() => setMint((v) => !v)}>mint</span>
+              <span role="button" tabIndex={0} aria-pressed={vote} className={`chip-toggle vote ${vote ? 'on' : ''}`}
+                onClick={() => setVote((v) => !v)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setVote((v) => !v) } }}>vote</span>
+              <span role="button" tabIndex={0} aria-pressed={mint} className={`chip-toggle mint ${mint ? 'on' : ''}`}
+                onClick={() => setMint((v) => !v)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMint((v) => !v) } }}>mint</span>
             </div>
           </div>
 

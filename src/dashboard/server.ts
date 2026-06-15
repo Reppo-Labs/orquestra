@@ -46,7 +46,7 @@ function staticFile(publicDir: string, url: string): string | null {
   try { return statSync(path).isFile() ? path : null } catch { return null }
 }
 
-export interface DashboardHandle { close(): Promise<void>; port: number }
+export interface DashboardHandle { close(): Promise<void>; port: number; host: string }
 
 /** A safe subset of strategy.config.json — explicitly whitelisted fields only. */
 function safeConfig(dataDir: string): Record<string, unknown> {
@@ -159,6 +159,13 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         if (msg) session.messages.push({ role: 'user', content: msg })
         const r = await turn(session.messages)
         session.messages.push(...r.responseMessages)
+        // Bound the retained transcript: onboarding is a short first-run window, so a very
+        // long (or scripted/hostile) chat should not grow memory or per-turn token cost
+        // without limit. Keep the seed system message + the most recent turns.
+        const MAX_ONBOARDING_MESSAGES = 60
+        if (session.messages.length > MAX_ONBOARDING_MESSAGES) {
+          session.messages = [session.messages[0], ...session.messages.slice(-(MAX_ONBOARDING_MESSAGES - 1))]
+        }
         if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
         if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
         json(res, 200, { reply: r.text, draft: session.draft, finalized: session.finalized })
@@ -180,9 +187,18 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
         const messages = (body as { messages?: ChatMessage[] })?.messages
         if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
-        const currentRaw = JSON.parse(readFileSync(join(dataDir, 'strategy.config.json'), 'utf-8')) as unknown
-        const current = StrategyConfigSchema.parse(currentRaw)
-        const result = await runStrategyChat({ messages, currentConfig: current, model: opts.chatModel })
+        // Tolerant read (mirrors safeConfig / the write path): a missing or corrupt
+        // config returns a clean 409 rather than a 500 that leaks the data-dir path.
+        const cfgPath = join(dataDir, 'strategy.config.json')
+        if (!existsSync(cfgPath)) { json(res, 409, { error: 'no strategy config yet — finish onboarding before using the assistant' }); return }
+        let parsedCfg
+        try {
+          parsedCfg = StrategyConfigSchema.safeParse(JSON.parse(readFileSync(cfgPath, 'utf-8')))
+        } catch {
+          json(res, 409, { error: 'strategy config is unreadable — fix or re-onboard before using the assistant' }); return
+        }
+        if (!parsedCfg.success) { json(res, 409, { error: 'strategy config is invalid — fix or re-onboard before using the assistant' }); return }
+        const result = await runStrategyChat({ messages, currentConfig: parsedCfg.data, model: opts.chatModel })
         json(res, 200, result)
         return
       }
@@ -246,8 +262,15 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
   }
 }
 
-/** Start the read-only dashboard server. Binds 0.0.0.0 (docker -p maps the port);
- *  restrict exposure with `-p 127.0.0.1:7070:7070`. */
+/** Start the dashboard server. Binds DASHBOARD_HOST, defaulting to loopback
+ *  (127.0.0.1) so a bare `node dist/index.js` or any run that does NOT set
+ *  DASHBOARD_HOST keeps the unauthenticated config/onboarding panel off the network
+ *  (ADR 0002). NOTE: the published Docker image sets DASHBOARD_HOST=0.0.0.0 (the
+ *  compose `127.0.0.1:7070:7070` mapping forwards to the container's bridge IP, not
+ *  its loopback, so the server must bind all interfaces for that mapping to work). In
+ *  Docker the host-side `127.0.0.1:` port mapping — NOT the bind — is the boundary, so
+ *  `docker run -p 7070:7070 <image>` (no `127.0.0.1:` prefix) WOULD expose the panel.
+ *  Operators who must expose it deliberately set DASHBOARD_HOST and should add auth first. */
 export interface DashboardOpts {
   chatModel?: LanguageModel
   /** Override the built-SPA dir (defaults to `public/` beside this file); tests use this. */
@@ -259,11 +282,14 @@ export interface DashboardOpts {
 export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
   const session: OnboardingSession = { messages: [], draft: null, finalized: null }
   const server = createServer((req, res) => { void handle(dataDir, req, res, opts, session) })
+  // Default to loopback (see interface doc). The Docker image overrides via DASHBOARD_HOST=0.0.0.0.
+  const host = process.env.DASHBOARD_HOST ?? '127.0.0.1'
   return new Promise((resolve) => {
-    server.listen(port, () => {
-      const actual = (server.address() as AddressInfo).port
+    server.listen(port, host, () => {
+      const addr = server.address() as AddressInfo
       resolve({
-        port: actual,
+        port: addr.port,
+        host: addr.address,
         close: () => new Promise<void>((r) => server.close(() => r())),
       })
     })

@@ -8,7 +8,25 @@ on:
       - 'v*'
 
 jobs:
+  # Gate the publish: a tag cut from a commit that typechecks/builds but fails tests
+  # must NOT ship to operators who pull :latest against their funded wallet. The
+  # Dockerfile build only compiles, it never runs the suite — so run it here.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm --prefix web ci
+      - run: npm --prefix web run test
+
   image:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

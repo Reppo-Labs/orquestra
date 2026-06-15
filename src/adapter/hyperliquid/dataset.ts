@@ -138,6 +138,8 @@ export function buildHlDataset(wallet: string, rawFills: unknown, datanetId: str
   const trips = aggregateRoundTrips(fills)
   if (trips.length === 0) return null
 
+  // win_rate is wins / ALL round-trips. A break-even trip (pnl == 0, rare with real
+  // fees) counts as a non-win, so win_rate is a slightly conservative published metric.
   const wins = trips.filter((t) => t.pnl > 0).length
   const winRate = Math.round((wins / trips.length) * 10000) / 100
   const sumPnl = trips.reduce((a, t) => a + t.pnl, 0)

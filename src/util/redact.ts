@@ -47,6 +47,8 @@ export function redactSecrets(s: string): string {
     .replace(QUICKNODE, '$1<redacted>')
     // bearer tokens / JWTs
     .replace(/(Bearer )\S+/g, '$1<redacted>')
-    // Surplus (inf_) and Virtuals (acp_) api keys — length floor avoids prose like "inf_"
-    .replace(/\b(inf|acp)_[A-Za-z0-9]{12,}/g, '$1_<redacted>')
+    // Surplus (inf_) and Virtuals (acp_ / acp-) api keys. Tolerate BOTH `_` and `-`
+    // separators: provider docs are inconsistent on the Virtuals prefix, and matching
+    // only `_` would silently leak a real `acp-…` key. Length floor avoids prose like "inf_".
+    .replace(/\b(inf|acp)[_-][A-Za-z0-9]{12,}/gi, (m) => `${m.slice(0, 4)}<redacted>`)
 }
