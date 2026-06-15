@@ -31,6 +31,20 @@ export function sumReppoOutflow(logs: Log[], from: string, reppoToken: string): 
   return total
 }
 
+/** Sum (in wei) the `reppoToken` transferred TO `to` across these logs — the mirror of
+ *  sumReppoOutflow, used to read how much REPPO a claim tx paid the claimer (the CLI and
+ *  PodManager V2 expose no claimed-amount, so we read it from the receipt). */
+export function sumReppoInflow(logs: Log[], to: string, reppoToken: string): bigint {
+  let total = 0n
+  for (const log of logs) {
+    if (!eq(log.address, reppoToken)) continue
+    if (log.topics[0] !== TRANSFER_TOPIC) continue
+    if (!eq(addrFromTopic(log.topics[2]), to)) continue // topics[2] = `to`
+    total += BigInt(log.data)
+  }
+  return total
+}
+
 interface ReadOpts {
   /** Injected for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch
@@ -82,6 +96,26 @@ export async function readMintReppoFee(rpcUrl: string, txHash: string, opts: Rea
     // A transport/RPC error (vs a feeless tx): surface it so a misconfigured or
     // rate-limited RPC is distinguishable from a genuinely zero-fee mint.
     console.warn(`orquestra: mint-fee RPC read failed for ${txHash} — ${(e as Error).message}`)
+    return undefined
+  }
+}
+
+/** Read the REPPO a landed claim-emissions tx actually paid the claimer, by summing the
+ *  REPPO that arrived at the signer's wallet (PodManager V2 / the CLI expose no claimed
+ *  amount). Returns undefined on any failure so the caller can fall back. Same signature
+ *  shape as readMintReppoFee → reusable as a ReppoFeeReader. */
+export async function readClaimedReppo(rpcUrl: string, txHash: string, opts: ReadOpts = {}): Promise<number | undefined> {
+  const fetchImpl = opts.fetchImpl ?? fetch
+  const reppoToken = opts.reppoToken ?? REPPO_TOKEN_MAINNET
+  try {
+    const tx = await rpcCall(fetchImpl, rpcUrl, 'eth_getTransactionByHash', [txHash])
+    if (!tx?.from) return undefined
+    const receipt = await rpcCall(fetchImpl, rpcUrl, 'eth_getTransactionReceipt', [txHash])
+    if (!receipt?.logs || receipt.status !== '0x1') return undefined
+    const wei = sumReppoInflow(receipt.logs, tx.from, reppoToken)
+    return weiToReppo(wei)
+  } catch (e) {
+    console.warn(`orquestra: claim-amount RPC read failed for ${txHash} — ${(e as Error).message}`)
     return undefined
   }
 }
