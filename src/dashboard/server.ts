@@ -214,7 +214,7 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         // persisted exactly like the CLI flow. The waiting node sees the file appear.
         const v = validateAnswers(body)
         if (!v.ok) { json(res, 400, { error: v.error }); return }
-        persistOnboarding(dataDir, buildStrategyConfig(v.answers), v.answers.notes)
+        persistOnboarding(dataDir, buildStrategyConfig(v.answers))
         session.messages = []; session.draft = null; session.finalized = null
         json(res, 200, { saved: true })
         return

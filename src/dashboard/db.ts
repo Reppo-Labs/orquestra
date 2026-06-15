@@ -2,7 +2,7 @@
 // Single owner of the node's SQLite database. ALL persistent state lives here in
 // one file (activity.db — the name is legacy; it is now the unified store): activity
 // history, stats (earn_status, snapshot), operational state (budget_ledger, dedup),
-// config/identity (config, notes, agent), and the self-learning tables (outcomes,
+// config/identity (config, agent), and the self-learning tables (outcomes,
 // lessons, proposals, learn_flags). No runtime state is read from or written to
 // JSON/MD files; each former file is imported once by its store module then renamed
 // `.imported`.
@@ -52,9 +52,6 @@ CREATE TABLE IF NOT EXISTS dedup (
 
 CREATE TABLE IF NOT EXISTS config (
   id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL, updatedTs TEXT
-);
-CREATE TABLE IF NOT EXISTS notes (
-  id INTEGER PRIMARY KEY CHECK (id = 1), text TEXT NOT NULL, updatedTs TEXT
 );
 CREATE TABLE IF NOT EXISTS agent (
   id INTEGER PRIMARY KEY CHECK (id = 1), agentId TEXT, apiKey TEXT
