@@ -49,7 +49,7 @@ async function onboard(): Promise<void> {
       },
       getBalance: () => queryBalanceJson(),
     })
-    persistOnboarding(DATA_DIR, buildStrategyConfig(answers), answers.notes)
+    persistOnboarding(DATA_DIR, buildStrategyConfig(answers))
     p.info(`Saved strategy to ${DATA_DIR}. Run \`orquestra\` to start the node.`)
   } finally {
     p.close()

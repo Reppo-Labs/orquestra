@@ -25,7 +25,7 @@ describe('db (shared SQLite owner)', () => {
       .map((r) => r.name)
     for (const t of [
       'activity', 'earn_status', 'snapshot', 'budget_ledger', 'dedup',
-      'config', 'notes', 'agent', 'outcomes', 'lessons', 'proposals', 'learn_flags',
+      'config', 'agent', 'outcomes', 'lessons', 'proposals', 'learn_flags',
     ]) {
       expect(names).toContain(t)
     }

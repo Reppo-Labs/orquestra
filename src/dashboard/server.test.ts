@@ -7,7 +7,6 @@ import { startDashboard, type DashboardHandle } from './server.js'
 import { appendActivity } from './activityLog.js'
 import { writeEarnStatus } from './earnStatus.js'
 import { writeConfig, readConfigText } from '../config/load.js'
-import { readNotes } from '../onboarding/persist.js'
 
 let dir: string
 let handle: DashboardHandle
@@ -277,7 +276,7 @@ describe('onboarding API', () => {
     expect(ok.body).toMatchObject({ saved: true })
     const saved = JSON.parse(readConfigText(freshDir)!)
     expect(saved.cadenceHours).toBe(6)
-    expect(readNotes(freshDir)).toMatch(/dashboard onboarding test/)
+    expect(saved.notes).toMatch(/dashboard onboarding test/) // brief lives in config.notes
     expect((await onbGet('/api/onboarding/status')).body.needed).toBe(false)
   })
 })
