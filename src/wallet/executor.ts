@@ -29,6 +29,9 @@ export class WalletExecutor {
     private readonly ledger: BudgetLedger,
     /** When set, mint REPPO spend is reconciled to the on-chain fee (CLI omits it). */
     private readonly reppoFeeReader?: ReppoFeeReader,
+    /** When set, the REPPO a claim actually paid is read from the tx receipt (CLI omits it),
+     *  so the activity log / dashboard show real claimed amounts instead of 0. */
+    private readonly claimReppoReader?: ReppoFeeReader,
   ) {}
 
   /** One-time veREPPO lock for voting power. Not budget-gated. */
@@ -143,7 +146,10 @@ export class WalletExecutor {
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
       this.ledger.reconcileClaim(res, r.gasEth)
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
+      // Read the actual REPPO claimed from the tx receipt (CLI/contract omit it) so the
+      // activity log + dashboard show real amounts. Best-effort — undefined on read failure.
+      const reppoClaimed = this.claimReppoReader ? await this.claimReppoReader(r.txHash) : undefined
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)
       return { ok: false, status: 'error', detail: (e as Error).message }

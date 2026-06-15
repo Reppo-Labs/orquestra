@@ -282,7 +282,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       claims.push(r)
       deps.recordActivity({
         ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
-        podId: em.podId, epoch: em.epoch, reppoClaimed: em.reppo,
+        // Prefer the actual claimed REPPO read from the tx receipt (em.reppo is 0 under
+        // on-chain detection — PodManager V2 has no pre-claim amount view).
+        podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
         status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
       })
       // Record dedup ONLY on confirmed execution: a transiently-failed claim SHOULD retry

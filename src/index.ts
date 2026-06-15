@@ -15,7 +15,7 @@ import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
 import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
 import { defaultReppoCli } from './reppo/cli.js'
-import { readMintReppoFee } from './reppo/mintFee.js'
+import { readMintReppoFee, readClaimedReppo } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
@@ -140,7 +140,8 @@ async function start(): Promise<void> {
   // CLI uses; no RPC configured => reader omitted (mint spend keeps the reserved est).
   const rpcUrl = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
   const reppoFeeReader = rpcUrl ? (txHash: string) => readMintReppoFee(rpcUrl, txHash) : undefined
-  const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader)
+  const claimReppoReader = rpcUrl ? (txHash: string) => readClaimedReppo(rpcUrl, txHash) : undefined
+  const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader, claimReppoReader)
   // A mint reserves a conservative MINT_REPPO_FALLBACK against mintReppoMax before
   // signing (refuse-before, not after). If the cap is below one such reserve, EVERY
   // mint is refused — warn loudly so the operator isn't left wondering why nothing mints.

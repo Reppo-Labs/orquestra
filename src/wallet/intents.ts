@@ -60,5 +60,7 @@ export interface ExecResult {
   txHash?: string
   /** actual gas (ETH) when known; surfaced for the activity log. */
   gasEth?: number
+  /** actual REPPO claimed (read from the claim tx receipt; CLI/contract omit it). */
+  reppoClaimed?: number
   detail?: string
 }

@@ -1,6 +1,6 @@
 // src/reppo/mintFee.test.ts
 import { describe, it, expect } from 'vitest'
-import { sumReppoOutflow, readMintReppoFee, REPPO_TOKEN_MAINNET } from './mintFee.js'
+import { sumReppoOutflow, sumReppoInflow, readMintReppoFee, readClaimedReppo, REPPO_TOKEN_MAINNET } from './mintFee.js'
 
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 const WALLET = '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64'
@@ -62,6 +62,21 @@ describe('sumReppoOutflow', () => {
   })
 })
 
+describe('sumReppoInflow (claim amount = REPPO arriving at the claimer)', () => {
+  it('sums REPPO transferred TO the wallet', () => {
+    const logs = [transferLog(REPPO_TOKEN_MAINNET, POD_MGR, WALLET, 5n)]
+    expect(sumReppoInflow(logs, WALLET, REPPO_TOKEN_MAINNET)).toBe(5n * 10n ** 18n)
+  })
+  it('ignores transfers FROM the wallet and other tokens', () => {
+    const logs = [
+      transferLog(REPPO_TOKEN_MAINNET, WALLET, POD_MGR, 9n), // outflow — must not count
+      transferLog(OTHER_TOKEN, POD_MGR, WALLET, 9n),         // wrong token
+      transferLog(REPPO_TOKEN_MAINNET, POD_MGR, WALLET, 5n), // the claim payout
+    ]
+    expect(sumReppoInflow(logs, WALLET, REPPO_TOKEN_MAINNET)).toBe(5n * 10n ** 18n)
+  })
+})
+
 // A fake JSON-RPC endpoint: maps method -> result. Mirrors the two calls the
 // reader makes (eth_getTransactionByHash for the signer, eth_getTransactionReceipt
 // for the logs).
@@ -104,5 +119,24 @@ describe('readMintReppoFee', () => {
   it('returns undefined when the tx is not found (null result)', async () => {
     const fee = await readMintReppoFee('https://rpc', '0xmint', { fetchImpl: fakeRpc(null, null) })
     expect(fee).toBeUndefined()
+  })
+})
+
+describe('readClaimedReppo', () => {
+  it('returns the REPPO the claim paid the claimer (inflow to the signer)', async () => {
+    const logs = [transferLog(REPPO_TOKEN_MAINNET, POD_MGR, WALLET, 5n)]
+    const amt = await readClaimedReppo('https://rpc', '0xclaim', { fetchImpl: fakeRpc(txOf(WALLET), receiptOf(logs)) })
+    expect(amt).toBe(5)
+  })
+  it('preserves fractional precision', async () => {
+    const wei = 50233n * 10n ** 14n // 5.0233 REPPO
+    const fracLog = { address: REPPO_TOKEN_MAINNET, topics: [TRANSFER, topic(POD_MGR), topic(WALLET)], data: '0x' + wei.toString(16).padStart(64, '0') }
+    const amt = await readClaimedReppo('https://rpc', '0xclaim', { fetchImpl: fakeRpc(txOf(WALLET), receiptOf([fracLog])) })
+    expect(amt).toBeCloseTo(5.0233, 6)
+  })
+  it('returns undefined on a reverted claim', async () => {
+    const logs = [transferLog(REPPO_TOKEN_MAINNET, POD_MGR, WALLET, 5n)]
+    const amt = await readClaimedReppo('https://rpc', '0xclaim', { fetchImpl: fakeRpc(txOf(WALLET), receiptOf(logs, '0x0')) })
+    expect(amt).toBeUndefined()
   })
 })
