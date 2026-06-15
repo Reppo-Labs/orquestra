@@ -13,7 +13,7 @@ const baseConfig = () => ({
   horizonDays: 30, cadenceHours: 1, claimEmissions: true,
   stake: { lockReppo: 0, lockDurationDays: 30 },
   budget: { voteRateMaxPerCycle: 30, mintReppoMax: 500 },
-  deliberation: { enabled: true, voteBand: 1 },
+  deliberation: { enabled: true, votePanel: true },
   datanets: { '9': { vote: true, mint: true, strictness: 'balanced' } }, notes: '',
 })
 

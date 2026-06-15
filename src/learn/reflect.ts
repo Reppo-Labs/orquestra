@@ -24,14 +24,14 @@ const STRICTNESS = ['conservative', 'balanced', 'aggressive'] as const
 export const ReflectionSchema = z.object({
   lessons: z.array(z.string().max(200)).max(5),
   proposals: z.array(z.object({
-    field: z.enum(['strictness', 'voteBand']),
+    field: z.enum(['strictness']),
     toValue: z.string(),
     rationale: z.string().max(200),
   })).max(2),
 })
 export type Reflection = z.infer<typeof ReflectionSchema>
 
-export interface CurrentTunables { strictness: string; voteBand: number }
+export interface CurrentTunables { strictness: string }
 
 /** Pure: build the (system, prompt) for the reflection call from stats only. */
 export function buildReflectionPrompt(datanetLabel: string, stats: LearnStats, current: CurrentTunables): { system: string; prompt: string } {
@@ -43,12 +43,12 @@ export function buildReflectionPrompt(datanetLabel: string, stats: LearnStats, c
     '"high-conviction calls on Y held up"). They MUST NOT instruct following, matching, or predicting crowd ' +
     'consensus — chasing the majority defeats early rubric-correct curation. ' +
     '(3) If the sample is small or the signal is weak, return FEWER or ZERO lessons — never invent a pattern. ' +
-    '(4) You MAY propose at most 2 config tweaks (strictness or voteBand) ONLY when a number clearly justifies it; ' +
+    '(4) You MAY propose at most 2 strictness tweaks (conservative/balanced/aggressive) ONLY when a number clearly justifies it; ' +
     'an operator reviews every proposal before it applies. ' +
     INJECTION_GUARD
   const prompt =
     `# Datanet ${datanetLabel} — calibration over the last ${stats.sampleEpochs} epoch(s), ${stats.maturedTotal} matured decision(s)\n` +
-    `## Current config\nstrictness=${current.strictness}, voteBand=${current.voteBand}\n` +
+    `## Current config\nstrictness=${current.strictness}\n` +
     `## Vote/crowd alignment (a calibration check, NOT a target)\n` +
     `- votes: ${stats.voteTotal}, aligned ${stats.voteAlignmentPct}%\n` +
     `- up-votes: ${stats.upVoteTotal}, aligned ${stats.upVoteAlignedPct}%\n` +
@@ -82,7 +82,6 @@ export async function runReflection(
 
   const current: CurrentTunables = {
     strictness: config.datanets[datanetId]?.strictness ?? 'balanced',
-    voteBand: config.deliberation?.voteBand ?? 1,
   }
   const reflection = await reflect(model, datanetId, stats, current)
 
@@ -105,13 +104,10 @@ export async function runReflection(
 
   if (stats.maturedTotal < MIN_SAMPLE_PROPOSAL) return // not enough evidence for config changes
   for (const p of reflection.proposals) {
-    if (p.field === 'strictness') {
-      if (!(STRICTNESS as readonly string[]).includes(p.toValue) || p.toValue === current.strictness) continue
-      insertProposal(dataDir, { datanetId, field: 'strictness', fromValue: current.strictness, toValue: p.toValue, rationale: p.rationale, basisConfigMtime: now, createdEpoch: currentEpoch, createdTs: now })
-    } else {
-      const n = Number(p.toValue)
-      if (!Number.isInteger(n) || n < 0 || n > 4 || n === current.voteBand) continue
-      insertProposal(dataDir, { datanetId, field: 'voteBand', fromValue: String(current.voteBand), toValue: String(n), rationale: p.rationale, basisConfigMtime: now, createdEpoch: currentEpoch, createdTs: now })
-    }
+    // strictness is the only operator-tunable the node may propose (votePanel is an
+    // all-or-none switch, not something to gradually tune).
+    if (p.field !== 'strictness') continue
+    if (!(STRICTNESS as readonly string[]).includes(p.toValue) || p.toValue === current.strictness) continue
+    insertProposal(dataDir, { datanetId, field: 'strictness', fromValue: current.strictness, toValue: p.toValue, rationale: p.rationale, basisConfigMtime: now, createdEpoch: currentEpoch, createdTs: now })
   }
 }

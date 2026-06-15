@@ -23,13 +23,13 @@ const stats = (over: Partial<LearnStats> = {}): LearnStats => ({
 const cfg = () => StrategyConfigSchema.parse({
   horizonDays: 30, cadenceHours: 6, stake: { lockReppo: 0, lockDurationDays: 30 },
   budget: { voteRateMaxPerCycle: 30, mintReppoMax: 100 },
-  deliberation: { enabled: true, voteBand: 1 },
+  deliberation: { enabled: true, votePanel: true },
   datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } },
 })
 
 describe('buildReflectionPrompt (pure)', () => {
   it('embeds the numbers and forbids consensus-following', () => {
-    const { system, prompt } = buildReflectionPrompt('9', stats(), { strictness: 'balanced', voteBand: 1 })
+    const { system, prompt } = buildReflectionPrompt('9', stats(), { strictness: 'balanced' })
     expect(prompt).toContain('aligned 60%')
     expect(prompt).toContain('high-conviction reversals')
     expect(system).toMatch(/MUST NOT instruct following, matching, or predicting crowd/i)
@@ -85,11 +85,11 @@ describe('runReflection', () => {
     expect(props[0]).toMatchObject({ field: 'strictness', fromValue: 'balanced', toValue: 'conservative' })
   })
 
-  it('drops a proposal that does not change the current value or is out of range', async () => {
+  it('drops a no-op or invalid strictness proposal', async () => {
     seed(MIN_SAMPLE_PROPOSAL)
     gen.mockResolvedValue({ lessons: [], proposals: [
-      { field: 'strictness', toValue: 'balanced', rationale: 'no-op' },   // == current → dropped
-      { field: 'voteBand', toValue: '9', rationale: 'out of range' },     // >4 → dropped
+      { field: 'strictness', toValue: 'balanced', rationale: 'no-op' },        // == current → dropped
+      { field: 'strictness', toValue: 'ultra-strict', rationale: 'not a level' }, // invalid → dropped
     ] })
     await runReflection(dir, {} as never, '9', cfg(), 101)
     expect(readProposals(dir, { status: 'pending' })).toHaveLength(0)

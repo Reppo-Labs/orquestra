@@ -39,7 +39,7 @@ export function LearningTab({ netNames, onConfigChanged }: {
     <div key="learning">
       <div className="sec-head"><h2>Proposed changes</h2><div className="rule" /></div>
       {data.proposals.length === 0 ? (
-        <div className="empty">no pending proposals — the node suggests a strictness / voteBand change only when its own outcomes clearly justify one</div>
+        <div className="empty">no pending proposals — the node suggests a strictness change only when its own outcomes clearly justify one</div>
       ) : (
         data.proposals.map((p) => <ProposalCard key={p.id} p={p} label={label(p.datanetId)} busy={busy} onDecide={decide} />)
       )}

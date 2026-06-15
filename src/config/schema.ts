@@ -57,10 +57,11 @@ export const StrategyConfigSchema = z
     deliberation: z
       .object({
         enabled: z.boolean().default(true),
-        // ± band around the like/dislike thresholds that convenes a vote panel; 0 = mints only.
-        voteBand: z.number().int().min(0).max(4).default(1),
+        // All votes go to the panel when true; false = panel for mints only (votes use
+        // the single scorer). Mints always use the panel while `enabled`.
+        votePanel: z.boolean().default(true),
       })
-      .default({ enabled: true, voteBand: 1 }),
+      .default({ enabled: true, votePanel: true }),
     datanets: z.record(z.string(), DatanetPolicy),
     notes: z.string().default(''),
   })
