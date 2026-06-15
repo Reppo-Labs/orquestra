@@ -8,8 +8,11 @@ datanets (the template program), prove a *good* pod earns.
 1. Deploy the redesigned adapter (design:
    `../superpowers/specs/2026-06-06-orquestra-hl-adapter-redesign-design.md`) to the
    live node — rebuild the image and redeploy.
-2. Keep budget caps small (current: `mintReppoMax` 50, `mintGasEthMax` 0.01). Mint gas on
-   Base is negligible (~0.0000013 ETH/tx observed), so exposure is tiny.
+2. Keep budget caps small, but note each mint reserves a conservative ~200 REPPO
+   against `mintReppoMax` before signing (the CLI omits the fee; the node assumes the
+   max observed unless `RPC_URL` is set to read the real one). So `mintReppoMax` must be
+   ≥ ~200 to mint at all — use e.g. `mintReppoMax` 400 for a few test mints. Mint gas on
+   Base is negligible (~0.0000013 ETH/tx observed), so gas exposure is tiny.
 3. Let the node run; confirm it mints a handful of pods on datanet 9 (dashboard →
    Activity → kind=mint, status=executed). If it mints 0, the quality gate is rejecting
    everything → revisit params (`openLookbackDays`, `minRoundTrips`) or data sourcing.

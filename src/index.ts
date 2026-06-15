@@ -13,7 +13,7 @@ import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } fro
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
-import { WalletExecutor } from './wallet/executor.js'
+import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
 import { defaultReppoCli } from './reppo/cli.js'
 import { readMintReppoFee } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
@@ -141,6 +141,18 @@ async function start(): Promise<void> {
   const rpcUrl = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
   const reppoFeeReader = rpcUrl ? (txHash: string) => readMintReppoFee(rpcUrl, txHash) : undefined
   const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader)
+  // A mint reserves a conservative MINT_REPPO_FALLBACK against mintReppoMax before
+  // signing (refuse-before, not after). If the cap is below one such reserve, EVERY
+  // mint is refused — warn loudly so the operator isn't left wondering why nothing mints.
+  const mintEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
+  if (mintEnabled && config.budget.mintReppoMax < MINT_REPPO_FALLBACK) {
+    console.error(
+      `orquestra: WARNING — budget.mintReppoMax (${config.budget.mintReppoMax}) is below the conservative ` +
+        `per-mint reserve (${MINT_REPPO_FALLBACK} REPPO), so every mint will be refused before signing. ` +
+        `Raise mintReppoMax to at least ${MINT_REPPO_FALLBACK}` +
+        (reppoFeeReader ? '' : ', or set RPC_URL so the cap tracks the real (often lower) fee') + ' to mint.',
+    )
+  }
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,

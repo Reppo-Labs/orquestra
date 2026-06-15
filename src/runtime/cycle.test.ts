@@ -126,6 +126,58 @@ describe('runCycle', () => {
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
   })
 
+  // --- observability: a structurally-incapable datanet must explain WHY it is idle ---
+  const skipReasons = (rec: ReturnType<typeof vi.fn>): string[] =>
+    rec.mock.calls.map((c) => c[0]).filter((e) => e.kind === 'skip').map((e) => e.reason as string)
+
+  it('records a skip reason when vote is enabled but the datanet has no voter rubric', async () => {
+    const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: false })) })
+    await runCycle(config, 'c-novote', d)
+    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain voter rubric/.test(r))).toBe(true)
+  })
+
+  it('records a skip reason when mint is enabled but the datanet has no publisher spec', async () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...config,
+      datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+    })
+    const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canMint: false })) })
+    await runCycle(cfg, 'c-nomint', d)
+    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(true)
+  })
+
+  it('does NOT write a mint-incapability skip entry for a datanet that voted this cycle (keeps dashboard idle correct)', async () => {
+    // vote:true + mint:true, canVote true but canMint false: it votes, so it is NOT idle.
+    const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: true, canMint: false })) })
+    await runCycle(config, 'c-voted-nomint', d)
+    // votes happened (datanet 9 + 2 both vote), so no publisher-spec skip should be persisted
+    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(false)
+    expect((d.executor.executeVote as any).mock.calls.length).toBeGreaterThan(0)
+  })
+
+  it('records a skip reason when the configured adapter id is not registered', async () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...config,
+      datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'typo-adapter' } },
+    })
+    const d = deps()
+    await runCycle(cfg, 'c-badadapter', d)
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+    expect(skipReasons(d.recordActivity as any).some((r) => /adapter "typo-adapter" is not registered/.test(r))).toBe(true)
+  })
+
+  it('records a skip reason when candidates are discovered but none pass scoring/dedup', async () => {
+    // mint-only datanet (vote:false) so it is idle this cycle and the skip is surfaced.
+    const cfg = StrategyConfigSchema.parse({
+      ...config,
+      datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+    })
+    const d = deps({ candidateScorer: { scoreCandidate: async () => ({ score: 1, reason: 'weak' }) } }) // below aggressive like-threshold
+    await runCycle(cfg, 'c-allrejected', d)
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+    expect(skipReasons(d.recordActivity as any).some((r) => /discovered but none passed scoring\/dedup/.test(r))).toBe(true)
+  })
+
   it('isolates a per-datanet failure: a throwing getRubric skips that datanet, others proceed', async () => {
     const d = deps({
       getRubric: vi.fn(async (id: string) => {

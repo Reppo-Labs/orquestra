@@ -121,15 +121,37 @@ export interface DashData {
   netNames: Record<string, string>
 }
 
+/** Fetch JSON, returning `fallback` on any HTTP error or network/parse failure.
+ *  A 500 body is `{ error }` (server.ts), not the expected shape — without the r.ok
+ *  guard that object would poison state (e.g. a non-array `activity` crashes the
+ *  Activity tab on `.filter`). Degrade to a safe fallback instead. */
+async function getJson<T>(url: string, fallback: T): Promise<T> {
+  try {
+    const r = await fetch(url)
+    if (!r.ok) return fallback
+    return (await r.json()) as T
+  } catch {
+    return fallback
+  }
+}
+
 export async function loadAll(): Promise<DashData> {
   const [pnlRes, activity, config, earn, netNames] = await Promise.all([
-    fetch('/api/pnl').then((r) => r.json()),
-    fetch('/api/activity').then((r) => r.json()),
-    fetch('/api/config').then((r) => r.json()),
-    fetch('/api/earn').then((r) => r.json()).catch(() => null),
-    fetch('/api/datanets').then((r) => r.json()).catch(() => ({})),
+    getJson<{ pnl?: Pnl | null; snapshot?: Snapshot | null }>('/api/pnl', {}),
+    getJson<ActivityRow[]>('/api/activity', []),
+    getJson<StrategyConfig>('/api/config', {}),
+    getJson<Earn | null>('/api/earn', null),
+    getJson<Record<string, string>>('/api/datanets', {}),
   ])
-  return { pnl: pnlRes.pnl, snapshot: pnlRes.snapshot, activity, config, earn, netNames: netNames || {} }
+  return {
+    pnl: pnlRes.pnl ?? null,
+    snapshot: pnlRes.snapshot ?? null,
+    // Array.isArray guard: even a 200 must never hand a non-array to consumers that .filter/.map it.
+    activity: Array.isArray(activity) ? activity : [],
+    config: config ?? {},
+    earn,
+    netNames: netNames || {},
+  }
 }
 
 export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {

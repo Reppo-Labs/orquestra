@@ -46,7 +46,7 @@ function staticFile(publicDir: string, url: string): string | null {
   try { return statSync(path).isFile() ? path : null } catch { return null }
 }
 
-export interface DashboardHandle { close(): Promise<void>; port: number }
+export interface DashboardHandle { close(): Promise<void>; port: number; host: string }
 
 /** A safe subset of strategy.config.json — explicitly whitelisted fields only. */
 function safeConfig(dataDir: string): Record<string, unknown> {
@@ -246,8 +246,15 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
   }
 }
 
-/** Start the read-only dashboard server. Binds 0.0.0.0 (docker -p maps the port);
- *  restrict exposure with `-p 127.0.0.1:7070:7070`. */
+/** Start the dashboard server. Binds DASHBOARD_HOST, defaulting to loopback
+ *  (127.0.0.1) so a bare `node dist/index.js` or any run that does NOT set
+ *  DASHBOARD_HOST keeps the unauthenticated config/onboarding panel off the network
+ *  (ADR 0002). NOTE: the published Docker image sets DASHBOARD_HOST=0.0.0.0 (the
+ *  compose `127.0.0.1:7070:7070` mapping forwards to the container's bridge IP, not
+ *  its loopback, so the server must bind all interfaces for that mapping to work). In
+ *  Docker the host-side `127.0.0.1:` port mapping — NOT the bind — is the boundary, so
+ *  `docker run -p 7070:7070 <image>` (no `127.0.0.1:` prefix) WOULD expose the panel.
+ *  Operators who must expose it deliberately set DASHBOARD_HOST and should add auth first. */
 export interface DashboardOpts {
   chatModel?: LanguageModel
   /** Override the built-SPA dir (defaults to `public/` beside this file); tests use this. */
@@ -259,11 +266,14 @@ export interface DashboardOpts {
 export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
   const session: OnboardingSession = { messages: [], draft: null, finalized: null }
   const server = createServer((req, res) => { void handle(dataDir, req, res, opts, session) })
+  // Default to loopback (see interface doc). The Docker image overrides via DASHBOARD_HOST=0.0.0.0.
+  const host = process.env.DASHBOARD_HOST ?? '127.0.0.1'
   return new Promise((resolve) => {
-    server.listen(port, () => {
-      const actual = (server.address() as AddressInfo).port
+    server.listen(port, host, () => {
+      const addr = server.address() as AddressInfo
       resolve({
-        port: actual,
+        port: addr.port,
+        host: addr.address,
         close: () => new Promise<void>((r) => server.close(() => r())),
       })
     })

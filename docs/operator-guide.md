@@ -42,6 +42,13 @@ Funding rule of thumb for beta: a little ETH for gas (mint/vote/claim txs are
 cheap on Base, ~fractions of a cent), plus enough REPPO to cover your `mintReppoMax`
 cap and any veREPPO lock you choose.
 
+> **Sizing `mintReppoMax`:** each mint pays a REPPO fee (≈100–200 observed). The
+> `reppo` CLI does not report the fee, so the node reserves a conservative **~200
+> REPPO per mint** against your cap *before* signing (refuse-before, not after). A
+> `mintReppoMax` below ~200 therefore refuses **every** mint — set it to roughly
+> 200 × the number of mints you want per budget horizon (e.g. 400 for two). Set
+> `RPC_URL` and the cap tracks the real (often lower) fee instead of the 200 estimate.
+
 ---
 
 ## 3. Install & run
@@ -119,8 +126,6 @@ Four tabs:
 ### Overview
 Your at-a-glance state: net REPPO, earned/claimed/claimable, mint spend, gas,
 balances, current epoch. Below that:
-- **Cycle health** — per datanet: votes ✓/⊘/✗, mints ✓/⊘/✗, tx success rate, skips,
-  and the top error if any. This is where you spot a misbehaving datanet.
 - **Budget burn** — spend vs each cap, with bars that turn red near the limit.
 - **Claimable emissions** — pods with finalized rewards waiting to be claimed
   (the node claims them automatically).
@@ -155,6 +160,11 @@ current setup?".
 Every vote, mint, claim, and skip, newest first. Filter by kind. A `⚖ 3` badge
 means a multi-agent panel decided that one — click it to open the debate drawer
 (bull / bear / rubric-purist scores + arguments, and the judge's verdict).
+
+This is where you spot a misbehaving or idle datanet: a `skip` row says *why*
+nothing happened — RPC error, subnet access not granted, no on-chain rubric/spec,
+an unregistered adapter, or "candidates discovered but none passed scoring." If a
+datanet you enabled never produces votes/mints, filter to `skip` and read the reason.
 
 ---
 

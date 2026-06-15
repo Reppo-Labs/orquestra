@@ -287,3 +287,22 @@ describe('GET /api/datanets', () => {
     expect(typeof JSON.parse(r.body)).toBe('object') // {} in tests (no CLI on PATH with creds)
   })
 })
+
+describe('network bind (ADR 0002: unauthenticated panel must not default to a public interface)', () => {
+  const saved = process.env.DASHBOARD_HOST
+  afterEach(() => { if (saved === undefined) delete process.env.DASHBOARD_HOST; else process.env.DASHBOARD_HOST = saved })
+
+  it('defaults to loopback (127.0.0.1) when DASHBOARD_HOST is unset', async () => {
+    delete process.env.DASHBOARD_HOST
+    const h = await startDashboard(mkdtempSync(join(tmpdir(), 'orq-bind-')), 0)
+    expect(h.host).toBe('127.0.0.1')
+    await h.close()
+  })
+
+  it('honors DASHBOARD_HOST override (e.g. 0.0.0.0 inside the Docker image)', async () => {
+    process.env.DASHBOARD_HOST = '0.0.0.0'
+    const h = await startDashboard(mkdtempSync(join(tmpdir(), 'orq-bind-')), 0)
+    expect(h.host).toBe('0.0.0.0')
+    await h.close()
+  })
+})

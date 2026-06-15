@@ -68,6 +68,24 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     const votes: ExecResult[] = []
     const mints: ExecResult[] = []
 
+    // Record a structured idle/skip reason so the dashboard health panel and
+    // lastSkipReason can explain WHY an enabled datanet produced nothing this cycle.
+    // Without this, a structurally-incapable datanet (no on-chain rubric/spec, an
+    // unregistered adapter id) looks "quietly fine" — the operator gets zero
+    // votes/mints with no signal. Fires at most once per reason per datanet per cycle.
+    // `activity:false` logs the reason to stderr but does NOT write a skip activity
+    // entry — used for mint-incapability reasons on a datanet that ALSO voted this
+    // cycle. buildHealth derives idle/lastSkipReason from the newest entry per datanet
+    // (src/dashboard/health.ts), so a mint-skip written after a successful vote would
+    // mislabel an actively-voting datanet as idle. A datanet that produced no activity
+    // still records the skip so the dashboard explains why it is idle.
+    const recordSkip = (reason: string, opts: { activity?: boolean } = {}): void => {
+      console.error(`orquestra: datanet ${datanetId} — ${reason}`)
+      if (opts.activity !== false) {
+        deps.recordActivity({ ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId, reason, status: 'skipped' })
+      }
+    }
+
     // Per-datanet isolation: a failure here (RPC error, rubric unavailable on an
     // older reppo CLI, a flaky adapter) skips THIS datanet and is recorded — it
     // never aborts the whole cycle or the other datanets.
@@ -104,6 +122,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         }
       }
 
+      if (policy.vote && !rubric.canVote) {
+        recordSkip('vote enabled but this datanet has no on-chain voter rubric (onboardingVoters) — voting not possible')
+      }
       if (policy.vote && rubric.canVote) {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
         const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
@@ -155,9 +176,18 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         }
       }
 
-      if (policy.mint && policy.adapter && rubric.canMint) {
+      // Only surface mint-incapability as a dashboard skip entry when the datanet is
+      // otherwise idle this cycle (no votes) — see recordSkip's note on health idle.
+      const idleThisCycle = votes.length === 0
+      if (policy.mint && !policy.adapter) {
+        recordSkip('mint enabled but no adapter is configured for this datanet — minting not possible', { activity: idleThisCycle })
+      } else if (policy.mint && policy.adapter && !rubric.canMint) {
+        recordSkip('mint enabled but this datanet has no on-chain publisher spec (onboardingPublishers) — minting not possible', { activity: idleThisCycle })
+      } else if (policy.mint && policy.adapter && rubric.canMint) {
         const adapter = deps.getAdapter(policy.adapter)
-        if (adapter) {
+        if (!adapter) {
+          recordSkip(`mint enabled but adapter "${policy.adapter}" is not registered on this node`, { activity: idleThisCycle })
+        } else {
           const candidates = await adapter.discover({
             datanetId, rubric, topN: deps.topN,
             strategy: deps.strategyFor?.(datanetId),
@@ -173,7 +203,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // none cleared scoring/dedup — the difference between "no data" and "data
           // rejected" is invisible without this (it hid a zero-mint bug for weeks).
           if (candidates.length > 0 && intents.length === 0) {
-            console.error(`orquestra: datanet ${datanetId} — ${candidates.length} mint candidate(s) discovered but none passed scoring/dedup (min score ${minScore}); nothing minted.`)
+            recordSkip(`${candidates.length} mint candidate(s) discovered but none passed scoring/dedup (min score ${minScore}); nothing minted`, { activity: idleThisCycle })
           }
           for (const intent of intents) {
             const r = await deps.executor.executeMint(intent)

@@ -84,7 +84,12 @@ export class WalletExecutor {
   }
 
   async executeMint(intent: MintIntent): Promise<ExecResult> {
-    const est = intent.estReppoCost ?? 0
+    // Reserve a conservative REPPO estimate BEFORE signing so mintReppoMax is a true
+    // pre-spend cap (refuse before, not after — the wallet invariant), mirroring the
+    // grant path. The reppo CLI omits the mint fee, so the exact cost is unknown until
+    // reconcile; reserve the max observed fee (MINT_REPPO_FALLBACK) and adjust DOWN to
+    // the actual fee on success. An explicit estReppoCost (>0) overrides the default.
+    const est = intent.estReppoCost || MINT_REPPO_FALLBACK
     const res = this.ledger.reserveMint(est, MINT_GAS_EST_ETH)
     if (!res) return { ok: false, status: 'refused-budget', detail: 'mint budget exhausted' }
     try {
@@ -99,16 +104,20 @@ export class WalletExecutor {
         this.ledger.releaseMint(res)
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
-      // The CLI reports gasEth but omits the mint REPPO fee (only grant does).
-      // Prefer the CLI value if a future version adds it; else read the actual fee
-      // from the tx receipt; else fall back conservatively so we never record 0.
+      // Reconcile mintReppoSpent to the actual fee. Prefer the CLI value (>=0.8.4);
+      // else read it from the tx receipt (requires RPC_URL); else KEEP the conservative
+      // fallback. The last branch is critical: without RPC_URL the reader is absent, and
+      // leaving the fee undefined would make reconcileMint a no-op that left spend at the
+      // reserved estimate — but recording the fallback keeps mintReppoMax enforced rather
+      // than silently blind. Over-count, never under-count.
       let reppoFee = r.reppoFee
       if (reppoFee === undefined && this.reppoFeeReader) {
         reppoFee = await this.reppoFeeReader(r.txHash)
-        if (reppoFee === undefined) {
-          console.warn(`orquestra: could not read mint REPPO fee for ${r.txHash}; recording fallback ${MINT_REPPO_FALLBACK} REPPO (cap may over-count)`)
-          reppoFee = MINT_REPPO_FALLBACK
-        }
+      }
+      if (reppoFee === undefined) {
+        const why = this.reppoFeeReader ? 'receipt read failed' : 'no RPC_URL configured'
+        console.warn(`orquestra: mint REPPO fee unknown for ${r.txHash} (${why}); recording conservative ${MINT_REPPO_FALLBACK} REPPO so mintReppoMax stays enforced`)
+        reppoFee = MINT_REPPO_FALLBACK
       }
       this.ledger.reconcileMint(res, r.gasEth, reppoFee)
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }

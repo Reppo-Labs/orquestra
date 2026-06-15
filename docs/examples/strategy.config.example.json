@@ -6,10 +6,8 @@
     "lockDurationDays": 7
   },
   "budget": {
-    "voteGasEthMax": 0.02,
     "voteRateMaxPerCycle": 13,
-    "mintReppoMax": 50,
-    "mintGasEthMax": 0.01
+    "mintReppoMax": 400
   },
   "datanets": {
     "2": {

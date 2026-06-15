@@ -54,7 +54,8 @@ describe('WalletExecutor', () => {
 
   it('executes a mint within budget and reconciles REPPO + actual gas', async () => {
     const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
-    const ex = new WalletExecutor(cli, ledger)
+    const reader = vi.fn(async () => 50) // mint-pod tx paid 50 REPPO on-chain
+    const ex = new WalletExecutor(cli, ledger, reader)
     const r = await ex.executeMint(mintIntent('k1', 50))
     expect(r.status).toBe('executed')
     expect(ledger.state.mintReppoSpent).toBe(50)
@@ -63,22 +64,42 @@ describe('WalletExecutor', () => {
   })
 
   it('reconciles mint REPPO to the on-chain fee read from the receipt (CLI omits it)', async () => {
-    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    // est defaults to 0 → reserve the conservative MINT_REPPO_FALLBACK (200) pre-sign,
+    // so the cap must accommodate it; reconcile DOWN to the actual 150.
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
     const reader = vi.fn(async () => 150) // mint-pod tx paid 150 REPPO on-chain
     const ex = new WalletExecutor(cli, ledger, reader)
-    await ex.executeMint(mintIntent('k1')) // est defaults to 0 (selectMints passes no estimate)
+    await ex.executeMint(mintIntent('k1'))
     expect(reader).toHaveBeenCalledWith('0xmint')
     expect(ledger.state.mintReppoSpent).toBe(150)
   })
 
   it('falls back to a conservative REPPO estimate when the fee read fails (never under-counts to 0)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
     const reader = vi.fn(async () => undefined) // RPC down / reverted — no fee read
     const ex = new WalletExecutor(cli, ledger, reader)
     await ex.executeMint(mintIntent('k1'))
     expect(ledger.state.mintReppoSpent).toBe(MINT_REPPO_FALLBACK)
     warn.mockRestore()
+  })
+
+  it('CRITICAL: with NO fee reader (RPC_URL unset) a mint still records the conservative fee, not 0 — mintReppoMax stays enforced', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger) // no reppoFeeReader — the documented default config
+    await ex.executeMint(mintIntent('k1'))
+    // Before the fix this stayed at the reserved 0 forever, leaving the REPPO cap a no-op.
+    expect(ledger.state.mintReppoSpent).toBe(MINT_REPPO_FALLBACK)
+    warn.mockRestore()
+  })
+
+  it('refuses a mint pre-sign when mintReppoMax is below one conservative fee (fail-closed, no CLI call)', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 0 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeMint(mintIntent('k1')) // est 0 → reserve MINT_REPPO_FALLBACK > 0 cap
+    expect(r.status).toBe('refused-budget')
+    expect(cli.mintPod).not.toHaveBeenCalled()
   })
 
   it('reports error (not executed) when the CLI throws, and reservation is released', async () => {
