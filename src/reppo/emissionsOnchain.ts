@@ -1,0 +1,132 @@
+// src/reppo/emissionsOnchain.ts
+// On-chain claimable-emissions detection. The reppo platform API (`query emissions-due`)
+// under-reports — it returned an empty list while 20 (pod,epoch) pairs were claimable
+// on-chain — so the node reads PodManager V2 directly instead of trusting it.
+//
+// PodManager V2 exposes no per-pod "emissions due" view, but it does expose:
+//   - hasPodOwnerClaimedEmissions(epoch, podId) view -> bool
+//   - claimPodOwnerEmissions(podId, epoch)           -> reverts when nothing is due
+// so a (pod,epoch) is claimable iff NOT already claimed AND an eth_call of the claim
+// does not revert. Pods we own are enumerated from ERC-721 Transfer logs (to our
+// wallet), cached in the DB and extended incrementally. Raw JSON-RPC (no extra dep),
+// mirroring src/reppo/mintFee.ts.
+import type { ClaimableEmission } from './queryEmissionsDue.js'
+
+export const POD_MANAGER_MAINNET = '0x5C563f853eb4db33005A5C1aD9290e8560254A80'
+export const VE_REPPO_MAINNET = '0x0EFBE19Cb7B07D934D01990a8989E9CaA98b9009'
+/** keccak256("Transfer(address,address,uint256)") — ERC721 Transfer topic0. */
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+// Function selectors (stable; computed via viem toFunctionSelector).
+const SEL = {
+  hasClaimed: '0x5b778a36', // hasPodOwnerClaimedEmissions(uint256 epoch, uint256 podId)
+  claim: '0x6dd6f4c9',      // claimPodOwnerEmissions(uint256 podId, uint256 epoch)
+  currentEpoch: '0x76671808', // currentEpoch()  (on veReppo)
+}
+/** First-run block lookback when no scan checkpoint exists (~Base 2s blocks → ~3 months). */
+const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
+const LOG_CHUNK = 40_000n
+
+const word = (v: bigint): string => v.toString(16).padStart(64, '0')
+const hexBlock = (b: bigint): string => '0x' + b.toString(16)
+const topicForAddress = (addr: string): string => '0x' + addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
+
+interface Log { topics: string[]; data: string }
+/** ERC721 Transfer: tokenId is the 3rd indexed topic. */
+export const tokenIdFromLog = (log: Log): bigint => BigInt(log.topics[3])
+
+interface RpcDeps {
+  fetchImpl?: typeof fetch
+  podManager?: string
+  veReppo?: string
+  /** epochs back from current to scan for unclaimed emissions (default 3). */
+  lookbackEpochs?: number
+}
+
+async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<unknown> {
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  })
+  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`)
+  const json = (await res.json()) as { result?: unknown; error?: { message?: string } }
+  if (json?.error) throw new Error(`RPC ${method} error: ${json.error.message ?? 'unknown'}`)
+  return json.result
+}
+
+/** eth_call; returns the raw hex result, or throws if the call reverts (used as the
+ *  claimable oracle: a claim that reverts is "nothing due"). */
+async function ethCall(fetchImpl: typeof fetch, url: string, to: string, data: string, from?: string): Promise<string> {
+  const call: Record<string, string> = { to, data }
+  if (from) call.from = from
+  return (await rpcCall(fetchImpl, url, 'eth_call', [call, 'latest'])) as string
+}
+
+const isTrue = (hex: string): boolean => /[1-9a-f]/i.test((hex || '').replace(/^0x/, '')) // any nonzero word
+
+/** Enumerate pod tokenIds ever transferred TO `wallet`, scanning [fromBlock, toBlock]
+ *  in chunks. All IO via rpcCall. */
+export async function discoverOwnedPods(
+  fetchImpl: typeof fetch, url: string, podManager: string, wallet: string, fromBlock: bigint, toBlock: bigint,
+): Promise<bigint[]> {
+  const ids = new Set<bigint>()
+  for (let b = fromBlock; b <= toBlock; b += LOG_CHUNK + 1n) {
+    const to = b + LOG_CHUNK < toBlock ? b + LOG_CHUNK : toBlock
+    const logs = (await rpcCall(fetchImpl, url, 'eth_getLogs', [{
+      address: podManager,
+      topics: [TRANSFER_TOPIC, null, topicForAddress(wallet)],
+      fromBlock: hexBlock(b), toBlock: hexBlock(to),
+    }])) as Log[]
+    for (const l of logs) ids.add(tokenIdFromLog(l))
+  }
+  return [...ids]
+}
+
+/** Cache callbacks so the orchestrator is testable without the DB. */
+export interface PodCache {
+  getKnownPods(): string[]
+  addPods(ids: string[]): void
+  getLastBlock(): bigint | null
+  setLastBlock(b: bigint): void
+}
+
+/** Detect claimable (pod,epoch) on-chain. Enumerates new pods since the cached block,
+ *  then for every owned pod checks the last `lookbackEpochs` closed epochs: unclaimed +
+ *  a non-reverting claim eth_call ⇒ claimable. Returns ClaimableEmission[] (reppo amount
+ *  unknown pre-claim — PodManager V2 has no amount view — so 0; the chain pays what is
+ *  owed on claim). Best-effort: the caller wraps this and tolerates a throw. */
+export async function queryClaimableOnchain(rpcUrl: string, wallet: string, cache: PodCache, deps: RpcDeps = {}): Promise<ClaimableEmission[]> {
+  const fetchImpl = deps.fetchImpl ?? fetch
+  const pm = deps.podManager ?? POD_MANAGER_MAINNET
+  const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const lookback = BigInt(deps.lookbackEpochs ?? 3)
+
+  // 1. incremental pod discovery
+  const latest = BigInt((await rpcCall(fetchImpl, rpcUrl, 'eth_blockNumber', [])) as string)
+  const last = cache.getLastBlock()
+  const from = last !== null ? last + 1n : (latest > INITIAL_LOOKBACK_BLOCKS ? latest - INITIAL_LOOKBACK_BLOCKS : 0n)
+  if (from <= latest) {
+    const fresh = await discoverOwnedPods(fetchImpl, rpcUrl, pm, wallet, from, latest)
+    if (fresh.length) cache.addPods(fresh.map(String))
+    cache.setLastBlock(latest)
+  }
+
+  // 2. current epoch (veReppo is the authoritative source PodManager defers to)
+  const cur = BigInt(await ethCall(fetchImpl, rpcUrl, ve, SEL.currentEpoch))
+
+  // 3. for each owned pod, scan the recent CLOSED epochs for an unclaimed, non-reverting claim
+  const out: ClaimableEmission[] = []
+  const start = cur > lookback ? cur - lookback : 1n
+  for (const podStr of cache.getKnownPods()) {
+    const podId = BigInt(podStr)
+    for (let ep = start; ep < cur; ep++) {
+      const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasClaimed + word(ep) + word(podId))
+      if (isTrue(claimed)) continue
+      try {
+        await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet) // reverts ⇒ nothing due
+      } catch { continue }
+      out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
+    }
+  }
+  return out
+}
