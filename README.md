@@ -90,6 +90,9 @@ It produces a strategy like
 The `reppo` CLI ≥ 0.8.0 must be on `PATH` for a locally-run node (the Docker
 image pins it). The node checks at startup and warns on a version mismatch.
 
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full dev loop, test
+layout, and PR checklist.
+
 ## License
 
 [MIT](LICENSE)
