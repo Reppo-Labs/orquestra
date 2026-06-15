@@ -181,8 +181,19 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
             <span className="muted" style={{ fontSize: 12 }}>{delib.enabled !== false ? 'bull · bear · rubric-purist + judge' : 'single scorer'}</span>
           </div>
         </label>
-        <Num label="vote panel band (0 = mints only)" int value={delib.voteBand}
-          onChange={(n) => edit((c) => { c.deliberation = { ...c.deliberation, voteBand: n ?? 0 } })} />
+        <label className="field">
+          <span>panel all votes</span>
+          <div className="row">
+            <label className="switch">
+              <input type="checkbox" disabled={delib.enabled === false} checked={delib.enabled !== false && delib.votePanel !== false}
+                onChange={(e) => edit((c) => { c.deliberation = { ...c.deliberation, votePanel: e.target.checked } })} />
+              <span className="track" />
+            </label>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {delib.enabled === false ? 'panel off' : delib.votePanel !== false ? 'every vote deliberated by the panel' : 'votes use the single scorer (mints still use the panel)'}
+            </span>
+          </div>
+        </label>
       </div>
 
       <div className="sec-head"><h2>Strategy brief</h2><div className="rule" /></div>

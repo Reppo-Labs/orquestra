@@ -54,15 +54,16 @@ describe('StrategyConfig claim fields', () => {
 })
 
 describe('StrategyConfig deliberation', () => {
-  it('defaults deliberation for legacy configs (enabled, voteBand 1)', () => {
-    expect(StrategyConfigSchema.parse(valid).deliberation).toEqual({ enabled: true, voteBand: 1 })
+  it('defaults deliberation for legacy configs (enabled, votePanel true)', () => {
+    expect(StrategyConfigSchema.parse(valid).deliberation).toEqual({ enabled: true, votePanel: true })
   })
   it('accepts explicit deliberation settings', () => {
-    const cfg = StrategyConfigSchema.parse({ ...valid, deliberation: { enabled: false, voteBand: 0 } })
-    expect(cfg.deliberation).toEqual({ enabled: false, voteBand: 0 })
+    const cfg = StrategyConfigSchema.parse({ ...valid, deliberation: { enabled: false, votePanel: false } })
+    expect(cfg.deliberation).toEqual({ enabled: false, votePanel: false })
   })
-  it('rejects an out-of-range voteBand', () => {
-    expect(() => StrategyConfigSchema.parse({ ...valid, deliberation: { voteBand: 9 } })).toThrow()
+  it('strips a legacy voteBand and defaults votePanel (migration)', () => {
+    const cfg = StrategyConfigSchema.parse({ ...valid, deliberation: { enabled: true, voteBand: 1 } })
+    expect(cfg.deliberation).toEqual({ enabled: true, votePanel: true })
   })
 })
 

@@ -39,7 +39,7 @@ export interface LessonRow {
   active: 0 | 1
 }
 
-export type ProposalField = 'strictness' | 'voteBand'
+export type ProposalField = 'strictness'
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'stale'
 export interface ProposalRow {
   id: number
@@ -127,7 +127,7 @@ export function readProposals(dataDir: string, opts: { status?: ProposalStatus }
 }
 
 /** Transition a proposal and stamp decidedTs. Returns the updated row (so the caller
- *  can apply an accepted strictness/voteBand change), or null if the id is unknown. */
+ *  can apply an accepted strictness change), or null if the id is unknown. */
 export function setProposalStatus(dataDir: string, id: number, status: ProposalStatus): ProposalRow | null {
   const d = getDb(dataDir)
   d.prepare('UPDATE proposals SET status = ?, decidedTs = ? WHERE id = ?').run(status, new Date().toISOString(), id)

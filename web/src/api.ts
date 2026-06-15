@@ -107,7 +107,7 @@ export interface StrategyConfig {
   notes?: string
   budget?: Record<string, number | undefined>
   stake?: Record<string, number | undefined>
-  deliberation?: { enabled?: boolean; voteBand?: number }
+  deliberation?: { enabled?: boolean; votePanel?: boolean }
 }
 
 export interface ChatMsg { role: 'user' | 'assistant'; content: string }
@@ -260,7 +260,7 @@ export interface LearnDatanetView { enabled: boolean; lessons: LearnLesson[]; st
 export interface LearnProposal {
   id: number
   datanetId: string
-  field: 'strictness' | 'voteBand'
+  field: 'strictness'
   fromValue: string
   toValue: string
   rationale: string

@@ -70,7 +70,7 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
-      budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, voteBand: 1 },
+      budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, votePanel: true },
     }
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config
@@ -150,21 +150,17 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
 
   let cfg: StrategyConfig
   try { cfg = loadConfig(dataDir) } catch (e) { return { ok: false, error: `config unavailable: ${(e as Error).message}` } }
-  const liveValue = prop.field === 'strictness'
-    ? (cfg.datanets[prop.datanetId]?.strictness ?? 'balanced')
-    : String(cfg.deliberation.voteBand)
+  // strictness is the only proposable field (see src/learn). Optimistic-concurrency:
+  // reject if the live value drifted since the proposal was made.
+  const liveValue = cfg.datanets[prop.datanetId]?.strictness ?? 'balanced'
   if (liveValue !== prop.fromValue) {
     setProposalStatus(dataDir, id, 'stale')
     return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
   }
   const updated = structuredClone(cfg) as StrategyConfig
-  if (prop.field === 'strictness') {
-    const dn = updated.datanets[prop.datanetId]
-    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
-    dn.strictness = prop.toValue as typeof dn.strictness
-  } else {
-    updated.deliberation = { ...updated.deliberation, voteBand: Number(prop.toValue) }
-  }
+  const dn = updated.datanets[prop.datanetId]
+  if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+  dn.strictness = prop.toValue as typeof dn.strictness
   const parsed = StrategyConfigSchema.safeParse(updated)
   if (!parsed.success) return { ok: false, error: 'resulting config failed validation' }
   writeConfig(dataDir, parsed.data)
