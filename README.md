@@ -7,8 +7,10 @@ budget you set in an LLM onboarding interview, signing with your own wallet.
 **New operator? Read the [Operator Guide](docs/operator-guide.md)** — install,
 onboarding, the dashboard, earning, and troubleshooting, end to end.
 
-See `docs/design/2026-06-02-orquestra-design.md` for the architecture,
-`docs/adr/` for key decisions, and `docs/superpowers/specs/` for feature designs.
+See `docs/adr/` for key architectural decisions. The original design notes
+(`docs/design/`) are internal engineering history — useful for contributors, but
+they predate the shipped code and may not match it; the Operator Guide above is the
+current source of truth.
 
 ## Run a node
 
@@ -47,9 +49,9 @@ Virtuals).
    the node starts its first cycle. (Running locally rather than on a remote host?
    Skip the tunnel — the dashboard is already at <http://localhost:7070>.)
 
-4. **Watch it work** — the dashboard shows balances, per-datanet cycle health,
-   budget burn vs. your caps, panel deliberations, and why any datanet is idle.
-   Logs: `docker compose logs -f`.
+4. **Watch it work** — the dashboard shows balances, P&L, budget burn vs. your
+   caps, emissions, and an activity feed of every vote, mint, claim, and skip (with
+   the reason a datanet was idle). Logs: `docker compose logs -f`.
 
 **Updating:** `docker compose pull && docker compose up -d`.
 

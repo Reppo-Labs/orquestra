@@ -74,8 +74,12 @@ function NetCard({ id, d, name, edit }: {
           <div className="net-name">{name || '—'}</div>
         </div>
         <div className="net-acts">
-          <span className={`chip-toggle vote ${d.vote ? 'on' : ''}`} onClick={() => upd((n) => { n.vote = !n.vote })}>vote</span>
-          <span className={`chip-toggle mint ${d.mint ? 'on' : ''}`} onClick={() => upd((n) => { n.mint = !n.mint })}>mint</span>
+          <span role="button" tabIndex={0} aria-pressed={d.vote} className={`chip-toggle vote ${d.vote ? 'on' : ''}`}
+            onClick={() => upd((n) => { n.vote = !n.vote })}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); upd((n) => { n.vote = !n.vote }) } }}>vote</span>
+          <span role="button" tabIndex={0} aria-pressed={d.mint} className={`chip-toggle mint ${d.mint ? 'on' : ''}`}
+            onClick={() => upd((n) => { n.mint = !n.mint })}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); upd((n) => { n.mint = !n.mint }) } }}>mint</span>
         </div>
       </div>
       <div className="net-row">

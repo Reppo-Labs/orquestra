@@ -17,4 +17,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # The dashboard SPA is a separate package; its unit tests (configDiff, loadAll
+      # resilience) are not reached by the root vitest config. Run them too —
+      # config-diff feeds what an operator saves as budget/strategy.
+      - run: npm --prefix web ci
+      - run: npm --prefix web run test
       - run: npm run build

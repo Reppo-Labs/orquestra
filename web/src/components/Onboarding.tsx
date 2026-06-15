@@ -100,7 +100,15 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
     } finally { setBusy(false) }
   }
 
-  const begin = async () => { setStarted(true); await turn() }
+  const begin = async () => {
+    setStarted(true)
+    // Best-effort clean-slate: a prior conversation (e.g. a reconfigure the operator
+    // abandoned mid-chat) may still be held server-side and would otherwise resume —
+    // even echoing a stale finalized strategy. reset is a no-op on a fresh node. If the
+    // reset call fails, proceed anyway — turn() seeds the chat and surfaces its own errors.
+    try { await onboardingChat({ reset: true }) } catch { /* non-fatal */ }
+    await turn()
+  }
 
   const send = async (text?: string) => {
     const msg = (text ?? input).trim()

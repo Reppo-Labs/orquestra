@@ -13,7 +13,7 @@ import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } fro
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
-import { WalletExecutor } from './wallet/executor.js'
+import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
 import { defaultReppoCli } from './reppo/cli.js'
 import { readMintReppoFee } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
@@ -141,6 +141,18 @@ async function start(): Promise<void> {
   const rpcUrl = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
   const reppoFeeReader = rpcUrl ? (txHash: string) => readMintReppoFee(rpcUrl, txHash) : undefined
   const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader)
+  // A mint reserves a conservative MINT_REPPO_FALLBACK against mintReppoMax before
+  // signing (refuse-before, not after). If the cap is below one such reserve, EVERY
+  // mint is refused — warn loudly so the operator isn't left wondering why nothing mints.
+  const mintEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
+  if (mintEnabled && config.budget.mintReppoMax < MINT_REPPO_FALLBACK) {
+    console.error(
+      `orquestra: WARNING — budget.mintReppoMax (${config.budget.mintReppoMax}) is below the conservative ` +
+        `per-mint reserve (${MINT_REPPO_FALLBACK} REPPO), so every mint will be refused before signing. ` +
+        `Raise mintReppoMax to at least ${MINT_REPPO_FALLBACK}` +
+        (reppoFeeReader ? '' : ', or set RPC_URL so the cap tracks the real (often lower) fee') + ' to mint.',
+    )
+  }
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,
@@ -160,15 +172,26 @@ async function start(): Promise<void> {
   const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), { reloadConfig: () => loadConfig(DATA_DIR) }))
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
-  // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler + exit.
-  const shutdown = (sig: string): void => {
+  // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler, drain any
+  // in-flight cycle so a mint/vote between submit and dedup-persist isn't cut mid-write
+  // (bounded so `docker stop`'s grace period is respected), then close the dashboard.
+  const SHUTDOWN_DRAIN_MS = 10_000
+  let shuttingDown = false
+  const shutdown = async (sig: string): Promise<void> => {
+    if (shuttingDown) return
+    shuttingDown = true
     console.error(`\norquestra: received ${sig} — stopping scheduler and exiting.`)
     handle.stop()
-    if (dash) void dash.close()
+    const inflight = handle.current()
+    if (inflight) {
+      console.error(`orquestra: draining in-flight cycle (up to ${SHUTDOWN_DRAIN_MS / 1000}s)…`)
+      await Promise.race([inflight, new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS))])
+    }
+    if (dash) await dash.close().catch(() => {})
     process.exit(0)
   }
-  process.once('SIGINT', () => shutdown('SIGINT'))
-  process.once('SIGTERM', () => shutdown('SIGTERM'))
+  process.once('SIGINT', () => void shutdown('SIGINT'))
+  process.once('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
 const cmd = process.argv[2]

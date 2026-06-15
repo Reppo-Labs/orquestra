@@ -9,10 +9,11 @@ import { getDb, type SqliteDb } from '../dashboard/db.js'
 // claimed on-chain by (pod, epoch) alone (the CLI takes only --pod --epoch), and a pod
 // belongs to exactly one datanet, so the datanet dimension is redundant and would risk
 // a re-claim if the CLI's datanetId ever shifted between versions.
-// grantedSubnets is a FLAT set of subnet UUIDs (not datanet-scoped): subnet access is
-// granted to the wallet per-subnet, and a subnet maps 1:1 to a datanet, so the datanet
-// dimension is redundant. Prevents re-granting (a one-time on-chain setup) every cycle.
-// Both flat sets use the sentinel datanetId '' below.
+// grantedSubnets is a FLAT set used as the subnet-access grant cache. NOTE: despite the
+// name it holds the INTEGER datanet id (grant-access is keyed by `--datanet <id>`, see
+// cycle.ts), NOT the subnet UUID. A subnet maps 1:1 to a datanet, so the id is a valid
+// stable key; the field name is historical. Prevents re-granting (a one-time on-chain
+// setup) every cycle. Both flat sets use the sentinel datanetId '' below.
 interface Shape { votedPodIds: Record<string, string[]>; mintedKeys: Record<string, string[]>; claimedKeys: string[]; grantedSubnets: string[] }
 const LEGACY = 'vote-state.json'
 const FLAT = '' // datanetId sentinel for wallet-global (claim / grant) sets
@@ -56,7 +57,8 @@ export class DedupState {
   recordMint(datanetId: string, key: string): void { this.put('mint', datanetId, key) }
   /** Flat (podId:epoch) claim set — see note on Shape; not datanet-scoped. */
   getClaimedKeys(): string[] { return this.keys('claim', FLAT) }
-  /** Flat set of subnet UUIDs the wallet has been granted access to. */
+  /** Flat set of datanet ids whose subnet access the wallet already has (grant cache
+   *  key; see the note on Shape — the name is historical, the values are datanet ids). */
   getGrantedSubnets(): string[] { return this.keys('grant', FLAT) }
   recordClaim(key: string): void { this.put('claim', FLAT, key) }
   recordGrant(subnetId: string): void { this.put('grant', FLAT, subnetId) }

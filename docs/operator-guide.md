@@ -35,12 +35,19 @@ You need:
 | **Docker** (with Compose) | the node runs as a container |
 | A **dedicated wallet** | fund with ETH on **Base** (gas) + **REPPO** (mint fees, veREPPO lock). Never your main wallet. |
 | An **LLM API key** | powers scoring, the deliberation panel, and the onboarding chat. Anthropic / OpenAI / Google / Surplus / Virtuals. |
-| A **Pinata JWT** | only to **mint in "pin" mode** (pins pod datasets to IPFS). Not needed for voting, or if you mint every datanet in **url-only** mode (§7a). |
+| A **Pinata JWT** | only to **mint in "pin" mode** (pins pod datasets to IPFS). Not needed for voting, or if you mint every datanet in **url-only** mode (§7). |
 | A **private Base RPC** (recommended) | the public RPC rate-limits under a full cycle; Alchemy/QuickNode/Ankr remove per-datanet errors. |
 
 Funding rule of thumb for beta: a little ETH for gas (mint/vote/claim txs are
 cheap on Base, ~fractions of a cent), plus enough REPPO to cover your `mintReppoMax`
 cap and any veREPPO lock you choose.
+
+> **Sizing `mintReppoMax`:** each mint pays a REPPO fee (≈100–200 observed). The
+> `reppo` CLI does not report the fee, so the node reserves a conservative **~200
+> REPPO per mint** against your cap *before* signing (refuse-before, not after). A
+> `mintReppoMax` below ~200 therefore refuses **every** mint — set it to roughly
+> 200 × the number of mints you want per budget horizon (e.g. 400 for two). Set
+> `RPC_URL` and the cap tracks the real (often lower) fee instead of the 200 estimate.
 
 ---
 
@@ -119,8 +126,6 @@ Four tabs:
 ### Overview
 Your at-a-glance state: net REPPO, earned/claimed/claimable, mint spend, gas,
 balances, current epoch. Below that:
-- **Cycle health** — per datanet: votes ✓/⊘/✗, mints ✓/⊘/✗, tx success rate, skips,
-  and the top error if any. This is where you spot a misbehaving datanet.
 - **Budget burn** — spend vs each cap, with bars that turn red near the limit.
 - **Claimable emissions** — pods with finalized rewards waiting to be claimed
   (the node claims them automatically).
@@ -135,7 +140,7 @@ The control surface. Each datanet is a card:
   signals, spends least), **aggressive** = participates widely (more votes/mints,
   spends more), **balanced** = middle.
 - **+ mint strategy** — for minted datanets, set focus / angle / items-per-cycle,
-  and **mint mode** (see §7a).
+  and **mint mode** (see §7).
 - **+ add datanet** — opens a picker of all active datanets by name.
 
 Below the cards: **budget & cadence** (caps, how often the node runs — fractional
@@ -155,6 +160,11 @@ current setup?".
 Every vote, mint, claim, and skip, newest first. Filter by kind. A `⚖ 3` badge
 means a multi-agent panel decided that one — click it to open the debate drawer
 (bull / bear / rubric-purist scores + arguments, and the judge's verdict).
+
+This is where you spot a misbehaving or idle datanet: a `skip` row says *why*
+nothing happened — RPC error, subnet access not granted, no on-chain rubric/spec,
+an unregistered adapter, or "candidates discovered but none passed scoring." If a
+datanet you enabled never produces votes/mints, filter to `skip` and read the reason.
 
 ---
 
@@ -177,7 +187,7 @@ doesn't value — tighten its strictness or switch it to vote-only.
 
 ---
 
-## 7a. Mint mode — pin vs url-only (do you need Pinata?)
+## 7. Mint mode — pin vs url-only (do you need Pinata?)
 
 Each minted datanet has a **mint mode**, set per datanet in the Strategy tab:
 
@@ -195,7 +205,7 @@ all.
 Tip: before switching a datanet to url-only, confirm its pods still earn — for some
 datanets curators score the pinned dataset, not just the link.
 
-## 7. The multi-agent panel
+## 8. The multi-agent panel
 
 For close calls (and every mint), the node can convene a panel — **bull**, **bear**,
 and a **rubric-purist** each argue a score, and a **judge** rules. It catches
@@ -209,7 +219,7 @@ cheap; only ambiguous votes and mints pay the full cost.
 
 ---
 
-## 8. Updating
+## 9. Updating
 
 ```sh
 docker compose pull && docker compose up -d
@@ -219,7 +229,7 @@ Your data volume (strategy, ledgers, activity log) persists across updates.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
@@ -235,7 +245,7 @@ Logs: `docker compose logs -f`.
 
 ---
 
-## 10. Safety & cost model
+## 11. Safety & cost model
 
 - The node **cannot spend beyond your budget caps** — the budget ledger refuses
   before signing, not after.
@@ -248,7 +258,7 @@ Logs: `docker compose logs -f`.
 
 ---
 
-## 11. FAQ
+## 12. FAQ
 
 **Do I need to keep my laptop open?** No — the node runs on its host (VPS or
 machine) independently. The SSH tunnel is only for viewing/configuring the

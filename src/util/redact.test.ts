@@ -40,6 +40,10 @@ describe('redactSecrets', () => {
     expect(redactSecrets('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig')).not.toContain('eyJhbGciOiJIUzI1NiJ9')
     expect(redactSecrets('using key inf_a1b2c3d4e5f6g7')).toContain('inf_<redacted>')
     expect(redactSecrets('using key acp_a1b2c3d4e5f6g7')).toContain('acp_<redacted>')
+    // hyphen-separated Virtuals key (provider docs use `acp-`) must also be redacted
+    const hyphen = redactSecrets('using key acp-a1b2c3d4e5f6g7')
+    expect(hyphen).not.toContain('a1b2c3d4e5f6g7')
+    expect(hyphen).toContain('acp-<redacted>')
   })
 
   it('redacts credential-in-URL shapes for ANY host (review finding)', () => {

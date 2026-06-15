@@ -23,7 +23,7 @@ self-hostable Orquestra node any Reppo participant runs on their own machine.
 >
 > **No external spec to reconcile:** Orquestra is greenfield — this doc is its
 > design. The only hard external contract is Reppo's on-chain protocol + the
-> `reppo` CLI (≥0.7.0), both of which we control/consume directly.
+> `reppo` CLI (≥0.8.0), both of which we control/consume directly.
 
 ## Goal
 
@@ -71,7 +71,7 @@ datanet creator:
 | `onboardingVoters` | **the vote rubric** — ships an explicit 1–10 scoring scale + thresholds + "north star" |
 | `upVoteVolume`/`downVoteVolume`, `accessFeeREPPO`, `emissionsPerEpochREPPO` | economics — where staked effort earns most |
 
-These fields are **surfaced through `reppo query datanet --json` (CLI ≥0.7.0)**, so
+These fields are **surfaced through `reppo query datanet --json` (CLI ≥0.8.0)**, so
 the rubric loader reads them straight from the CLI — no platform-API call or
 hand-authored registry needed. (Field names per the `subnet` object:
 `subnetDescription`, `onboardingPublishers`, `onboardingVoters`, plus economics.)
@@ -138,7 +138,7 @@ adapter exists); strategy (risk → strictness threshold, priorities, notes); st
     "voteGasEthMax": 0.02,        // votes spend NO REPPO — gas + power allocation only
     "votePowerPerEpoch": "all",   // finite voting power allocated across pods by conviction
     "voteRateMaxPerCycle": 25,
-    "mintReppoMax": 100,          // mints: REPPO (if any) + gas, hard-capped
+    "mintReppoMax": 400,          // mints: REPPO fee, hard-capped (~200/mint reserved pre-sign)
     "mintGasEthMax": 0.05
   },
   "datanets": {
@@ -219,8 +219,8 @@ interface CandidatePod {
 
 1. ~~Operator adds datanet metadata to `reppo query datanet`~~ — **RESOLVED.**
    `reppo query datanet --json` returns the metadata (subnetDescription +
-   onboardingPublishers + onboardingVoters) as of **CLI ≥0.7.0**. Pin the host to
-   `@reppo/cli >=0.7.0`. (0.6.0 is the latest *published*; 0.7.0 is in development.)
+   onboardingPublishers + onboardingVoters) as of **CLI ≥0.8.0**. Pin the host to
+   `@reppo/cli >=0.8.0` (the shipped node pins 0.8.4 in its Dockerfile).
 2. **Exact veREPPO voting-power mechanics** — is power consumed/allocated per
    vote within an epoch, or applied at full weight per vote? Determines whether
    the per-epoch "power allocation" is a real constraint. Confirm against the

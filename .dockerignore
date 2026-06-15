@@ -1,5 +1,7 @@
-node_modules
-dist
+# Match at any depth so web/node_modules (73M of host deps) and web/dist never enter
+# the build context or overwrite the freshly-installed deps before `npm run build`.
+**/node_modules
+**/dist
 data
 .git
 *.log
