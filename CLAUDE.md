@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Orquestra is Reppo's official self-hosted **agentic swarm node**. An operator runs one node on their own machine; each cycle it **votes** (curates) across any Reppo datanet and **mints** (publishes data pods) where it has a data adapter — bounded by a budget set during an LLM onboarding interview, signing with the operator's own wallet. It earns $REPPO only through voting + minting (there is no compute/inference earning path).
 
-Read `CONTEXT.md` for the project's controlled vocabulary — the distinctions between **node / agent**, **onboarding / bootstrap secrets**, and **strategy / config** are deliberate and load-bearing. Match that language in code and docs. Architecture lives in `docs/design/2026-06-02-orquestra-design.md`; key decisions in `docs/adr/`; feature specs in `docs/superpowers/specs/`.
+Read `CONTEXT.md` for the project's controlled vocabulary — the distinctions between **node / agent**, **onboarding / bootstrap secrets**, and **strategy / config** are deliberate and load-bearing. Match that language in code and docs. Architecture lives in `docs/design/2026-06-02-orquestra-design.md`; key decisions in `docs/adr/`.
 
 ## Commands
 
@@ -36,7 +36,7 @@ A cycle (`src/runtime/cycle.ts → runCycle`) iterates configured datanets and, 
 - **`rubric/`** — a datanet's policy is **not** hand-authored. `reppo query datanet --json` surfaces the creator's onboarding text (`subnetDescription`, `onboardingVoters` = the 1–10 vote rubric, `onboardingPublishers` = the mint spec). The rubric loader parses that straight from the CLI. Rubric → can vote; rubric + adapter → can mint.
 - **`adapter/`** — pluggable per-datanet data sources for minting. Each adapter (`hyperliquid/`, `gdelt/`, `sports/`) implements `DatanetAdapter` (`adapter/types.ts`). **Register new adapters in the `adapters: [...]` array in `src/index.ts`**; routing is by adapter id from config. Hyperliquid is the reference adapter.
 - **`voter/` + `minter/`** — datanet-agnostic scoring + selection. `score.ts` scores candidates/pods, `select.ts` picks within caps.
-- **`panel/`** — multi-agent LLM deliberation (personas, judges, scorers) for decisions; see `docs/superpowers/specs/2026-06-11-multi-agent-decisions-design.md`.
+- **`panel/`** — multi-agent LLM deliberation (personas, judges, scorers) for decisions.
 - **`wallet/`** — `BudgetLedger` (`ledger.ts`) is the single source of budget truth, persisted to `DATA_DIR/budget-ledger.json`. `WalletExecutor` (`executor.ts`) reserves/records spend on the ledger and **refuses to sign before exceeding caps, not after**. On a corrupt ledger the node refuses to run rather than lose track of spend (`LedgerCorruptError`).
 - **`llm/`** — model-agnostic via the Vercel AI SDK (`@ai-sdk/anthropic | openai | google`). `resolveModel(provider, apiKey)`. Supports per-task routing (cheap model to pre-filter, strong model to judge).
 - **`onboarding/`** — conversational interview (LLM-driven, `agent.ts`) that produces a declarative strategy config (`build.ts` → `persist.ts`). Re-runnable. `configure` subcommand runs it in the terminal as a headless/CI fallback.

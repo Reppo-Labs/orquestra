@@ -8,9 +8,9 @@ budget you set in an LLM onboarding interview, signing with your own wallet.
 onboarding, the dashboard, earning, and troubleshooting, end to end.
 
 See `docs/adr/` for key architectural decisions. The original design notes
-(`docs/design/`) and feature specs (`docs/superpowers/specs/`) are internal
-engineering history — useful for contributors, but they predate the shipped code
-and may not match it; the Operator Guide above is the current source of truth.
+(`docs/design/`) are internal engineering history — useful for contributors, but
+they predate the shipped code and may not match it; the Operator Guide above is the
+current source of truth.
 
 ## Run a node
 
