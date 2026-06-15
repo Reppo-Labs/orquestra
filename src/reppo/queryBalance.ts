@@ -41,3 +41,19 @@ export async function queryBalanceJson(): Promise<WalletBalance> {
     throw new Error(`queryBalanceJson: could not parse reppo CLI output: ${stdout.slice(0, 200)}`)
   }
 }
+
+/** Pure: extract the wallet address from `reppo query balance --json` (it carries it). */
+export function parseWalletAddress(raw: unknown): string | null {
+  const a = (raw as Record<string, unknown>)?.address
+  return typeof a === 'string' && /^0x[a-fA-F0-9]{40}$/.test(a) ? a : null
+}
+
+/** Live wallet address (the configured REPPO_PRIVATE_KEY's address) via the balance query. */
+export async function queryWalletAddress(): Promise<string | null> {
+  const stdout = await runReppoStdout(['query', 'balance', '--json'])
+  try {
+    return parseWalletAddress(JSON.parse(stdout))
+  } catch {
+    return null
+  }
+}

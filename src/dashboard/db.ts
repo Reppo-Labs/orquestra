@@ -91,6 +91,15 @@ CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, datanetId);
 CREATE TABLE IF NOT EXISTS learn_flags (
   datanetId TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1
 );
+
+-- On-chain emissions: cache of pod NFTs our wallet owns (enumerated from Transfer
+-- logs) + the last block scanned, so each cycle only reads new logs incrementally.
+CREATE TABLE IF NOT EXISTS emit_pods (
+  podId TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS emit_scan (
+  id INTEGER PRIMARY KEY CHECK (id = 1), lastBlock TEXT NOT NULL
+);
 `
 
 /** Cached SQLite handle for this dataDir, with all tables ensured on first open. */

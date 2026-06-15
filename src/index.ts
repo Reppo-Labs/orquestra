@@ -8,7 +8,7 @@ import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
 import { listDatanetsJson } from './reppo/listDatanets.js'
 import { checkReppoVersion } from './reppo/version.js'
-import { queryBalanceJson } from './reppo/queryBalance.js'
+import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } from './reppo/agent.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
@@ -153,11 +153,16 @@ async function start(): Promise<void> {
         (reppoFeeReader ? '' : ', or set RPC_URL so the cap tracks the real (often lower) fee') + ' to mint.',
     )
   }
+  // Wallet address for on-chain emissions detection (the platform `emissions-due` API
+  // under-reports; we read PodManager directly). Best-effort — null falls back to the CLI.
+  const walletAddress = rpcUrl ? ((await queryWalletAddress().catch(() => null)) ?? undefined) : undefined
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,
     // Self-learning reflection runs on the same model as the scorer/panel.
     learnModel: model,
+    rpcUrl: rpcUrl || undefined,
+    walletAddress,
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.

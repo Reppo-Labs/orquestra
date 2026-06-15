@@ -18,6 +18,8 @@ import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
 import { queryEmissionsDueJson } from '../reppo/queryEmissionsDue.js'
+import { queryClaimableOnchain } from '../reppo/emissionsOnchain.js'
+import { makeDbPodCache } from '../reppo/podCacheStore.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
 import { queryEpochJson } from '../reppo/queryEpoch.js'
@@ -82,6 +84,10 @@ export interface CycleWiring {
   /** Model the self-learning reflection runs on (same model as `model` in production).
    *  Omitted in tests → reflection is skipped entirely. */
   learnModel?: LanguageModel
+  /** Base RPC + our wallet address. When both are set, emissions to claim are detected
+   *  ON-CHAIN (the platform `emissions-due` API under-reports); else fall back to the CLI. */
+  rpcUrl?: string
+  walletAddress?: string
   io?: Partial<WiringIo>
 }
 
@@ -160,7 +166,13 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     ledger: w.ledger,
     recordVote: (id, podId) => w.dedup.recordVote(id, podId),
     recordMint: (id, key) => w.dedup.recordMint(id, key),
-    getEmissionsDue: async () => (await io.emissionsDue()).pods,
+    // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
+    // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
+    // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
+    // cycle's claim phase (it skips claiming that cycle).
+    getEmissionsDue: async () => (w.rpcUrl && w.walletAddress)
+      ? queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
+      : (await io.emissionsDue()).pods,
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
       try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
