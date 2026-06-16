@@ -8,9 +8,10 @@ import type { CycleDeps, CycleReport } from './cycle.js'
 import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
 import type { VoterPod, PodScorer } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
-import { createLlmScorer } from '../voter/score.js'
+import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
 import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
 import { resolveScoringModel } from '../llm/resolveScoringModel.js'
+import { detectContentType, isVideoType } from '../llm/contentType.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
@@ -66,6 +67,8 @@ export interface WiringIo {
   listPods(id: string, opts: { all: boolean }): Promise<VoterPod[]>
   emissionsDue(): Promise<{ pods: ClaimableEmission[] }>
   fetchContent(url: string): Promise<string>
+  /** Probe a pod URL's Content-Type so a video pod routes to the video path. */
+  detectType(url: string): Promise<{ mediaType: string; contentLength: number | null } | null>
 }
 
 const defaultIo: WiringIo = {
@@ -73,6 +76,7 @@ const defaultIo: WiringIo = {
   listPods: (id, opts) => listPodsJson(id, opts),
   emissionsDue: () => queryEmissionsDueJson(),
   fetchContent: (url) => fetchPodContent(url),
+  detectType: (url) => detectContentType(url),
 }
 
 export interface CycleWiring {
@@ -87,6 +91,10 @@ export interface CycleWiring {
   /** Node default provider/model — used when a datanet has no `model` override. */
   defaultProvider: LlmProvider
   defaultModel: string
+  /** Cost/latency cap: at most this many video pods are marked (and thus scored as
+   *  video) per cycle. Over the cap, extra video pods are left unmarked and fall
+   *  through unscored this cycle. Default 4. */
+  videoPodsPerCycle?: number
   ledger: BudgetLedger
   executor: WalletExecutor
   dedup: DedupState
@@ -149,7 +157,14 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${w.defaultProvider}:${w.defaultModel}`
     let scorer = scorerCache.get(cacheKey)
     if (!scorer) {
-      const screen = createLlmScorer(resolved.model, { brief: liveBrief })
+      // modelCtx lets the screen scorer RE-RESOLVE to a Gemini model for a video pod (a
+      // video pod can't be scored on this datanet's text model). policyModel is fixed per
+      // cacheKey, so binding it into the cached scorer is correct (datanets sharing a key
+      // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
+      const modelCtx: ScorerModelCtx = {
+        registry: w.providerKeyRegistry, defaultProvider: w.defaultProvider, defaultModel: w.defaultModel, policyModel,
+      }
+      const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
       scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
       scorerCache.set(cacheKey, scorer)
     }
@@ -191,11 +206,25 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           .map((e) => e.podName as string),
       )
       for (const p of pods) if (p.name && mintedNames.has(p.name)) ownSet.add(p.podId)
-      // Enrich ONLY pods we might actually vote on (current epoch, not ours, not
-      // voted) — content fetches are the slow part of a cycle.
+      // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
+      // — content fetches are the slow part of a cycle. For each, probe Content-Type:
+      // a video/* pod is marked (mediaUrl/mediaType) for the Gemini video path instead
+      // of text-fetched; a per-cycle cap bounds how many videos we score.
+      const videoCap = w.videoPodsPerCycle ?? 4
+      let videoMarked = 0
       for (const p of pods) {
         const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
-        if (eligible && p.url) { const c = await io.fetchContent(p.url); if (c) p.description = `${p.name}\n\n${c}` }
+        if (!eligible || !p.url) continue
+        let info: { mediaType: string; contentLength: number | null } | null = null
+        try { info = await io.detectType(p.url) } catch { info = null }
+        if (info && isVideoType(info.mediaType) && videoMarked < videoCap) {
+          p.mediaUrl = p.url
+          p.mediaType = info.mediaType
+          videoMarked++
+          continue // do NOT text-fetch a video (binary garbage)
+        }
+        const c = await io.fetchContent(p.url)
+        if (c) p.description = `${p.name}\n\n${c}`
       }
       return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
     },

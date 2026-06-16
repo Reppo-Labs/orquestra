@@ -158,6 +158,49 @@ describe('buildCycleDeps', () => {
     expect(deps.getAdapter('gdelt')?.id).toBe('gdelt')
     expect(deps.getAdapter('nope')).toBeUndefined()
   })
+
+  it('detects a video pod: sets mediaUrl/mediaType and does NOT text-enrich it', async () => {
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    const detectType = vi.fn(async (url: string) =>
+      url.endsWith('.mp4') ? { mediaType: 'video/mp4', contentLength: 1000 } : null)
+    const fetchContent = vi.fn(async () => 'TEXT')
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all
+          ? [pod('vid', { url: 'https://x/clip.mp4' }), pod('txt', { url: 'https://x/doc.json' })]
+          : [],
+        fetchContent,
+        detectType,
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    const vid = pods.find((p) => p.podId === 'vid')!
+    const txt = pods.find((p) => p.podId === 'txt')!
+    expect(vid.mediaUrl).toBe('https://x/clip.mp4')
+    expect(vid.mediaType).toBe('video/mp4')
+    expect(fetchContent).toHaveBeenCalledTimes(1)            // only the text pod
+    expect(fetchContent).toHaveBeenCalledWith('https://x/doc.json')
+    expect(txt.description).toContain('TEXT')
+    expect(txt.mediaUrl).toBeUndefined()
+  })
+
+  it('caps the number of video pods marked per cycle (videoPodsPerCycle)', async () => {
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    const detectType = vi.fn(async () => ({ mediaType: 'video/mp4', contentLength: 1000 }))
+    const deps = buildCycleDeps({
+      ...w,
+      videoPodsPerCycle: 1,
+      io: {
+        listPods: async (_id, opts) => opts.all ? [pod('v1', { url: 'https://x/a.mp4' }), pod('v2', { url: 'https://x/b.mp4' })] : [],
+        fetchContent: async () => '',
+        detectType,
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    const marked = pods.filter((p) => p.mediaUrl).length
+    expect(marked).toBe(1) // second video pod left unmarked (over the per-cycle cap)
+  })
 })
 
 describe('buildTick config hot-reload', () => {
