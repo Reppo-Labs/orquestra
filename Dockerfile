@@ -13,10 +13,12 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.8.4
-# @reppo/cli@0.8.4: emits gasEth in write results (real gas caps) + mint-pod
-# --image-url / source-url as the pod's primary link (needed by this branch's
-# image/source-url mint flow). 0.8.0 added datanet rubric metadata + epoch data.
+ && npm i -g @reppo/cli@0.8.6
+# @reppo/cli@0.8.6: grant-access --token primary (pay a datanet's access fee in
+# its primary token, e.g. $EXY) + query datanet surfaces primaryToken {address,
+# symbol, decimals} + approve --token <addr>. Gates the node's non-REPPO access
+# path (NONREPPO_GRANT_MIN_VERSION=0.8.5). 0.8.4 added gasEth in write results;
+# 0.8.0 added datanet rubric metadata + epoch data.
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
