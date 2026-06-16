@@ -98,4 +98,29 @@ describe('selectVotes (conservative: like>=8, dislike<=4)', () => {
     const votes = await selectVotes('9', [pod('bad'), pod('good')], rubric, 'conservative', filter(), flaky)
     expect(votes.map((v) => v.podId)).toEqual(['good']) // bad skipped, good voted, no throw
   })
+
+  it('calls onSkip with the pod id and reason when a pod scoring throws (video skip surfaces)', async () => {
+    const skips: Array<{ podId: string; reason: string }> = []
+    const flaky: PodScorer = {
+      scorePod: async (p) => {
+        if (p.podId === 'vid') throw new Error('video scoring needs a Google API key (set LLM_KEY_GOOGLE)')
+        return { score: 9, reason: 'ok' }
+      },
+    }
+    await selectVotes('9', [pod('vid'), pod('ok')], rubric, 'conservative', filter(), flaky,
+      (podId, reason) => skips.push({ podId, reason }))
+    expect(skips).toHaveLength(1)
+    expect(skips[0].podId).toBe('vid')
+    expect(skips[0].reason).toContain('Google API key')
+  })
+
+  it('redacts a provider key folded into the skip reason before surfacing it', async () => {
+    const skips: string[] = []
+    const leaky: PodScorer = {
+      scorePod: async () => { throw new Error('google rejected key AIzaSyA1234567890abcdefghijklmnopqrstuvwx') },
+    }
+    await selectVotes('9', [pod('p')], rubric, 'conservative', filter(), leaky, (_id, reason) => skips.push(reason))
+    expect(skips[0]).toContain('AIza<redacted>')
+    expect(skips[0]).not.toContain('AIzaSyA1234567890abcdefghijklmnopqrstuvwx')
+  })
 })
