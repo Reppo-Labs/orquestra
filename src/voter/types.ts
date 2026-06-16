@@ -10,6 +10,11 @@ export interface VoterPod {
   description: string
   /** IPFS content URL (the pod's dataset); used to enrich `description` for scoring. */
   url?: string
+  /** (Phase B) The pod's media URL when the pod is a video (Content-Type video/*).
+   *  Distinct from the text `description`; the scorer hands this to a multimodal model. */
+  mediaUrl?: string
+  /** (Phase B) The media MIME type captured at detection (e.g. 'video/mp4'). */
+  mediaType?: string
 }
 
 /** Pre-rubric filter inputs (from the vote-filter the prefetch/CLI derives). */
