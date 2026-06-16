@@ -20,6 +20,10 @@ export interface DatanetRubric {
   status: string
   economics: {
     accessFeeReppo: number
+    /** Set ONLY when the datanet charges its access fee in a NON-REPPO primary token
+     *  (e.g. $EXY). Undefined for REPPO-fee datanets (the unchanged default path).
+     *  Presence is what routes the grant to `grant-access --token primary`. */
+    accessFeeToken?: { address: string; symbol: string; decimals: number; amount: number }
     emissionsPerEpochReppo: number
     upVoteVolume: number
     downVoteVolume: number

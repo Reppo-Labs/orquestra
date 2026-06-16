@@ -88,6 +88,10 @@ export interface CycleWiring {
    *  ON-CHAIN (the platform `emissions-due` API under-reports); else fall back to the CLI. */
   rpcUrl?: string
   walletAddress?: string
+  /** Whether the reppo CLI on PATH supports `grant-access --token primary` (>=0.8.5).
+   *  Computed ONCE at startup (index.ts) from the CLI version; threaded to the cycle so a
+   *  non-REPPO access fee is skipped (recorded) rather than fired on an older CLI. */
+  supportsNonReppoGrants?: boolean
   io?: Partial<WiringIo>
 }
 
@@ -183,6 +187,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     grantedSubnets: async () => new Set(w.dedup.getGrantedSubnets()),
     recordGrant: (id) => w.dedup.recordGrant(id),
     revokeGrant: (id) => w.dedup.removeGrant(id),
+    supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
   }
 }
 

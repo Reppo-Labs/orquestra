@@ -218,12 +218,27 @@ describe('WalletExecutor', () => {
     expect(ledger.state.mintReppoSpent).toBe(0)
   })
 
-  it('executeGrantAccess returns executed and passes the subnet id', async () => {
+  it('executeGrantAccess returns executed and passes the subnet id (default reppo token)', async () => {
     const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
     const r = await new WalletExecutor(cli, ledger).executeGrantAccess('cm-subnet-9')
     expect(r.status).toBe('executed')
     expect(r.txHash).toBe('0xgrant')
-    expect(cli.grantAccess).toHaveBeenCalledWith('cm-subnet-9')
+    expect(cli.grantAccess).toHaveBeenCalledWith('cm-subnet-9', { token: 'reppo' })
+  })
+
+  it('executeGrantAccess passes token=primary through to the CLI for a non-REPPO fee', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const r = await new WalletExecutor(cli, ledger).executeGrantAccess('42', 'primary')
+    expect(r.status).toBe('executed')
+    expect(cli.grantAccess).toHaveBeenCalledWith('42', { token: 'primary' })
+  })
+
+  it('executeGrantAccess records INSUFFICIENT_TOKEN_BALANCE as a non-fatal error (not a crash)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as any) = vi.fn(async () => { throw new Error('grant-access failed: INSUFFICIENT_TOKEN_BALANCE') })
+    const r = await new WalletExecutor(cli, new BudgetLedger(dir, caps)).executeGrantAccess('42', 'primary')
+    expect(r.status).toBe('error')
+    expect(r.detail).toMatch(/INSUFFICIENT_TOKEN_BALANCE/)
   })
 
   it('executeGrantAccess returns error when the CLI throws (no access yet)', async () => {

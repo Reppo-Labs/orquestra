@@ -42,10 +42,16 @@ export class WalletExecutor {
 
   /** One-time per-subnet access grant (prerequisite for voting/minting). Like lock(),
    *  this is infrequent setup and not budget-gated: enabling a datanet is the operator's
-   *  consent to pay its one-time, per-subnet, cached access fee (no grant budget cap). */
-  async executeGrantAccess(datanetId: string): Promise<ExecResult> {
+   *  consent to pay its one-time, per-subnet, cached access fee (no grant budget cap).
+   *  `token` selects the fee currency: 'reppo' (default, unchanged path) or 'primary'
+   *  (pay in the datanet's primary token via reppo >=0.8.5; the cycle gates on the CLI
+   *  version before passing 'primary' here). The fee amount is consent-bounded, not capped.
+   *  SEAM: per-token mint fee cap (see 2026-06-15-non-reppo-access-fees-design.md §2.7) —
+   *  grants are one-time/cached so they need no per-token cap; recurring NON-REPPO MINT
+   *  spend would plug in at executeMint + the ledger, NOT here. Out of Phase 2 scope. */
+  async executeGrantAccess(datanetId: string, token: 'reppo' | 'primary' = 'reppo'): Promise<ExecResult> {
     try {
-      const r = await this.cli.grantAccess(datanetId)
+      const r = await this.cli.grantAccess(datanetId, { token })
       if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
@@ -53,6 +59,11 @@ export class WalletExecutor {
       // Already having access is success, not failure — report executed so the caller
       // caches it and stops re-attempting the grant every cycle (no fee was charged).
       if (/ACCESS_ALREADY_GRANTED/.test(detail)) return { ok: true, status: 'executed', detail: 'already granted' }
+      // Every other CLI failure — including a primary-token INSUFFICIENT_TOKEN_BALANCE /
+      // INSUFFICIENT_ALLOWANCE (the wallet isn't funded/approved for the fee token) — is a
+      // recorded, non-fatal 'error': the cycle records it and skips THIS datanet (per-datanet
+      // isolation), resuming once the operator funds the wallet. The node never crashes here
+      // and never acquires the token itself.
       return { ok: false, status: 'error', detail }
     }
   }

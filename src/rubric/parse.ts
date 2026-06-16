@@ -1,5 +1,6 @@
 // src/rubric/parse.ts
 import { type DatanetRubric, RubricUnavailableError } from './types.js'
+import { REPPO_TOKEN_MAINNET } from '../reppo/mintFee.js'
 
 /** Coerce any value to a finite number; objects are unwrapped via .formatted ?? .raw. */
 const num = (v: unknown): number => {
@@ -54,6 +55,7 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
   }
 
   const nativeToken = m['nativeToken'] as Record<string, unknown> | undefined
+  const nativeSymbol = str(nativeToken?.['symbol'] ?? m['nativeTokenSymbol']) || 'REPPO'
 
   return {
     datanetId: String(id),
@@ -67,10 +69,60 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
     status: str(m['status']) || 'UNKNOWN',
     economics: {
       accessFeeReppo: num(m['accessFeeREPPO']),
+      ...accessFeeToken(m, nativeToken, nativeSymbol),
       emissionsPerEpochReppo: num(m['emissionsPerEpochREPPO']),
       upVoteVolume: num(m['upVoteVolume']),
       downVoteVolume: num(m['downVoteVolume']),
-      nativeTokenSymbol: str(nativeToken?.['symbol'] ?? m['nativeTokenSymbol']) || 'REPPO',
+      nativeTokenSymbol: nativeSymbol,
     },
   }
 }
+
+/** Derive `accessFeeToken` ONLY when the datanet charges a NON-REPPO access fee, per
+ *  the reppo >=0.8.5 `query datanet --json` shape:
+ *    primaryToken: { address, decimals }                       — present when valid
+ *    accessFeePrimaryToken: { raw, formatted } | { unavailable }
+ *  A non-REPPO fee requires: a valid primaryToken, a positive accessFeePrimaryToken
+ *  amount, AND that primary token NOT being REPPO (by nativeToken symbol or address).
+ *  Otherwise returns {} so the spread leaves accessFeeToken undefined — today's REPPO
+ *  datanets (and older CLIs that omit these fields) are unchanged. */
+function accessFeeToken(
+  m: Record<string, unknown>,
+  nativeToken: Record<string, unknown> | undefined,
+  nativeSymbol: string,
+): { accessFeeToken?: NonNullable<DatanetRubric['economics']['accessFeeToken']> } {
+  const primary = m['primaryToken']
+  if (primary == null || typeof primary !== 'object') return {}
+  const p = primary as Record<string, unknown>
+  const address = str(p['address'])
+  if (!address) return {}
+
+  // accessFeePrimaryToken: { raw, formatted } when set, { unavailable } otherwise.
+  const fee = m['accessFeePrimaryToken']
+  if (fee == null || typeof fee !== 'object') return {}
+  const f = fee as Record<string, unknown>
+  if (f['formatted'] === undefined) return {} // { unavailable } or missing → not a primary-token fee
+  const amount = num(f['formatted'])
+  if (!(amount > 0)) return {}
+
+  // Only NON-REPPO primary tokens route to --token primary. A primary token that is
+  // REPPO (by symbol or by the known mainnet address) stays on the REPPO path.
+  const nativeAddress = str(nativeToken?.['address'])
+  const isReppo =
+    nativeSymbol === 'REPPO' ||
+    eqAddr(address, REPPO_TOKEN_MAINNET) ||
+    (nativeAddress !== '' && eqAddr(nativeAddress, REPPO_TOKEN_MAINNET))
+  if (isReppo) return {}
+
+  return {
+    accessFeeToken: {
+      address,
+      symbol: nativeSymbol,
+      decimals: Math.trunc(num(p['decimals'])),
+      amount,
+    },
+  }
+}
+
+/** Case-insensitive EVM address compare. */
+const eqAddr = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()

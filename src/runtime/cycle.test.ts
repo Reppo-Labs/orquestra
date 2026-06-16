@@ -86,9 +86,10 @@ describe('runCycle', () => {
       recordGrant: (id: string) => { granted.add(id) },
     })
     await runCycle(config, 'cycle-grant', d)
-    // grant-access is keyed by datanet id; datanets 9 and 2 are distinct → one grant each
-    expect(executeGrantAccess).toHaveBeenCalledWith('9')
-    expect(executeGrantAccess).toHaveBeenCalledWith('2')
+    // grant-access is keyed by datanet id; datanets 9 and 2 are distinct → one grant each.
+    // Both are REPPO-fee datanets (no accessFeeToken) → the 'reppo' token path.
+    expect(executeGrantAccess).toHaveBeenCalledWith('9', 'reppo')
+    expect(executeGrantAccess).toHaveBeenCalledWith('2', 'reppo')
     expect(executeGrantAccess).toHaveBeenCalledTimes(2)
     expect(granted.has('9') && granted.has('2')).toBe(true)
   })
@@ -316,6 +317,71 @@ describe('runCycle', () => {
     expect(skips).toHaveLength(1)
     expect(skips[0].datanetId).toBe('2')
     expect(skips[0].reason).toMatch(/datanet error: RPC rate limit/)
+  })
+
+  // --- non-REPPO access fee: capability gate ---
+  const exyToken = { address: '0xExy0000000000000000000000000000000000001', symbol: 'EXY', decimals: 6, amount: 50 }
+  const nonReppoConfig = StrategyConfigSchema.parse({
+    horizonDays: 30, cadenceHours: 6,
+    stake: { lockReppo: 0, lockDurationDays: 30 },
+    budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+    datanets: { '42': { vote: true, mint: false, strictness: 'aggressive' } },
+  })
+
+  it('skips a non-REPPO-fee datanet with a recorded reason when the CLI cannot pay primary (capability OFF)', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: false,
+    })
+    const report = await runCycle(nonReppoConfig, 'c-nonreppo-off', d)
+    expect(executeGrantAccess).not.toHaveBeenCalled() // never fires an unsupported flag
+    expect(d.getPodsAndFilter).not.toHaveBeenCalled() // skipped before scoring
+    const d42 = report.datanets.find((r) => r.datanetId === '42')!
+    expect(d42.skipped).toMatch(/non-REPPO access fee needs reppo CLI ≥ 0\.8\.5/)
+    expect(skipReasons(d.recordActivity as any).some((r) => /non-REPPO access fee needs reppo CLI ≥ 0\.8\.5/.test(r))).toBe(true)
+  })
+
+  it('grants a non-REPPO-fee datanet with token=primary when the CLI supports it (capability ON)', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: true,
+    })
+    const report = await runCycle(nonReppoConfig, 'c-nonreppo-on', d)
+    expect(executeGrantAccess).toHaveBeenCalledWith('42', 'primary')
+    expect(report.datanets.find((r) => r.datanetId === '42')!.skipped).toBeUndefined()
+  })
+
+  it('uses token=reppo for a REPPO-fee datanet regardless of the non-REPPO capability flag', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: false, // off — must not affect the REPPO path
+    })
+    await runCycle(config, 'c-reppo-path', d)
+    expect(executeGrantAccess).toHaveBeenCalledWith('9', 'reppo')
+    expect(executeGrantAccess).toHaveBeenCalledWith('2', 'reppo')
   })
 
   it('records a permanently-failing CANNOT_VOTE_FOR_OWN_POD vote as voted (never retried)', async () => {

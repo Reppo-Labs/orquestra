@@ -40,6 +40,12 @@ export interface CycleDeps {
   recordGrant?(subnetId: string): void
   /** evict a stale grant-cache entry (e.g. wallet changed → on-chain access gone). */
   revokeGrant?(subnetId: string): void
+  /** Whether the reppo CLI on PATH can pay a NON-REPPO access fee (`grant-access
+   *  --token primary`, reppo >=0.8.5). Computed ONCE at startup from the CLI version
+   *  (src/reppo/capabilities.ts) and threaded in via wiring. When false, a datanet that
+   *  charges a non-REPPO access fee is skipped with a recorded reason rather than firing
+   *  an unsupported flag. Defaults to false (fail-closed) when omitted. */
+  supportsNonReppoGrants?: boolean
 }
 
 export interface DatanetReport {
@@ -106,7 +112,24 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
         const granted = await deps.grantedSubnets()
         if (!granted.has(datanetId)) {
-          const gr = await deps.executor.executeGrantAccess(datanetId)
+          // Fee currency comes from the rubric: a non-REPPO access fee (accessFeeToken set)
+          // must be paid via `grant-access --token primary`. That CLI flag only exists in
+          // reppo >=0.8.5, so gate it on the startup-derived capability flag (fail-closed):
+          // an older CLI would error on the unknown flag, so skip the datanet with a clear
+          // reason instead — per-datanet isolation, never abort the cycle. REPPO-fee
+          // datanets (the common case) take the unchanged 'reppo' path with no gate.
+          const feeToken = rubric.economics.accessFeeToken
+          if (feeToken && !deps.supportsNonReppoGrants) {
+            const skipped = `non-REPPO access fee needs reppo CLI ≥ 0.8.5 (this datanet charges ${feeToken.amount} ${feeToken.symbol} for access)`
+            console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
+            deps.recordActivity({
+              ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+              reason: skipped, status: 'skipped',
+            })
+            datanets.push({ datanetId, votes, mints, skipped })
+            continue
+          }
+          const gr = await deps.executor.executeGrantAccess(datanetId, feeToken ? 'primary' : 'reppo')
           if (gr.status === 'executed') {
             deps.recordGrant(datanetId)
             console.error(`orquestra: datanet ${datanetId} — granted access`)
