@@ -30,6 +30,15 @@ import { startDashboard } from './dashboard/server.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
+/** Parse an optional positive-integer env var; undefined (use the default downstream) on
+ *  absent OR non-numeric/non-positive input. `Number(undefined)` is NaN, so a bare ternary
+ *  on truthiness would pass NaN through for a value like "abc". */
+function parsePositiveInt(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
 async function onboard(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true })
   // Registry-aware: an operator may set LLM_KEY_<PROVIDER> and drop LLM_API_KEY.
@@ -184,8 +193,10 @@ async function start(): Promise<void> {
     defaultProvider: provider,
     defaultModel,
     // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
-    // not the on-chain budget). Default (4) lives in buildCycleDeps.
-    videoPodsPerCycle: process.env.VIDEO_PODS_PER_CYCLE ? Number(process.env.VIDEO_PODS_PER_CYCLE) : undefined,
+    // not the on-chain budget). Default (4) lives in buildCycleDeps. NaN-safe: a non-numeric
+    // value falls back to undefined (the default) rather than passing NaN through, which
+    // would make `videoBudget > 0` always false and silently disable the whole video feature.
+    videoPodsPerCycle: parsePositiveInt(process.env.VIDEO_PODS_PER_CYCLE),
     // Self-learning reflection runs on the same model as the scorer/panel.
     learnModel: model,
     rpcUrl: rpcUrl || undefined,

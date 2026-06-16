@@ -188,18 +188,84 @@ describe('buildCycleDeps', () => {
   it('caps the number of video pods marked per cycle (videoPodsPerCycle)', async () => {
     const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
     const detectType = vi.fn(async () => ({ mediaType: 'video/mp4', contentLength: 1000 }))
+    const fetchContent = vi.fn(async () => '')
     const deps = buildCycleDeps({
       ...w,
       videoPodsPerCycle: 1,
       io: {
         listPods: async (_id, opts) => opts.all ? [pod('v1', { url: 'https://x/a.mp4' }), pod('v2', { url: 'https://x/b.mp4' })] : [],
-        fetchContent: async () => '',
+        fetchContent,
         detectType,
       },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     const marked = pods.filter((p) => p.mediaUrl).length
     expect(marked).toBe(1) // second video pod left unmarked (over the per-cycle cap)
+    // The OVER-cap detected video is NOT text-fetched (binary would be sliced into text).
+    expect(fetchContent).not.toHaveBeenCalled()
+  })
+
+  it('marks contentLength from detection onto the video pod (threaded into ingest)', async () => {
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all ? [pod('vid', { url: 'https://x/c.mp4' })] : [],
+        fetchContent: async () => '',
+        detectType: async () => ({ mediaType: 'video/mp4', contentLength: 123456 }),
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    expect(pods.find((p) => p.podId === 'vid')!.contentLength).toBe(123456)
+  })
+
+  it('video cap is GLOBAL per cycle, not per-datanet: resetVideoBudget arms it once', async () => {
+    // videoPodsPerCycle=1, two datanets each with a video pod. Without a reset between cycles
+    // and with a per-datanet local counter, BOTH would be marked. The closure budget is shared
+    // across datanets, so only the FIRST datanet's video is marked until resetVideoBudget runs.
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    const deps = buildCycleDeps({
+      ...w,
+      videoPodsPerCycle: 1,
+      io: {
+        listPods: async (id, opts) => opts.all ? [pod(`v-${id}`, { url: `https://x/${id}.mp4` })] : [],
+        fetchContent: async () => '',
+        detectType: async () => ({ mediaType: 'video/mp4', contentLength: 1000 }),
+      },
+    })
+    // Same cycle: datanet A consumes the single video slot; datanet B's video is over-budget.
+    const a = await deps.getPodsAndFilter('2')
+    const b = await deps.getPodsAndFilter('5')
+    expect(a.pods.filter((p) => p.mediaUrl).length).toBe(1)
+    expect(b.pods.filter((p) => p.mediaUrl).length).toBe(0) // budget already spent this cycle
+    // New cycle: resetVideoBudget re-arms the global budget → the next datanet can mark again.
+    deps.resetVideoBudget!()
+    const c = await deps.getPodsAndFilter('5')
+    expect(c.pods.filter((p) => p.mediaUrl).length).toBe(1)
+  })
+})
+
+describe('fetchPodContent content-type guard', () => {
+  it("returns '' for a video/* response (never slices binary into text)", async () => {
+    const orig = globalThis.fetch
+    globalThis.fetch = (async () => new Response(new Uint8Array(50), { status: 200, headers: { 'content-type': 'video/mp4' } })) as typeof fetch
+    try {
+      const { fetchPodContent } = await import('./wiring.js')
+      expect(await fetchPodContent('https://x/clip.mp4')).toBe('')
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('reads text/* and json responses as before', async () => {
+    const orig = globalThis.fetch
+    globalThis.fetch = (async () => new Response('hello world', { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } })) as typeof fetch
+    try {
+      const { fetchPodContent } = await import('./wiring.js')
+      expect(await fetchPodContent('https://x/doc.txt')).toBe('hello world')
+    } finally {
+      globalThis.fetch = orig
+    }
   })
 })
 

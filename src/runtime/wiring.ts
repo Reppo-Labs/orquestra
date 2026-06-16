@@ -46,19 +46,33 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   })
 }
 
-/** Fetch a pod's external content for scoring context; '' on any failure (15s cap). */
+/** Fetch a pod's external content for scoring context; '' on any failure (15s cap).
+ *  Defense at the boundary: if the response is a video (or otherwise non-text/binary)
+ *  Content-Type, return '' instead of slicing raw bytes into a text description. This
+ *  closes the case where HEAD detection returned null (no Content-Type on HEAD) but the
+ *  GET reveals a video — without this, binary would be scored as junk text. */
 export async function fetchPodContent(url: string): Promise<string> {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 15_000)
   try {
     const res = await fetch(url, { signal: ctrl.signal })
     if (!res.ok) return ''
+    const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+    if (isVideoType(ct) || (ct && !isTextLike(ct))) return '' // never slice binary into text
     return (await res.text()).slice(0, 4000) // cap tokens
   } catch {
     return ''
   } finally {
     clearTimeout(t)
   }
+}
+
+/** True for Content-Types we can safely read as text for scoring context: text/*, and the
+ *  common structured-text application types (JSON, XML, CSV, NDJSON, JS, etc.). An empty
+ *  Content-Type is treated permissively by the caller (legacy behavior). */
+function isTextLike(mediaType: string): boolean {
+  if (mediaType.startsWith('text/')) return true
+  return /^application\/(json|xml|.*\+json|.*\+xml|x-ndjson|jsonl|csv|javascript|x-yaml|yaml)$/.test(mediaType)
 }
 
 /** IO surface used by the cycle wiring — injectable so tests run without the CLI. */
@@ -181,9 +195,17 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     },
   }
   const candidateScorer = createPanelCandidateScorer(candidateBase, { model: w.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
+  // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
+  // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
+  // remaining budget in this closure and reset it once per cycle via resetVideoBudget
+  // (runCycle calls it right after startCycle). Decremented as videos are marked across all
+  // datanets in the cycle.
+  const videoCap = w.videoPodsPerCycle ?? 4
+  let videoBudget = videoCap
   return {
     dataDir: w.dataDir,
     topN: 12,
+    resetVideoBudget: () => { videoBudget = videoCap },
     getRubric: (id) => io.getRubric(id),
     getPodsAndFilter: async (id) => {
       const pods = await io.listPods(id, { all: true })
@@ -208,20 +230,26 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       for (const p of pods) if (p.name && mintedNames.has(p.name)) ownSet.add(p.podId)
       // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
       // — content fetches are the slow part of a cycle. For each, probe Content-Type:
-      // a video/* pod is marked (mediaUrl/mediaType) for the Gemini video path instead
-      // of text-fetched; a per-cycle cap bounds how many videos we score.
-      const videoCap = w.videoPodsPerCycle ?? 4
-      let videoMarked = 0
+      // a video/* pod is marked (mediaUrl/mediaType/contentLength) for the Gemini video
+      // path instead of text-fetched; a per-CYCLE cap (videoBudget, shared across datanets)
+      // bounds how many videos we score. A DETECTED video is NEVER text-fetched — under the
+      // cap it is marked; over the cap it is left unmarked and skipped (continue) this cycle.
       for (const p of pods) {
         const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
         if (!eligible || !p.url) continue
         let info: { mediaType: string; contentLength: number | null } | null = null
         try { info = await io.detectType(p.url) } catch { info = null }
-        if (info && isVideoType(info.mediaType) && videoMarked < videoCap) {
-          p.mediaUrl = p.url
-          p.mediaType = info.mediaType
-          videoMarked++
-          continue // do NOT text-fetch a video (binary garbage)
+        if (info && isVideoType(info.mediaType)) {
+          // A detected video MUST NOT be text-fetched (binary sliced into description = junk
+          // votes), whether or not it fits the cap. Under the cap → mark for the video path;
+          // over the cap → leave unmarked and skip it entirely this cycle (retried next cycle).
+          if (videoBudget > 0) {
+            p.mediaUrl = p.url
+            p.mediaType = info.mediaType
+            if (info.contentLength !== null) p.contentLength = info.contentLength
+            videoBudget--
+          }
+          continue
         }
         const c = await io.fetchContent(p.url)
         if (c) p.description = `${p.name}\n\n${c}`

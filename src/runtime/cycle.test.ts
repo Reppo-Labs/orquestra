@@ -60,6 +60,37 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
   }
 }
 
+describe('runCycle video-pod skips', () => {
+  it('records a per-pod skip activity entry when a video pod scoring throws (idle datanet explains itself)', async () => {
+    const recordActivity = vi.fn()
+    const d = deps({
+      recordActivity,
+      // Single vote-only datanet; its only pod throws (e.g. a video ingest skip).
+      voteScorerFor: () => ({ scorer: { scorePod: async () => { throw new Error('Gemini Files API file never reached ACTIVE (state FAILED)') } } }),
+    })
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    await runCycle(cfg, 'cyc-skip', d)
+    const skip = (recordActivity as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0] as { kind: string; reason?: string; podId?: string })
+      .find((e) => e.kind === 'skip' && /pod scoring skipped/.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+    expect(skip!.podId).toBe('p1')
+    expect(skip!.reason).toContain('never reached ACTIVE')
+  })
+
+  it('arms the per-cycle video budget once via resetVideoBudget', async () => {
+    const resetVideoBudget = vi.fn()
+    const d = deps({ resetVideoBudget })
+    await runCycle(config, 'cyc-reset', d)
+    expect(resetVideoBudget).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('runCycle', () => {
   it('starts the cycle, votes on every vote-enabled datanet, mints only where adapter+canMint', async () => {
     const d = deps()

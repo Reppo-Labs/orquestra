@@ -17,6 +17,10 @@ export interface CycleDeps {
   topN: number
   getRubric(datanetId: string): Promise<DatanetRubric>
   getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
+  /** Reset the per-CYCLE video-pod budget. Called once at the start of each runCycle so the
+   *  `videoPodsPerCycle` cap is global across datanets, not re-armed per datanet. Optional:
+   *  tests/wirings without video support omit it. */
+  resetVideoBudget?(): void
   getAdapter(adapterId: string): DatanetAdapter | undefined
   /** Per-datanet vote scorer factory. Returns the scorer to use for THIS datanet, or a
    *  skip reason (e.g. no API key for the datanet's chosen provider) — the cycle records
@@ -82,6 +86,8 @@ export interface CycleReport {
  *  mint (if enabled + adapter + capable). The executor enforces the budget. */
 export async function runCycle(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<CycleReport> {
   deps.ledger.startCycle(cycleId)
+  // Arm the per-cycle video-pod budget once (global across datanets, not per-datanet).
+  deps.resetVideoBudget?.()
   const datanets: DatanetReport[] = []
 
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
@@ -233,7 +239,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           recordSkip(`vote skipped — ${scorerResult.skip}`, { activity: votes.length === 0 })
         } else {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
-        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, scorerResult.scorer)
+        // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
+        // dashboard activity here so an idle datanet explains why a pod produced no vote —
+        // before this they were swallowed with only a stderr line. The reason is already
+        // redacted by selectVotes.
+        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, scorerResult.scorer,
+          (podId, reason) => deps.recordActivity({
+            ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+            podId, reason: `pod scoring skipped — ${reason}`, status: 'skipped',
+          }))
         for (let i = 0; i < intents.length; i++) {
           const intent = intents[i]
           const r = await deps.executor.executeVote(intent)
