@@ -18,7 +18,11 @@ export interface CycleDeps {
   getRubric(datanetId: string): Promise<DatanetRubric>
   getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
   getAdapter(adapterId: string): DatanetAdapter | undefined
-  voteScorer: PodScorer
+  /** Per-datanet vote scorer factory. Returns the scorer to use for THIS datanet, or a
+   *  skip reason (e.g. no API key for the datanet's chosen provider) — the cycle records
+   *  the skip and casts no votes for the datanet, reusing the per-datanet skip mechanism.
+   *  Resolved per datanet so each can run on its own provider/model (wiring.ts). */
+  voteScorerFor(datanetId: string): { scorer: PodScorer } | { skip: string }
   candidateScorer: CandidateScorer
   seenKeysFor(datanetId: string): Promise<Set<string>>
   executor: WalletExecutor
@@ -221,8 +225,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // skip so an otherwise-idle datanet still explains why it produced nothing.
         recordSkip('per-cycle vote budget/rate exhausted — skipping vote scoring', { activity: votes.length === 0 })
       } else if (policy.vote && rubric.canVote) {
+        const scorerResult = deps.voteScorerFor(datanetId)
+        if ('skip' in scorerResult) {
+          // Per-datanet isolation: an unresolvable scoring model (e.g. no API key for the
+          // datanet's chosen provider) skips THIS datanet's voting with a recorded reason —
+          // never aborts the cycle. Record when otherwise idle so the dashboard explains it.
+          recordSkip(`vote skipped — ${scorerResult.skip}`, { activity: votes.length === 0 })
+        } else {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
-        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
+        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, scorerResult.scorer)
         for (let i = 0; i < intents.length; i++) {
           const intent = intents[i]
           const r = await deps.executor.executeVote(intent)
@@ -268,6 +279,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             ...(intent.podName ? { podName: intent.podName } : {}),
             ...(intent.panel ? { panel: intent.panel } : {}),
           })
+        }
         }
       }
 
