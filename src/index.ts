@@ -32,13 +32,16 @@ const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
 async function onboard(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true })
-  const apiKey = process.env.LLM_API_KEY ?? ''
+  // Registry-aware: an operator may set LLM_KEY_<PROVIDER> and drop LLM_API_KEY.
+  // buildProviderKeyRegistry folds the legacy LLM_API_KEY into the default provider's
+  // slot, so registry.get(provider) is the right key from either source.
+  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
+  const apiKey = buildProviderKeyRegistry(process.env).get(provider) ?? ''
   if (!apiKey) {
-    console.error('orquestra: onboarding needs an LLM key — set LLM_PROVIDER + LLM_API_KEY and re-run.')
+    console.error('orquestra: onboarding needs an LLM key — set LLM_KEY_<PROVIDER> (or LLM_PROVIDER + LLM_API_KEY) and re-run.')
     process.exitCode = 1
     return
   }
-  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const model = resolveModel(provider, apiKey)
   const p = terminalPrompter()
   try {
@@ -112,12 +115,16 @@ async function start(): Promise<void> {
   const canGrantNonReppo = supportsNonReppoGrants(reppoVersion)
   mkdirSync(DATA_DIR, { recursive: true })
 
-  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
-  const model = resolveModel(provider, process.env.LLM_API_KEY ?? '')
   // Multi-provider key registry (env-only): the per-datanet vote scorer resolves a model
-  // from this. Includes the back-compat LLM_PROVIDER/LLM_API_KEY default.
+  // from this. Built FIRST so the node-default model's key is derived from it too — an
+  // operator who sets LLM_KEY_<PROVIDER> and drops LLM_API_KEY still gets a non-empty key
+  // for the default model (onboarding/strategy chat, mint scorer, panel, learn, adapters).
+  // buildProviderKeyRegistry folds the back-compat LLM_PROVIDER/LLM_API_KEY default in.
   const providerKeyRegistry = buildProviderKeyRegistry(process.env)
+  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
+  const defaultKey = providerKeyRegistry.get(provider) ?? ''
   const defaultModel = DEFAULT_MODEL[provider]
+  const model = resolveModel(provider, defaultKey, defaultModel)
 
   // Dashboard FIRST: on a fresh node it hosts the conversational onboarding;
   // the scheduler starts only once a strategy config exists.
