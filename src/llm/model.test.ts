@@ -1,5 +1,26 @@
 import { describe, it, expect } from 'vitest'
-import { resolveModel, type LlmProvider } from './model.js'
+import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, type LlmProvider } from './model.js'
+
+const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals']
+
+describe('LlmProviderEnum', () => {
+  it('matches the LlmProvider union exactly', () => {
+    expect([...LlmProviderEnum.options].sort()).toEqual([...ALL].sort())
+  })
+  it('parses a known provider and rejects an unknown one', () => {
+    expect(LlmProviderEnum.parse('google')).toBe('google')
+    expect(() => LlmProviderEnum.parse('mistral')).toThrow()
+  })
+})
+
+describe('KNOWN_MODELS', () => {
+  it('seeds at least the default model for every provider', () => {
+    for (const p of ALL) {
+      expect(KNOWN_MODELS[p].length).toBeGreaterThan(0)
+      expect(KNOWN_MODELS[p]).toContain(DEFAULT_MODEL[p])
+    }
+  })
+})
 
 describe('resolveModel', () => {
   it('resolves a model for every supported provider (no network, just construction)', () => {

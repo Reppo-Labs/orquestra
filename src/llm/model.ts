@@ -3,6 +3,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import type { LanguageModel } from 'ai'
+import { z } from 'zod'
 
 export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtuals'
 
@@ -24,12 +25,28 @@ const VIRTUALS_BASE_URL = 'https://compute.virtuals.io/v1'
 // Default model slugs per provider. NOTE: provider slugs change over time —
 // update these (or always pass an explicit `model`) when providers rename models;
 // an unknown slug fails at request time, not build time.
-const DEFAULT_MODEL: Record<LlmProvider, string> = {
+export const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-7',
   openai: 'gpt-5.2',
   google: 'gemini-3-pro',
   surplus: 'claude-opus-4.8',
   virtuals: 'claude-opus-4-8',
+}
+
+/** The LlmProvider union as a Zod enum. The .options array MUST stay in sync with
+ *  the `LlmProvider` type above — model.test.ts asserts it. Config + dashboard use
+ *  this to validate a provider string. */
+export const LlmProviderEnum = z.enum(['anthropic', 'openai', 'google', 'surplus', 'virtuals'])
+
+/** Per-provider seed model slugs surfaced by the dashboard picker. Slugs drift, so the
+ *  picker also allows free-text — this is only a convenience list, never authoritative
+ *  (an unknown slug fails at request time, not here). Always includes DEFAULT_MODEL[p]. */
+export const KNOWN_MODELS: Record<LlmProvider, string[]> = {
+  anthropic: ['claude-opus-4-7', 'claude-sonnet-4-5'],
+  openai: ['gpt-5.2', 'gpt-5.2-mini'],
+  google: ['gemini-3-pro', 'gemini-3-flash'],
+  surplus: ['claude-opus-4.8'],
+  virtuals: ['claude-opus-4-8', 'gemini-3-flash-preview'],
 }
 
 export function resolveModel(provider: LlmProvider, apiKey: string, model?: string): LanguageModel {
