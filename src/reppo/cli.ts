@@ -23,7 +23,20 @@ export interface ChainResult {
   gasEth: number
   /** actual REPPO paid (mint fee / grant fee), reported by reppo >=0.8.4. */
   reppoFee?: number
+  /** The token an access fee was paid in (reppo >=0.8.5 grant-access result). Present on
+   *  non-REPPO grants — informational (the fee is consent-bounded, not budget-gated). */
+  feeToken?: { symbol: string; address: string; decimals: number }
+  /** On-chain fee QUOTE, human-formatted (e.g. "50"), from the grant-access result. Kept as
+   *  a STRING — Number()-ing it would lose precision and silently turn '' into 0. */
+  feeAmount?: string
+  /** Receipt-derived ACTUAL fee paid (string), from the grant-access result. Prefer this over
+   *  the quote when present. */
+  feePaid?: string
 }
+
+/** Token choice for an access grant. 'reppo' is the default (byte-identical to the
+ *  pre-0.8.5 call — no flag added). 'primary' pays in the datanet's primary token. */
+export interface GrantAccessOpts { token?: 'reppo' | 'primary' }
 
 /** The signing surface. Injected into WalletExecutor; the default shells out to `reppo`. */
 export interface ReppoCli {
@@ -31,8 +44,10 @@ export interface ReppoCli {
   vote(args: VoteArgs): Promise<ChainResult>
   mintPod(args: MintArgs): Promise<ChainResult>
   claimEmissions(args: ClaimEmissionsArgs): Promise<ChainResult>
-  /** One-time access grant — prerequisite for voting/minting. Keyed by the integer datanet id. */
-  grantAccess(datanetId: string): Promise<ChainResult>
+  /** One-time access grant — prerequisite for voting/minting. Keyed by the integer datanet id.
+   *  `opts.token` defaults to 'reppo' (existing path); 'primary' pays the fee in the
+   *  datanet's primary token via `grant-access --token primary` (reppo >=0.8.5). */
+  grantAccess(datanetId: string, opts?: GrantAccessOpts): Promise<ChainResult>
 }
 
 import { redactSecrets } from '../util/redact.js'
@@ -56,13 +71,49 @@ export function foldExecError(e: unknown): Error {
  *  the CLI omits gasEth (reppo 0.8.0 reports only txHash) — structural, not
  *  per-call, so it must not spam every transaction. */
 export function parseChainResult(stdout: string, warn: (m: string) => void = (m) => console.warn(m)): ChainResult {
-  const j = JSON.parse(stdout) as { txHash?: string; tx?: string; gasEth?: number; reppoFee?: number | string }
+  const j = JSON.parse(stdout) as {
+    txHash?: string; tx?: string; gasEth?: number; reppoFee?: number | string
+    // grant-access >=0.8.5 (best-effort; absent on vote/mint/claim results):
+    feeToken?: { symbol?: string; address?: string; decimals?: number }
+    feeAmount?: { raw?: string; formatted?: string } | number | string
+    feePaid?: string
+  }
   if (j.gasEth === undefined && !warnedNoGas) {
     warnedNoGas = true
     warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
   }
   const fee = j.reppoFee !== undefined ? Number(j.reppoFee) : undefined
-  return { txHash: j.txHash ?? j.tx ?? '', gasEth: Number(j.gasEth ?? 0), ...(fee !== undefined && !Number.isNaN(fee) ? { reppoFee: fee } : {}) }
+  return {
+    txHash: j.txHash ?? j.tx ?? '',
+    gasEth: Number(j.gasEth ?? 0),
+    ...(fee !== undefined && !Number.isNaN(fee) ? { reppoFee: fee } : {}),
+    ...parseGrantFee(j),
+  }
+}
+
+/** Best-effort extract of the access-fee fields from a grant-access >=0.8.5 result.
+ *  Returns {} when absent so vote/mint/claim parsing is unaffected. */
+function parseGrantFee(j: {
+  feeToken?: { symbol?: string; address?: string; decimals?: number }
+  feeAmount?: { raw?: string; formatted?: string } | number | string
+  feePaid?: string
+}): Partial<Pick<ChainResult, 'feeToken' | 'feeAmount' | 'feePaid'>> {
+  const out: Partial<Pick<ChainResult, 'feeToken' | 'feeAmount' | 'feePaid'>> = {}
+  if (j.feeToken && typeof j.feeToken === 'object' && j.feeToken.address) {
+    out.feeToken = {
+      symbol: String(j.feeToken.symbol ?? ''),
+      address: String(j.feeToken.address),
+      decimals: Number(j.feeToken.decimals ?? 0),
+    }
+  }
+  if (j.feeAmount !== undefined) {
+    // Keep the formatted value as a STRING — Number()-ing it loses precision and turns ''
+    // into 0. The grant fee is informational (consent-bounded), so a string is all we need.
+    const v = typeof j.feeAmount === 'object' ? (j.feeAmount.formatted ?? j.feeAmount.raw) : j.feeAmount
+    if (v !== undefined) out.feeAmount = String(v)
+  }
+  if (typeof j.feePaid === 'string') out.feePaid = j.feePaid
+  return out
 }
 
 async function run(args: string[]): Promise<ChainResult> {
@@ -96,5 +147,11 @@ export const defaultReppoCli: ReppoCli = {
     ...(a.imageUrl ? ['--image-url', a.imageUrl] : []),
   ]),
   claimEmissions: (a) => run(['claim-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
-  grantAccess: (datanetId) => run(['grant-access', '--datanet', datanetId]),
+  // 'reppo' (default) is byte-identical to the pre-0.8.5 call — no --token flag added.
+  // 'primary' pays the datanet's primary-token access fee (reppo >=0.8.5; gated upstream
+  // on the CLI version so an older CLI never sees the unknown flag).
+  grantAccess: (datanetId, opts) => run([
+    'grant-access', '--datanet', datanetId,
+    ...(opts?.token === 'primary' ? ['--token', 'primary'] : []),
+  ]),
 }

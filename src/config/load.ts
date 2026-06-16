@@ -7,6 +7,26 @@ import { StrategyConfigSchema, type StrategyConfig } from './schema.js'
 export class ConfigNotFoundError extends Error {}
 export class ConfigInvalidError extends Error {}
 
+/** Warn-once latch for the budget.grantReppoMax migration note (per process). */
+let warnedGrantReppoMax = false
+/** test hook: reset the warn-once latch. */
+export function resetWarnedGrantReppoMax(): void { warnedGrantReppoMax = false }
+
+/** Warn ONCE if a loaded config still carries the retired `budget.grantReppoMax`. The Zod
+ *  schema's `budget` object is not strict, so a stray field passes silently and is stripped
+ *  on parse — without this the operator never learns the cap stopped being enforced. Detect
+ *  on the RAW object (before safeParse drops it). */
+function warnIfRetiredGrantCap(raw: unknown): void {
+  if (warnedGrantReppoMax) return
+  const budget = (raw as { budget?: unknown } | null)?.budget
+  if (budget != null && typeof budget === 'object' && 'grantReppoMax' in budget) {
+    warnedGrantReppoMax = true
+    console.warn(
+      'orquestra: budget.grantReppoMax is no longer enforced — subnet-access grants are unbounded once a datanet is enabled (enabling a datanet IS the consent to pay its one-time access fee). Remove it from your config to silence this note.',
+    )
+  }
+}
+
 /** Legacy on-disk config file, imported once into the `config` table. */
 export const CONFIG_FILENAME = 'strategy.config.json'
 
@@ -58,6 +78,9 @@ export function loadConfig(dataDir: string): StrategyConfig {
   } catch (e) {
     throw new ConfigInvalidError(`strategy config is not valid JSON: ${(e as Error).message}`)
   }
+  // Migration note: detect the retired budget.grantReppoMax on the RAW object before
+  // safeParse silently strips it (budget is not a strict Zod object).
+  warnIfRetiredGrantCap(raw)
   const result = StrategyConfigSchema.safeParse(raw)
   if (!result.success) {
     throw new ConfigInvalidError(`strategy config failed validation:\n${result.error.toString()}`)

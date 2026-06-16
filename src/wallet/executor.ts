@@ -7,10 +7,6 @@ import type { VoteIntent, MintIntent, ClaimIntent, ExecResult } from './intents.
 const VOTE_GAS_EST_ETH = 0.003
 const MINT_GAS_EST_ETH = 0.02
 const CLAIM_GAS_EST_ETH = 0.003
-// Conservative per-grant REPPO estimate (observed fees: 100-200 REPPO). The CLI doesn't
-// report the exact fee, so we reserve this and keep it as spent on success (over-count,
-// never under-count — matches the gas-reservation philosophy).
-const GRANT_REPPO_EST = 200
 /** Conservative mint-fee fallback (max observed: 200 REPPO) used only when the
  *  on-chain fee read fails — keeps the cap honest (over-count, never silent 0). */
 export const MINT_REPPO_FALLBACK = 200
@@ -45,26 +41,37 @@ export class WalletExecutor {
   }
 
   /** One-time per-subnet access grant (prerequisite for voting/minting). Like lock(),
-   *  this is infrequent setup and not budget-gated; gas is negligible. */
-  async executeGrantAccess(datanetId: string): Promise<ExecResult> {
-    // Budget-gated only when the operator set an explicit grantReppoMax; unset = no cap
-    // (joining a datanet is the consent to pay its one-time grant fee).
-    const res = this.ledger.reserveGrant(GRANT_REPPO_EST)
-    if (!res) return { ok: false, status: 'refused-budget', detail: 'grant REPPO budget exhausted (raise or unset budget.grantReppoMax to allow subnet-access grants)' }
+   *  this is infrequent setup and not budget-gated: enabling a datanet is the operator's
+   *  consent to pay its one-time, per-subnet, cached access fee (no grant budget cap).
+   *  `token` selects the fee currency: 'reppo' (default, unchanged path) or 'primary'
+   *  (pay in the datanet's primary token via reppo >=0.8.5; the cycle gates on the CLI
+   *  version before passing 'primary' here). The fee amount is consent-bounded, not capped.
+   *  SEAM: per-token mint fee cap (see 2026-06-15-non-reppo-access-fees-design.md §2.7) —
+   *  grants are one-time/cached so they need no per-token cap; recurring NON-REPPO MINT
+   *  spend would plug in at executeMint + the ledger, NOT here. Out of Phase 2 scope. */
+  async executeGrantAccess(datanetId: string, token: 'reppo' | 'primary' = 'reppo'): Promise<ExecResult> {
     try {
-      const r = await this.cli.grantAccess(datanetId)
-      if (!r.txHash) { this.ledger.releaseGrant(res); return { ok: false, status: 'error', detail: 'no txHash' } }
-      // Reconcile to the CLI-reported actual fee (>=0.8.4); the reserve was a
-      // conservative estimate (200) while the real grant fee is typically 100.
-      if (r.reppoFee !== undefined) this.ledger.reconcileGrant(res, r.reppoFee)
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
+      const r = await this.cli.grantAccess(datanetId, { token })
+      if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
+      // Surface the actual fee paid (reppo >=0.8.5 reports feeAmount/feeToken on a
+      // non-REPPO grant) so the cycle can show "paid 50 EXY" in the activity log. The
+      // fee is consent-bounded (not budget-gated); this is informational only.
+      return {
+        ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth,
+        ...(r.feeAmount !== undefined ? { feeAmount: r.feeAmount } : {}),
+        ...(r.feePaid !== undefined ? { feePaid: r.feePaid } : {}),
+        ...(r.feeToken ? { feeToken: r.feeToken } : {}),
+      }
     } catch (e) {
       const detail = (e as Error).message
-      // No REPPO leaves the wallet on any failure path → release the reservation.
-      this.ledger.releaseGrant(res)
       // Already having access is success, not failure — report executed so the caller
       // caches it and stops re-attempting the grant every cycle (no fee was charged).
       if (/ACCESS_ALREADY_GRANTED/.test(detail)) return { ok: true, status: 'executed', detail: 'already granted' }
+      // Every other CLI failure — including a primary-token INSUFFICIENT_TOKEN_BALANCE /
+      // INSUFFICIENT_ALLOWANCE (the wallet isn't funded/approved for the fee token) — is a
+      // recorded, non-fatal 'error': the cycle records it and skips THIS datanet (per-datanet
+      // isolation), resuming once the operator funds the wallet. The node never crashes here
+      // and never acquires the token itself.
       return { ok: false, status: 'error', detail }
     }
   }

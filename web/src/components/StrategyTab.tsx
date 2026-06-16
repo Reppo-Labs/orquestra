@@ -139,9 +139,9 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
   const budget = candidate.budget ?? {}
   const stake = candidate.stake ?? {}
   const delib = candidate.deliberation ?? {}
-  const setB = (k: string, n: number | undefined, optional = false) => edit((c) => {
+  const setB = (k: string, n: number | undefined) => edit((c) => {
     const b = { ...c.budget } as Record<string, number | undefined>
-    if (optional && n === undefined) delete b[k]; else b[k] = n
+    b[k] = n
     c.budget = b as Candidate['budget']
   })
 
@@ -174,8 +174,6 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
           hint="Max votes the node casts in one cycle. Once hit, remaining candidates are deferred to the next cycle. Caps vote volume and gas." />
         <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)}
           hint="Max REPPO spent on mint fees per horizon window. At the cap, further mints are refused before signing. (Mint fees run ~100–200 REPPO each.)" />
-        <Num label="grant REPPO max (∞ if empty)" value={budget.grantReppoMax} onChange={(n) => setB('grantReppoMax', n, true)}
-          hint="Cap on REPPO for one-time subnet-access grants (paid once to join a datanet). Empty = no cap (joining IS the consent to its fee); 0 = grants disabled." />
       </div>
 
       <div className="sec-head"><h2>Deliberation</h2><div className="rule" /></div>

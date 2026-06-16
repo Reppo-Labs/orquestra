@@ -52,7 +52,11 @@ interface ReadOpts {
   reppoToken?: string
 }
 
-async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<any> {
+/** Single JSON-RPC POST. Exported so other readers (e.g. tokenBalance.ts) reuse the
+ *  same transport/error handling rather than duplicating fetch plumbing: throws on a
+ *  non-2xx response or a JSON-RPC error body so a transport failure is distinguishable
+ *  from a genuine result. */
+export async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<any> {
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

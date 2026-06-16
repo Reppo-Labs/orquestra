@@ -6,7 +6,6 @@ export function BudgetBurn({ snapshot }: { snapshot: Snapshot | null }) {
   const caps = b?.caps
   const bars: [string, number, number | null | undefined][] = b && caps ? [
     ['Mint REPPO', b.mintReppoSpent, caps.mintReppoMax],
-    ['Grant REPPO', b.grantReppoSpent ?? 0, caps.grantReppoMax],
   ] : []
   if (!bars.length) return <div className="empty panel-box">budget pending first cycle</div>
   return (

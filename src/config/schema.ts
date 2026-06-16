@@ -45,11 +45,6 @@ export const StrategyConfigSchema = z
       voteGasEthMax: z.number().nonnegative().default(1),
       mintGasEthMax: z.number().nonnegative().default(1),
       claimGasEthMax: z.number().nonnegative().default(1),
-      // Cumulative REPPO the node may spend on one-time subnet-access grants (fee is
-      // 100-200 REPPO each). Unset = no cap: enabling a datanet (vote/mint) IS the
-      // consent to pay its grant fee, so joined datanets get access automatically.
-      // Set a number to bound total grant spend (0 disables grants entirely).
-      grantReppoMax: z.number().nonnegative().optional(),
     }),
     claimEmissions: z.boolean().default(true),
     // Multi-agent panel deliberation (personas + judge; see src/panel/).

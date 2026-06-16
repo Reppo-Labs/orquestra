@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BudgetLedger, LedgerCorruptError, type BudgetCaps } from './ledger.js'
 
-const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 3, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.01, grantReppoMax: 500 }
+const caps = { voteGasEthMax: 0.05, voteRateMaxPerCycle: 3, mintReppoMax: 100, mintGasEthMax: 0.1, claimGasEthMax: 0.01 }
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-led-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
@@ -169,13 +169,23 @@ describe('BudgetLedger', () => {
   it('imports a legacy budget-ledger.json once, then renames it .imported', () => {
     writeFileSync(join(dir, 'budget-ledger.json'), JSON.stringify({
       cycleId: 'c1', votesCastThisCycle: 2, voteGasSpentEth: 0.002, mintReppoSpent: 70,
-      mintGasSpentEth: 0.01, claimGasSpentEth: 0, grantReppoSpent: 0,
+      mintGasSpentEth: 0.01, claimGasSpentEth: 0,
     }))
     const l = new BudgetLedger(dir, caps)
     expect(l.state.mintReppoSpent).toBe(70)
     expect(l.state.votesCastThisCycle).toBe(2)
     expect(existsSync(join(dir, 'budget-ledger.json'))).toBe(false)
     expect(existsSync(join(dir, 'budget-ledger.json.imported'))).toBe(true)
+  })
+
+  it('loads a legacy ledger with the removed grantReppoSpent field without throwing (ignored)', () => {
+    writeFileSync(join(dir, 'budget-ledger.json'), JSON.stringify({
+      cycleId: 'c1', votesCastThisCycle: 1, voteGasSpentEth: 0.001, mintReppoSpent: 40,
+      mintGasSpentEth: 0.005, claimGasSpentEth: 0, grantReppoSpent: 123,
+    }))
+    const l = new BudgetLedger(dir, caps)
+    expect(l.state.mintReppoSpent).toBe(40)
+    expect((l.state as Record<string, unknown>).grantReppoSpent).toBeUndefined()
   })
 
   // --- atomic write: no .tmp file left behind ---
@@ -211,31 +221,8 @@ describe('BudgetLedger', () => {
 })
 
 const CAPS: BudgetCaps = {
-  voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.01, grantReppoMax: 500,
+  voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.01,
 }
-
-describe('BudgetLedger grant REPPO cap', () => {
-  it('refuses a grant when grantReppoMax is explicitly 0', () => {
-    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 0 })
-    expect(l.reserveGrant(200)).toBeNull()
-  })
-  it('allows grants (still tracked) when grantReppoMax is unset — joining a datanet is the consent', () => {
-    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: undefined })
-    const r = l.reserveGrant(200)
-    expect(r).not.toBeNull()
-    expect(l.state.grantReppoSpent).toBe(200)
-    expect(l.reserveGrant(200)).not.toBeNull() // no cap → never refuses
-  })
-  it('reserves within the cap, then refuses once exhausted; release rolls back', () => {
-    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 250 })
-    const r = l.reserveGrant(200)
-    expect(r).not.toBeNull()
-    expect(l.state.grantReppoSpent).toBe(200)
-    expect(l.reserveGrant(200)).toBeNull() // 200 + 200 > 250
-    l.releaseGrant(r!)
-    expect(l.state.grantReppoSpent).toBe(0)
-  })
-})
 
 describe('BudgetLedger claim gas cap', () => {
   it('reserves, reconciles to actual, and persists claimGasSpentEth', () => {
@@ -284,13 +271,6 @@ describe('BudgetLedger actual-REPPO reconciliation', () => {
     l.reconcileMint(r2, 0.0005, 100)           // total 200 > 150
     expect(l.reserveMint(0, 0.001)).toBeNull()
   })
-
-  it('reconcileGrant corrects the conservative estimate to actual (est 200 → actual 100)', () => {
-    const l = new BudgetLedger(dir, { ...CAPS, grantReppoMax: 500 })
-    const r = l.reserveGrant(200)!
-    l.reconcileGrant(r, 100)
-    expect(l.state.grantReppoSpent).toBe(100)
-  })
 })
 
 describe('BudgetLedger horizon window (caps are per-horizon, not lifetime)', () => {
@@ -305,7 +285,6 @@ describe('BudgetLedger horizon window (caps are per-horizon, not lifetime)', () 
     expect(l.state.mintReppoSpent).toBe(300)
     l.startCycle(iso('2026-07-05'))            // 34 days from start — window rolled
     expect(l.state.mintReppoSpent).toBe(0)
-    expect(l.state.grantReppoSpent).toBe(0)
   })
 
   it('horizonDays = 0 (or default) never rolls — lifetime cumulative', () => {

@@ -7,7 +7,8 @@ import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
 import { listDatanetsJson } from './reppo/listDatanets.js'
-import { checkReppoVersion } from './reppo/version.js'
+import { checkReppoVersion, getReppoVersionString } from './reppo/version.js'
+import { supportsNonReppoGrants } from './reppo/capabilities.js'
 import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } from './reppo/agent.js'
 import { terminalPrompter } from './runtime/prompter.js'
@@ -100,7 +101,14 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
 }
 
 async function start(): Promise<void> {
-  await checkReppoVersion() // warn-only preflight: old CLI fails every vote/mint cryptically
+  // ONE `reppo --version` shell-out at startup: read the banner once, then feed the SAME
+  // string to both the warn-only preflight and the per-feature capability gate (no second
+  // shell-out). grant-access --token primary (non-REPPO access fees) needs reppo >=0.8.5 —
+  // when the installed CLI is older, the cycle skips non-REPPO-fee datanets instead of firing
+  // an unsupported flag. Fail-closed: an unreadable version → '' → preflight warns + capability false.
+  const reppoVersion = await getReppoVersionString()
+  await checkReppoVersion({ getVersion: async () => reppoVersion }) // warn-only: old CLI fails every vote/mint cryptically
+  const canGrantNonReppo = supportsNonReppoGrants(reppoVersion)
   mkdirSync(DATA_DIR, { recursive: true })
 
   const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
@@ -164,6 +172,7 @@ async function start(): Promise<void> {
     learnModel: model,
     rpcUrl: rpcUrl || undefined,
     walletAddress,
+    supportsNonReppoGrants: canGrantNonReppo,
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.

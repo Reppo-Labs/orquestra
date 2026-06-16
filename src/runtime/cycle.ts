@@ -40,6 +40,23 @@ export interface CycleDeps {
   recordGrant?(subnetId: string): void
   /** evict a stale grant-cache entry (e.g. wallet changed → on-chain access gone). */
   revokeGrant?(subnetId: string): void
+  /** Whether the reppo CLI on PATH can pay a NON-REPPO access fee (`grant-access
+   *  --token primary`, reppo >=0.8.5). Computed ONCE at startup from the CLI version
+   *  (src/reppo/capabilities.ts) and threaded in via wiring. When false, a datanet that
+   *  charges a non-REPPO access fee is skipped with a recorded reason rather than firing
+   *  an unsupported flag. Defaults to false (fail-closed) when omitted. */
+  supportsNonReppoGrants?: boolean
+  /** Read the wallet's RAW (un-scaled) balance of an ERC20 token. Injected for testability
+   *  and wired in production from the configured RPC URL + wallet address (src/reppo/
+   *  tokenBalance.ts). Used to pre-check a NON-REPPO access fee against the wallet balance
+   *  BEFORE attempting a grant the CLI would otherwise reject after spending gas. When
+   *  ABSENT (no RPC configured), the balance pre-check is skipped and the grant is attempted
+   *  anyway — the CLI still fails closed on an underfunded wallet. Only the clean
+   *  per-datanet skip-with-reason is lost, not the safety. */
+  readTokenBalance?(token: string, owner: string): Promise<bigint>
+  /** This node's wallet address — the `owner` passed to readTokenBalance for the balance
+   *  pre-check. Omitted (with readTokenBalance) when no RPC/wallet is configured. */
+  walletAddress?: string
 }
 
 export interface DatanetReport {
@@ -102,14 +119,83 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Without access every vote/mint reverts on-chain (VOTER_LACKS_SUBNET_ACCESS) — but
       // only AFTER paying for pod fetching and LLM scoring. So a failed/refused grant
       // skips the datanet for this cycle instead of proceeding; it resumes automatically
-      // the cycle after a grant succeeds (e.g. operator raises budget.grantReppoMax).
+      // the cycle after a grant succeeds (e.g. once the wallet has funds for the fee).
       if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
         const granted = await deps.grantedSubnets()
         if (!granted.has(datanetId)) {
-          const gr = await deps.executor.executeGrantAccess(datanetId)
+          // Fee currency comes from the rubric: a non-REPPO access fee (accessFeeToken set)
+          // must be paid via `grant-access --token primary`. That CLI flag only exists in
+          // reppo >=0.8.5, so gate it on the startup-derived capability flag (fail-closed):
+          // an older CLI would error on the unknown flag, so skip the datanet with a clear
+          // reason instead — per-datanet isolation, never abort the cycle. REPPO-fee
+          // datanets (the common case) take the unchanged 'reppo' path with no gate.
+          const feeToken = rubric.economics.accessFeeToken
+          if (feeToken && !deps.supportsNonReppoGrants) {
+            const skipped = `non-REPPO access fee needs reppo CLI ≥ 0.8.5 (this datanet charges ${feeToken.amount} ${feeToken.symbol} for access)`
+            console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
+            deps.recordActivity({
+              ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+              reason: skipped, status: 'skipped',
+            })
+            datanets.push({ datanetId, votes, mints, skipped })
+            continue
+          }
+          // Non-REPPO fee + a balance reader configured: confirm the wallet holds enough of
+          // the primary token BEFORE paying. The CLI also pre-flights this, but it costs gas
+          // to reach that revert; checking here lets us record a clean per-datanet skip and
+          // resume automatically once the operator funds the wallet (we never acquire the
+          // token). RAW-to-RAW: compare the rubric's raw integer amount (amountRaw, straight
+          // from the CLI's accessFeePrimaryToken.raw) against the raw on-chain balance — no
+          // float scaling, so no precision over-estimate and no decimals=0 defeat.
+          // When no reader is wired (no RPC), fall through — the CLI still fails closed.
+          if (feeToken && deps.readTokenBalance && deps.walletAddress) {
+            const required = BigInt(feeToken.amountRaw)
+            let balance: bigint | undefined
+            try {
+              balance = await deps.readTokenBalance(feeToken.address, deps.walletAddress)
+            } catch (e) {
+              // A failed balance read is NOT proof of insufficiency — don't skip on it.
+              // Fall through to the grant attempt (CLI fails closed); just note the read miss.
+              console.error(`orquestra: datanet ${datanetId} — ${feeToken.symbol} balance read failed, proceeding to grant (CLI will pre-flight): ${(e as Error).message}`)
+            }
+            if (balance !== undefined && balance < required) {
+              const skipped = `insufficient ${feeToken.symbol} balance for access fee (need ${feeToken.amount} ${feeToken.symbol}) — fund this node's wallet with ${feeToken.symbol}`
+              console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
+              deps.recordActivity({
+                ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+                reason: skipped, status: 'skipped',
+              })
+              datanets.push({ datanetId, votes, mints, skipped })
+              continue
+            }
+          }
+          const gr = await deps.executor.executeGrantAccess(datanetId, feeToken ? 'primary' : 'reppo')
           if (gr.status === 'executed') {
             deps.recordGrant(datanetId)
-            console.error(`orquestra: datanet ${datanetId} — granted access`)
+            // Surface the grant (and the fee paid) as an activity breadcrumb so the
+            // dashboard Activity view shows e.g. "Granted access — paid 50 EXY". Prefer the
+            // receipt-derived ACTUAL the executor read from the CLI result (gr.feePaid), then
+            // the on-chain quote (gr.feeAmount), then the rubric's expected amount; note REPPO
+            // for the common path. Label with the CLI's fee-token symbol when present, else the
+            // rubric's. 'already granted' (no fee charged) says so.
+            const feeQty = gr.feePaid ?? gr.feeAmount
+            const feeSym = gr.feeToken?.symbol ?? feeToken?.symbol
+            const feePaid = feeQty !== undefined
+              ? `paid ${feeQty} ${feeSym ?? ''}`.trimEnd()
+              : feeToken
+                ? `paid ${feeToken.amount} ${feeToken.symbol}`
+                : 'paid in REPPO'
+            const reason = gr.detail === 'already granted'
+              ? 'granted access (already granted — no fee charged)'
+              : `granted access — ${feePaid}`
+            console.error(`orquestra: datanet ${datanetId} — ${reason}`)
+            // kind:'grant' (NOT 'skip'): a successful grant is setup, not idleness. Logging
+            // it as a skip would inflate the skip count and could surface "granted access" as
+            // lastSkipReason / mark the datanet idle in buildHealth — see src/dashboard/health.ts.
+            deps.recordActivity({
+              ts: new Date().toISOString(), cycleId, kind: 'grant', datanetId,
+              reason, status: 'executed', txHash: gr.txHash, gasEth: gr.gasEth,
+            })
           } else {
             const skipped = `subnet access not granted (grant-access ${gr.status}: ${gr.detail ?? ''})`
             console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)

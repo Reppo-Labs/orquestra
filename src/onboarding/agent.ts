@@ -27,9 +27,24 @@ PERSONALIZED MINT STRATEGY — this is what makes each operator's node unique an
   - angle: their stance — contrarian vs consensus, risk-focused, which kinds of claims to favor. (Datanet 2 rewards sharp, well-reasoned minority takes, so encourage a distinctive angle.)
   - how strict, and how many items per cycle (topN).
 Pass these as that datanet's adapterParams { focus, angle, topN, minImportance } in finalize. Capture the operator's overall approach as freeform 'notes' (saved as the strategy brief, used for both minting and voting).
+ACCESS FEE FUNDING: some datanets charge their one-time access fee in a NON-REPPO token (e.g. EXY). get_datanet_details returns an 'accessFeeNote' for these — relay it to the operator so they know to fund this node's wallet with that token; otherwise the node can enable the datanet but the first grant will fail until funded. REPPO-fee datanets need no special note.
 You may RECOMMEND choices from the catalog economics, but always confirm each decision with the operator before finishing. When the operator confirms, call finalize with the complete structured answers. Keep messages short.
 After each topic is settled, call update_draft with the fields agreed so far — the operator's UI renders a live draft of the configuration from these calls.
 Use get_wallet_balance to look up the operator's REPPO/veREPPO/ETH/USDC holdings when they express amounts relative to their balance (e.g. '80% of my REPPO').`
+
+/** Deterministic operator-facing funding note for a datanet's access fee. Returns a
+ *  concise line ONLY when the datanet charges a NON-REPPO access fee (accessFeeToken set);
+ *  undefined for REPPO-fee datanets (the common case), so onboarding is unchanged for them.
+ *  A non-REPPO fee is an ERC20 the SubnetManager pulls via transferFrom — so the operator
+ *  must BOTH fund the wallet AND approve the SubnetManager for the token, or the first grant
+ *  reverts on INSUFFICIENT_ALLOWANCE. e.g.
+ *  "Access fee: 50 EXY (one-time) — fund this node's wallet with EXY and approve it for the
+ *   SubnetManager (`reppo approve --spender subnet-manager --token 0x…`)". */
+export function summarizeAccessFee(rubric: DatanetRubric): string | undefined {
+  const t = rubric.economics.accessFeeToken
+  if (!t) return undefined
+  return `Access fee: ${t.amount} ${t.symbol} (one-time) — fund this node's wallet with ${t.symbol} and approve it for the SubnetManager (\`reppo approve --spender subnet-manager --token ${t.address}\`)`
+}
 
 /** Build the agent's tools. onFinalize is called with validated answers when the
  *  model finalizes; onDraft (optional) receives partial working drafts for live UIs. */
@@ -57,7 +72,15 @@ export function buildOnboardingTools(
       parameters: z.object({ datanetId: z.string() }),
       execute: async ({ datanetId }) => {
         try {
-          return await deps.getDatanetDetails(datanetId)
+          const details = await deps.getDatanetDetails(datanetId)
+          // Attach a deterministic non-REPPO access-fee funding note when applicable, so the
+          // assistant surfaces "fund the wallet with EXY" rather than relying on the model to
+          // notice the raw economics.accessFeeToken object. Absent ⇒ REPPO datanet, unchanged.
+          if (!('error' in details)) {
+            const accessFeeNote = summarizeAccessFee(details)
+            if (accessFeeNote) return { ...details, accessFeeNote }
+          }
+          return details
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) }
         }

@@ -18,6 +18,17 @@ const defaultGetVersion = async (): Promise<string> => {
   return stdout.trim().split('\n')[0]
 }
 
+/** Read the reppo CLI `--version` banner (first line), or '' if it can't be run.
+ *  Exported so startup can derive per-feature capability flags (capabilities.ts) once,
+ *  without a second `reppo --version` shell-out. Never throws. */
+export async function getReppoVersionString(): Promise<string> {
+  try {
+    return await defaultGetVersion()
+  } catch {
+    return ''
+  }
+}
+
 /** Extract the reppo CLI version from a `--version` banner. Prefers a `v`-tagged
  *  token ("reppo-cli v0.8.0"), else the FIRST dotted token whose major version is
  *  not year-shaped (< 1000). Filtering year/build tokens (2024.x) at the root
@@ -31,8 +42,11 @@ function parseVersion(s: string): string | undefined {
   return tokens.find((t) => Number(t.split('.')[0]) < 1000)
 }
 
-/** Compare dotted versions numerically segment by segment. */
-function atLeast(actual: string, required: string): boolean {
+/** Compare a (possibly noisy) version banner against a required dotted version,
+ *  numerically segment by segment. The actual string is run through parseVersion
+ *  first so date/build/runtime tokens don't poison the comparison. Exported so
+ *  capability gates (src/reppo/capabilities.ts) reuse one parser+comparator. */
+export function isVersionAtLeast(actual: string, required: string): boolean {
   const a = parseVersion(actual)?.split('.').map(Number) ?? []
   const r = required.split('.').map(Number)
   if (a.length === 0) return false
@@ -57,7 +71,7 @@ export async function checkReppoVersion(deps: VersionCheckDeps = {}): Promise<bo
     warn(`orquestra: could not determine reppo CLI version (${(e as Error).message.split('\n')[0]}) — vote/mint may fail; install @reppo/cli@${REQUIRED_REPPO_VERSION}+`)
     return false
   }
-  if (!atLeast(raw, REQUIRED_REPPO_VERSION)) {
+  if (!isVersionAtLeast(raw, REQUIRED_REPPO_VERSION)) {
     warn(`orquestra: reppo CLI ${raw} is older than the required ${REQUIRED_REPPO_VERSION} — vote/mint/grant flags WILL fail; upgrade with: npm i -g @reppo/cli@${REQUIRED_REPPO_VERSION}`)
     return false
   }

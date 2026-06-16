@@ -18,7 +18,6 @@ export interface BudgetCaps {
   mintReppoMax?: number
   mintGasEthMax?: number
   claimGasEthMax?: number
-  grantReppoMax?: number | null
 }
 
 export interface SnapshotBudget {
@@ -26,7 +25,6 @@ export interface SnapshotBudget {
   mintReppoSpent: number
   mintGasSpentEth: number
   claimGasSpentEth: number
-  grantReppoSpent?: number
   caps: BudgetCaps
 }
 
@@ -48,7 +46,7 @@ export interface PanelTranscript {
 
 export interface ActivityRow {
   ts: string | number
-  kind: 'vote' | 'mint' | 'claim' | 'skip'
+  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant'
   datanetId?: string
   podId?: string
   canonicalKey?: string

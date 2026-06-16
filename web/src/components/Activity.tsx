@@ -16,7 +16,8 @@ const detail = (r: ActivityRow) =>
     // mint: score + reason (pod name is in the Pod column). Fall back to the
     // executor detail, then nothing — never the canonical-key hash.
     : r.kind === 'mint' ? (r.reason ? `score ${r.conviction ?? '?'} · ${r.reason}` : (r.detail || '—'))
-    : r.kind === 'skip' ? (r.reason ?? '—')
+    // skip + grant are free-text breadcrumbs — grant carries "granted access — paid 50 EXY".
+    : r.kind === 'skip' || r.kind === 'grant' ? (r.reason ?? '—')
     : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
 
 /** Pod column: prefer the human-readable name; fall back to the id for entries
@@ -38,6 +39,7 @@ export function Activity({ activity, netNames, onOpenPanel }: {
           <option value="">all kinds</option>
           <option value="vote">votes</option><option value="mint">mints</option>
           <option value="claim">claims</option><option value="skip">skips</option>
+          <option value="grant">grants</option>
         </select>
       </div>
       <div className="panel-box">

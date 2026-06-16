@@ -13,7 +13,11 @@ import { getDb, type SqliteDb } from './db.js'
 export interface ActivityEntry {
   ts: string
   cycleId: string
-  kind: 'vote' | 'mint' | 'claim' | 'skip'
+  // 'grant' = a one-time subnet access grant breadcrumb (records the fee paid, e.g.
+  //  "granted access — paid 50 EXY"). Distinct from 'skip' so a successful grant is
+  //  NOT counted as idleness/skip in buildHealth. The `kind` column is plain TEXT, so
+  //  this needs no DDL change. (db.ts activity.kind has no CHECK constraint.)
+  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant'
   datanetId: string
   podId?: string
   direction?: 'up' | 'down'

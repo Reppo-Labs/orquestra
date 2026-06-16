@@ -1,8 +1,9 @@
 // src/onboarding/agent.test.ts
 import { describe, it, expect, vi } from 'vitest'
 import { MockLanguageModelV1 } from 'ai/test'
-import { runConversationalOnboarding, runOnboardingTurn, seedOnboardingMessages, buildOnboardingTools, SYSTEM, type OnboardingAgentDeps } from './agent.js'
+import { runConversationalOnboarding, runOnboardingTurn, seedOnboardingMessages, buildOnboardingTools, summarizeAccessFee, SYSTEM, type OnboardingAgentDeps } from './agent.js'
 import type { Prompter } from './types.js'
+import type { DatanetRubric } from '../rubric/types.js'
 
 const validAnswers = {
   datanets: [{ id: '9', vote: true, mint: true, strictness: 'conservative' as const, adapter: 'hyperliquid' }],
@@ -148,5 +149,58 @@ describe('onboarding strategy elicitation', () => {
     const res = await tools.finalize.execute(ans, { toolCallId: 'a', messages: [] } as never)
     expect(res).toMatchObject({ saved: true })
     expect((captured[0] as { datanets: { adapterParams?: { focus?: string } }[] }).datanets[0].adapterParams?.focus).toBe('Middle East')
+  })
+})
+
+describe('non-REPPO access fee surfacing in onboarding', () => {
+  const baseRubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
+    datanetId: '42', name: 'Exylos', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
+    subnetUuid: 'cm-42', canVote: true, canMint: false, status: 'ACTIVE',
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
+    ...over,
+  })
+
+  it('summarizeAccessFee returns a funding + approve note for a NON-REPPO fee datanet', () => {
+    const note = summarizeAccessFee(baseRubric({
+      economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
+    }))
+    expect(note).toMatch(/50 EXY/)
+    expect(note).toMatch(/fund this node's wallet with EXY/)
+    // The operator must ALSO approve the SubnetManager (ERC20 transferFrom) — note the token address.
+    expect(note).toMatch(/approve it for the SubnetManager/)
+    expect(note).toMatch(/reppo approve --spender subnet-manager --token 0xExy/)
+  })
+
+  it('summarizeAccessFee returns undefined for a REPPO-fee datanet (unchanged)', () => {
+    expect(summarizeAccessFee(baseRubric())).toBeUndefined()
+  })
+
+  it('the system prompt instructs the assistant to relay the access-fee funding note', () => {
+    expect(SYSTEM).toContain('accessFeeNote')
+    expect(SYSTEM.toLowerCase()).toContain('fund')
+  })
+
+  it('get_datanet_details attaches accessFeeNote ONLY for a non-REPPO datanet', async () => {
+    const dummy = null as unknown as OnboardingAgentDeps['model']
+    // non-REPPO datanet → note attached
+    const exy = buildOnboardingTools(
+      { ...deps(dummy), getDatanetDetails: vi.fn(async () => baseRubric({ economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) },
+      () => {},
+    )
+    const exyRes = await exy.get_datanet_details.execute({ datanetId: '42' }, { toolCallId: 'a', messages: [] } as never)
+    expect((exyRes as { accessFeeNote?: string }).accessFeeNote).toMatch(/50 EXY/)
+
+    // REPPO datanet → no note
+    const reppo = buildOnboardingTools({ ...deps(dummy), getDatanetDetails: vi.fn(async () => baseRubric()) }, () => {})
+    const reppoRes = await reppo.get_datanet_details.execute({ datanetId: '42' }, { toolCallId: 'b', messages: [] } as never)
+    expect((reppoRes as { accessFeeNote?: string }).accessFeeNote).toBeUndefined()
+  })
+
+  it('get_datanet_details still relays an error result without an accessFeeNote', async () => {
+    const dummy = null as unknown as OnboardingAgentDeps['model']
+    const tools = buildOnboardingTools({ ...deps(dummy), getDatanetDetails: vi.fn(async () => ({ error: 'RPC down' })) }, () => {})
+    const res = await tools.get_datanet_details.execute({ datanetId: '42' }, { toolCallId: 'c', messages: [] } as never)
+    expect((res as { error?: string }).error).toBe('RPC down')
+    expect((res as { accessFeeNote?: string }).accessFeeNote).toBeUndefined()
   })
 })
