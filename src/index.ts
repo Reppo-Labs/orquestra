@@ -101,12 +101,13 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
 }
 
 async function start(): Promise<void> {
-  await checkReppoVersion() // warn-only preflight: old CLI fails every vote/mint cryptically
-  // Derive per-feature capability flags ONCE from the CLI version (cheap; one shell-out).
-  // grant-access --token primary (non-REPPO access fees) needs reppo >=0.8.5 — when the
-  // installed CLI is older, the cycle skips non-REPPO-fee datanets instead of firing an
-  // unsupported flag. Fail-closed: an unreadable version → '' → capability false.
+  // ONE `reppo --version` shell-out at startup: read the banner once, then feed the SAME
+  // string to both the warn-only preflight and the per-feature capability gate (no second
+  // shell-out). grant-access --token primary (non-REPPO access fees) needs reppo >=0.8.5 —
+  // when the installed CLI is older, the cycle skips non-REPPO-fee datanets instead of firing
+  // an unsupported flag. Fail-closed: an unreadable version → '' → preflight warns + capability false.
   const reppoVersion = await getReppoVersionString()
+  await checkReppoVersion({ getVersion: async () => reppoVersion }) // warn-only: old CLI fails every vote/mint cryptically
   const canGrantNonReppo = supportsNonReppoGrants(reppoVersion)
   mkdirSync(DATA_DIR, { recursive: true })
 

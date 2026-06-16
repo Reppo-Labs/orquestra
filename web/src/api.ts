@@ -18,7 +18,6 @@ export interface BudgetCaps {
   mintReppoMax?: number
   mintGasEthMax?: number
   claimGasEthMax?: number
-  grantReppoMax?: number | null
 }
 
 export interface SnapshotBudget {
@@ -26,7 +25,6 @@ export interface SnapshotBudget {
   mintReppoSpent: number
   mintGasSpentEth: number
   claimGasSpentEth: number
-  grantReppoSpent?: number
   caps: BudgetCaps
 }
 

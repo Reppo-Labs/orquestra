@@ -26,9 +26,11 @@ export interface ChainResult {
   /** The token an access fee was paid in (reppo >=0.8.5 grant-access result). Present on
    *  non-REPPO grants — informational (the fee is consent-bounded, not budget-gated). */
   feeToken?: { symbol: string; address: string; decimals: number }
-  /** access fee amount, human-formatted (e.g. "50"), from the grant-access result. */
-  feeAmount?: number
-  /** access fee amount as a raw/string value, passed through verbatim from the CLI. */
+  /** On-chain fee QUOTE, human-formatted (e.g. "50"), from the grant-access result. Kept as
+   *  a STRING — Number()-ing it would lose precision and silently turn '' into 0. */
+  feeAmount?: string
+  /** Receipt-derived ACTUAL fee paid (string), from the grant-access result. Prefer this over
+   *  the quote when present. */
   feePaid?: string
 }
 
@@ -105,9 +107,10 @@ function parseGrantFee(j: {
     }
   }
   if (j.feeAmount !== undefined) {
-    const raw = typeof j.feeAmount === 'object' ? (j.feeAmount.formatted ?? j.feeAmount.raw) : j.feeAmount
-    const n = Number(raw)
-    if (raw !== undefined && !Number.isNaN(n)) out.feeAmount = n
+    // Keep the formatted value as a STRING — Number()-ing it loses precision and turns ''
+    // into 0. The grant fee is informational (consent-bounded), so a string is all we need.
+    const v = typeof j.feeAmount === 'object' ? (j.feeAmount.formatted ?? j.feeAmount.raw) : j.feeAmount
+    if (v !== undefined) out.feeAmount = String(v)
   }
   if (typeof j.feePaid === 'string') out.feePaid = j.feePaid
   return out

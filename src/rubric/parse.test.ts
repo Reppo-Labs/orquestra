@@ -137,7 +137,8 @@ describe('parseDatanetRubric — non-REPPO access fee (accessFeeToken)', () => {
       subnetName: 'Exylos',
       nativeTokenSymbol: 'EXY',
       nativeToken: { symbol: 'EXY', address: '0xExy0000000000000000000000000000000000001', decimals: 6 },
-      primaryToken: { address: '0xExy0000000000000000000000000000000000001', decimals: 6 },
+      // primaryToken now carries the on-chain symbol() — accessFeeToken.symbol must come from it.
+      primaryToken: { address: '0xExy0000000000000000000000000000000000001', symbol: 'EXY', decimals: 6 },
       accessFeePrimaryToken: { raw: '50000000', formatted: '50' },
       // the REPPO fee field is irrelevant for a non-REPPO datanet but kept for shape parity
       accessFeeREPPO: { raw: '0', formatted: '0' },
@@ -148,7 +149,45 @@ describe('parseDatanetRubric — non-REPPO access fee (accessFeeToken)', () => {
       symbol: 'EXY',
       decimals: 6,
       amount: 50,
+      amountRaw: '50000000', // raw integer carried verbatim from accessFeePrimaryToken.raw
     })
+  })
+
+  it('takes the symbol from the primary token, not the catalog (primary symbol wins)', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      // catalog says GENERIC, but the primary token's on-chain symbol() is the authority.
+      nativeTokenSymbol: 'GENERIC',
+      nativeToken: { symbol: 'GENERIC', address: '0xExy0000000000000000000000000000000000001', decimals: 6 },
+      primaryToken: { address: '0xExy0000000000000000000000000000000000001', symbol: 'EXY', decimals: 6 },
+      accessFeePrimaryToken: { raw: '50000000', formatted: '50' },
+    })
+    expect(r.economics.accessFeeToken?.symbol).toBe('EXY')
+  })
+
+  it('classifies a non-REPPO datanet by primary ADDRESS even when the catalog symbol is empty', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      // no catalog symbol at all (empty/missing) — classification must still fire off the address.
+      nativeTokenSymbol: '',
+      nativeToken: { address: '0xExy0000000000000000000000000000000000001', decimals: 6 },
+      // primary symbol also empty (symbol() catch-fallback) → symbol falls back to nativeSymbol
+      primaryToken: { address: '0xExy0000000000000000000000000000000000001', symbol: '', decimals: 6 },
+      accessFeePrimaryToken: { raw: '50000000', formatted: '50' },
+    })
+    expect(r.economics.accessFeeToken).toBeDefined()
+    expect(r.economics.accessFeeToken?.address).toBe('0xExy0000000000000000000000000000000000001')
+    expect(r.economics.accessFeeToken?.amountRaw).toBe('50000000')
+  })
+
+  it('leaves accessFeeToken undefined when primary decimals are missing/NaN (read failure, never default to 0)', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      nativeToken: { symbol: 'EXY', address: '0xExy0000000000000000000000000000000000001', decimals: 6 },
+      primaryToken: { address: '0xExy0000000000000000000000000000000000001', symbol: 'EXY' }, // no decimals
+      accessFeePrimaryToken: { raw: '50000000', formatted: '50' },
+    })
+    expect(r.economics.accessFeeToken).toBeUndefined()
   })
 
   it('leaves accessFeeToken undefined when the primary fee is unavailable or zero', () => {

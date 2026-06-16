@@ -160,12 +160,15 @@ describe('non-REPPO access fee surfacing in onboarding', () => {
     ...over,
   })
 
-  it('summarizeAccessFee returns a funding note for a NON-REPPO fee datanet', () => {
+  it('summarizeAccessFee returns a funding + approve note for a NON-REPPO fee datanet', () => {
     const note = summarizeAccessFee(baseRubric({
-      economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50 }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
+      economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
     }))
     expect(note).toMatch(/50 EXY/)
     expect(note).toMatch(/fund this node's wallet with EXY/)
+    // The operator must ALSO approve the SubnetManager (ERC20 transferFrom) — note the token address.
+    expect(note).toMatch(/approve it for the SubnetManager/)
+    expect(note).toMatch(/reppo approve --spender subnet-manager --token 0xExy/)
   })
 
   it('summarizeAccessFee returns undefined for a REPPO-fee datanet (unchanged)', () => {
@@ -181,7 +184,7 @@ describe('non-REPPO access fee surfacing in onboarding', () => {
     const dummy = null as unknown as OnboardingAgentDeps['model']
     // non-REPPO datanet → note attached
     const exy = buildOnboardingTools(
-      { ...deps(dummy), getDatanetDetails: vi.fn(async () => baseRubric({ economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50 }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) },
+      { ...deps(dummy), getDatanetDetails: vi.fn(async () => baseRubric({ economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) },
       () => {},
     )
     const exyRes = await exy.get_datanet_details.execute({ datanetId: '42' }, { toolCallId: 'a', messages: [] } as never)

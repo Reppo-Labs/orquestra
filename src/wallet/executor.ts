@@ -59,6 +59,7 @@ export class WalletExecutor {
       return {
         ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth,
         ...(r.feeAmount !== undefined ? { feeAmount: r.feeAmount } : {}),
+        ...(r.feePaid !== undefined ? { feePaid: r.feePaid } : {}),
         ...(r.feeToken ? { feeToken: r.feeToken } : {}),
       }
     } catch (e) {

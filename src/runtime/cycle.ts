@@ -59,20 +59,6 @@ export interface CycleDeps {
   walletAddress?: string
 }
 
-/** Scale a human fee amount to RAW token units, decimals-aware (NEVER assume 18 —
- *  a primary token like a 6-decimal stable would otherwise be off by 1e12). Uses an
- *  integer + fractional split in BigInt so it never loses precision through a float:
- *  the integer part is exact; the fractional digits are taken from a fixed-precision
- *  string so e.g. 50.5 EXY @ 6 dp → 50_500_000n. */
-export function toRawUnits(amount: number, decimals: number): bigint {
-  // Render with enough fractional digits to capture `decimals`, then strip the point
-  // and pad/truncate the fractional part to exactly `decimals` places.
-  const fixed = amount.toFixed(decimals)
-  const [intPart, fracPart = ''] = fixed.split('.')
-  const frac = (fracPart + '0'.repeat(decimals)).slice(0, decimals)
-  return BigInt(intPart) * 10n ** BigInt(decimals) + BigInt(frac || '0')
-}
-
 export interface DatanetReport {
   datanetId: string
   votes: ExecResult[]
@@ -158,10 +144,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // the primary token BEFORE paying. The CLI also pre-flights this, but it costs gas
           // to reach that revert; checking here lets us record a clean per-datanet skip and
           // resume automatically once the operator funds the wallet (we never acquire the
-          // token). Decimals-aware (NEVER 18): a 6-decimal primary token must scale by 1e6.
+          // token). RAW-to-RAW: compare the rubric's raw integer amount (amountRaw, straight
+          // from the CLI's accessFeePrimaryToken.raw) against the raw on-chain balance — no
+          // float scaling, so no precision over-estimate and no decimals=0 defeat.
           // When no reader is wired (no RPC), fall through — the CLI still fails closed.
           if (feeToken && deps.readTokenBalance && deps.walletAddress) {
-            const required = toRawUnits(feeToken.amount, feeToken.decimals)
+            const required = BigInt(feeToken.amountRaw)
             let balance: bigint | undefined
             try {
               balance = await deps.readTokenBalance(feeToken.address, deps.walletAddress)
@@ -186,11 +174,14 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             deps.recordGrant(datanetId)
             // Surface the grant (and the fee paid) as an activity breadcrumb so the
             // dashboard Activity view shows e.g. "Granted access — paid 50 EXY". Prefer the
-            // actual fee the executor read from the CLI result (feeAmount/feeToken) over the
-            // rubric's expected amount; fall back to the rubric for a non-REPPO datanet, and
-            // note REPPO for the common path. 'already granted' (no fee charged) says so.
-            const feePaid = gr.feeAmount !== undefined && gr.feeToken
-              ? `paid ${gr.feeAmount} ${gr.feeToken.symbol}`
+            // receipt-derived ACTUAL the executor read from the CLI result (gr.feePaid), then
+            // the on-chain quote (gr.feeAmount), then the rubric's expected amount; note REPPO
+            // for the common path. Label with the CLI's fee-token symbol when present, else the
+            // rubric's. 'already granted' (no fee charged) says so.
+            const feeQty = gr.feePaid ?? gr.feeAmount
+            const feeSym = gr.feeToken?.symbol ?? feeToken?.symbol
+            const feePaid = feeQty !== undefined
+              ? `paid ${feeQty} ${feeSym ?? ''}`.trimEnd()
               : feeToken
                 ? `paid ${feeToken.amount} ${feeToken.symbol}`
                 : 'paid in REPPO'

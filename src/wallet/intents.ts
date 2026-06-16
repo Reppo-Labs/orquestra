@@ -62,9 +62,12 @@ export interface ExecResult {
   gasEth?: number
   /** actual REPPO claimed (read from the claim tx receipt; CLI/contract omit it). */
   reppoClaimed?: number
-  /** access fee actually paid (human units), from a grant-access result (reppo >=0.8.5).
+  /** on-chain fee QUOTE (human units, STRING), from a grant-access result (reppo >=0.8.5).
    *  Present on a NON-REPPO grant so the cycle can show "paid 50 EXY" in the activity log. */
-  feeAmount?: number
+  feeAmount?: string
+  /** receipt-derived ACTUAL fee paid (STRING), from a grant-access result — preferred over
+   *  feeAmount (the quote) when present. */
+  feePaid?: string
   /** the token the access fee was paid in, from a grant-access result (reppo >=0.8.5). */
   feeToken?: { symbol: string; address: string; decimals: number }
   detail?: string

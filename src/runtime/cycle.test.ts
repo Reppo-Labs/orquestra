@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, toRawUnits, type CycleDeps } from './cycle.js'
+import { runCycle, type CycleDeps } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -59,22 +59,6 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     ...over,
   }
 }
-
-describe('toRawUnits (decimals-aware fee scaling — NEVER assume 18)', () => {
-  it('scales whole amounts by the token decimals', () => {
-    expect(toRawUnits(50, 6)).toBe(50_000_000n)   // 50 EXY @ 6 dp
-    expect(toRawUnits(50, 18)).toBe(50n * 10n ** 18n) // 50 @ 18 dp (REPPO-like)
-    expect(toRawUnits(1, 0)).toBe(1n)             // 0-decimal token
-  })
-  it('preserves fractional amounts at the token precision', () => {
-    expect(toRawUnits(50.5, 6)).toBe(50_500_000n)
-    expect(toRawUnits(0.000001, 6)).toBe(1n)       // smallest unit at 6 dp
-  })
-  it('zero is zero at any decimals', () => {
-    expect(toRawUnits(0, 6)).toBe(0n)
-    expect(toRawUnits(0, 18)).toBe(0n)
-  })
-})
 
 describe('runCycle', () => {
   it('starts the cycle, votes on every vote-enabled datanet, mints only where adapter+canMint', async () => {
@@ -336,7 +320,8 @@ describe('runCycle', () => {
   })
 
   // --- non-REPPO access fee: capability gate ---
-  const exyToken = { address: '0xExy0000000000000000000000000000000000001', symbol: 'EXY', decimals: 6, amount: 50 }
+  // 50 EXY @ 6 dp → raw 50_000_000. amountRaw is what the raw-to-raw balance gate compares.
+  const exyToken = { address: '0xExy0000000000000000000000000000000000001', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }
   const nonReppoConfig = StrategyConfigSchema.parse({
     horizonDays: 30, cadenceHours: 6,
     stake: { lockReppo: 0, lockDurationDays: 30 },
@@ -451,7 +436,8 @@ describe('runCycle', () => {
   it('records a grant breadcrumb (kind:grant) with the fee paid on a successful non-REPPO grant', async () => {
     const executeGrantAccess = vi.fn(async () => ({
       ok: true as const, status: 'executed' as const, txHash: '0xg',
-      feeAmount: 50, feeToken: { symbol: 'EXY', address: exyToken.address, decimals: 6 },
+      // feeAmount is the on-chain quote as a STRING (cli keeps it formatted, never Number()s it).
+      feeAmount: '50', feeToken: { symbol: 'EXY', address: exyToken.address, decimals: 6 },
     }))
     const d = deps({
       getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),

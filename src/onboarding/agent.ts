@@ -35,11 +35,15 @@ Use get_wallet_balance to look up the operator's REPPO/veREPPO/ETH/USDC holdings
 /** Deterministic operator-facing funding note for a datanet's access fee. Returns a
  *  concise line ONLY when the datanet charges a NON-REPPO access fee (accessFeeToken set);
  *  undefined for REPPO-fee datanets (the common case), so onboarding is unchanged for them.
- *  e.g. "Access fee: 50 EXY (one-time) — fund this node's wallet with EXY". */
+ *  A non-REPPO fee is an ERC20 the SubnetManager pulls via transferFrom — so the operator
+ *  must BOTH fund the wallet AND approve the SubnetManager for the token, or the first grant
+ *  reverts on INSUFFICIENT_ALLOWANCE. e.g.
+ *  "Access fee: 50 EXY (one-time) — fund this node's wallet with EXY and approve it for the
+ *   SubnetManager (`reppo approve --spender subnet-manager --token 0x…`)". */
 export function summarizeAccessFee(rubric: DatanetRubric): string | undefined {
   const t = rubric.economics.accessFeeToken
   if (!t) return undefined
-  return `Access fee: ${t.amount} ${t.symbol} (one-time) — fund this node's wallet with ${t.symbol}`
+  return `Access fee: ${t.amount} ${t.symbol} (one-time) — fund this node's wallet with ${t.symbol} and approve it for the SubnetManager (\`reppo approve --spender subnet-manager --token ${t.address}\`)`
 }
 
 /** Build the agent's tools. onFinalize is called with validated answers when the

@@ -76,3 +76,27 @@ describe('parseChainResult reppoFee', () => {
     expect(parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {}).reppoFee).toBeUndefined()
   })
 })
+
+describe('parseChainResult grant-access fee (reppo >=0.8.5)', () => {
+  it('keeps feeAmount as the formatted STRING (no Number() — preserves precision)', () => {
+    const r = parseChainResult(
+      '{"txHash":"0xg","gasEth":0.0005,"feeToken":{"symbol":"EXY","address":"0xExy","decimals":6},"feeAmount":{"raw":"50000000","formatted":"50"}}',
+      () => {},
+    )
+    expect(r.feeAmount).toBe('50')
+    expect(typeof r.feeAmount).toBe('string')
+    expect(r.feeToken).toEqual({ symbol: 'EXY', address: '0xExy', decimals: 6 })
+  })
+
+  it('parses feePaid (receipt-derived actual) as a string', () => {
+    const r = parseChainResult('{"txHash":"0xg","gasEth":0.0005,"feePaid":"49.999"}', () => {})
+    expect(r.feePaid).toBe('49.999')
+  })
+
+  it('grant-fee fields absent on a plain vote/mint result → undefined', () => {
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {})
+    expect(r.feeAmount).toBeUndefined()
+    expect(r.feePaid).toBeUndefined()
+    expect(r.feeToken).toBeUndefined()
+  })
+})
