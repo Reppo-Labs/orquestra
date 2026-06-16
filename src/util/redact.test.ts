@@ -84,6 +84,32 @@ describe('redactSecrets', () => {
     expect(redactSecrets('inf_short')).toBe('inf_short') // below the 12-char key floor
   })
 
+  it('redacts Anthropic sk-ant-… keys', () => {
+    const k = 'sk-ant-api03-' + 'A1b2C3d4'.repeat(12)
+    const out = redactSecrets(`Authorization: ${k}`)
+    expect(out).not.toContain(k)
+    expect(out).toContain('sk-ant-<redacted>')
+  })
+
+  it('redacts bare OpenAI sk-… keys (realistic length)', () => {
+    const k = 'sk-proj-' + 'Zz0011AaBb'.repeat(5)
+    const out = redactSecrets(`key=${k}`)
+    expect(out).not.toContain(k)
+    expect(out).toContain('sk-<redacted>')
+  })
+
+  it('redacts Google AIza… keys', () => {
+    const k = 'AIzaSyA' + 'b'.repeat(32) // AIza + 35 chars
+    const out = redactSecrets(`x-goog-api-key: ${k} failed`)
+    expect(out).not.toContain(k)
+    expect(out).toContain('AIza<redacted>')
+  })
+
+  it('does NOT mangle ordinary text that merely starts with sk-', () => {
+    expect(redactSecrets('the sk-learn library')).toBe('the sk-learn library') // too short, hyphen-word
+    expect(redactSecrets('sku-12345 in stock')).toBe('sku-12345 in stock') // not an sk- prefix
+  })
+
   it('leaves ordinary content untouched', () => {
     expect(redactSecrets('plain error, nothing secret; pod 925')).toBe('plain error, nothing secret; pod 925')
   })
