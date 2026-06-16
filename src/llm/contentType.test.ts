@@ -41,4 +41,29 @@ describe('detectContentType', () => {
     const fetchImpl = vi.fn(async () => { throw new Error('network') })
     expect(await detectContentType('https://x/clip', fetchImpl)).toBeNull()
   })
+
+  it('a hung HEAD times out on its OWN budget; the ranged GET fallback still runs and detects', async () => {
+    // The HEAD resolves only when its injected signal aborts (mirrors a hung request). With a
+    // single shared timer the GET would inherit an already-aborted signal and never detect;
+    // with per-request timers the GET gets a fresh window and succeeds.
+    const fetchImpl = vi.fn((_u: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      }
+      // GET fallback: its signal must NOT be aborted at call time (proves a fresh timer).
+      expect(init?.signal?.aborted).toBe(false)
+      return Promise.resolve(res(206, { 'content-type': 'video/mp4', 'content-range': 'bytes 0-0/9999' }))
+    })
+    vi.useFakeTimers()
+    try {
+      const p = detectContentType('https://x/clip.mp4', fetchImpl)
+      await vi.advanceTimersByTimeAsync(20_000) // past the 15s HEAD timeout
+      const out = await p
+      expect(out).toEqual({ mediaType: 'video/mp4', contentLength: 9999 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
