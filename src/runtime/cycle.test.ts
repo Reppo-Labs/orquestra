@@ -42,7 +42,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
       filter: { currentEpoch: '100', ownPodIds: [], votedPodIds: [] },
     })),
     getAdapter: (adapterId: string) => (adapterId === 'hyperliquid' ? adapter : undefined),
-    voteScorer: { scorePod: async () => ({ score: 9, reason: 'good' }) },
+    voteScorerFor: () => ({ scorer: { scorePod: async () => ({ score: 9, reason: 'good' }) } }),
     candidateScorer: { scoreCandidate: async () => ({ score: 9, reason: 'good' }) },
     seenKeysFor: async () => new Set<string>(),
     executor: {
@@ -59,6 +59,37 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     ...over,
   }
 }
+
+describe('runCycle video-pod skips', () => {
+  it('records a per-pod skip activity entry when a video pod scoring throws (idle datanet explains itself)', async () => {
+    const recordActivity = vi.fn()
+    const d = deps({
+      recordActivity,
+      // Single vote-only datanet; its only pod throws (e.g. a video ingest skip).
+      voteScorerFor: () => ({ scorer: { scorePod: async () => { throw new Error('Gemini Files API file never reached ACTIVE (state FAILED)') } } }),
+    })
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    await runCycle(cfg, 'cyc-skip', d)
+    const skip = (recordActivity as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0] as { kind: string; reason?: string; podId?: string })
+      .find((e) => e.kind === 'skip' && /pod scoring skipped/.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+    expect(skip!.podId).toBe('p1')
+    expect(skip!.reason).toContain('never reached ACTIVE')
+  })
+
+  it('arms the per-cycle video budget once via resetVideoBudget', async () => {
+    const resetVideoBudget = vi.fn()
+    const d = deps({ resetVideoBudget })
+    await runCycle(config, 'cyc-reset', d)
+    expect(resetVideoBudget).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('runCycle', () => {
   it('starts the cycle, votes on every vote-enabled datanet, mints only where adapter+canMint', async () => {
@@ -150,7 +181,7 @@ describe('runCycle', () => {
   it('skips vote scoring entirely when the per-cycle vote budget is already exhausted', async () => {
     const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
     const d = deps({
-      voteScorer: { scorePod },
+      voteScorerFor: () => ({ scorer: { scorePod } }),
       ledger: { startCycle: vi.fn(), canVote: () => false, canMint: () => true } as unknown as CycleDeps['ledger'],
     })
     await runCycle(config, 'c-novotebudget', d)
@@ -603,5 +634,26 @@ describe('runCycle claim phase', () => {
     })
     const report = await runCycle(config, 'c3', d)
     expect(report.claims.filter((c) => c.status === 'executed')).toHaveLength(1) // pod 2 still claimed
+  })
+})
+
+describe('runCycle per-datanet vote scorer', () => {
+  const skipReasons = (rec: ReturnType<typeof vi.fn>): string[] =>
+    rec.mock.calls.map((c) => c[0]).filter((e) => e.kind === 'skip').map((e) => e.reason as string)
+
+  it('votes when voteScorerFor returns a scorer', async () => {
+    const d = deps()
+    const report = await runCycle(config, 'c-vote', d)
+    const d9 = report.datanets.find((r) => r.datanetId === '9')!
+    expect(d9.votes).toHaveLength(1)
+    expect((d.executor.executeVote as any).mock.calls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('records a skip and casts no vote when voteScorerFor returns { skip }', async () => {
+    const d = deps({ voteScorerFor: () => ({ skip: 'no API key for google' }) })
+    const report = await runCycle(config, 'c-skip', d)
+    for (const dn of report.datanets) expect(dn.votes).toHaveLength(0)
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
+    expect(skipReasons(d.recordActivity as any).some((r) => /no API key for google/.test(r))).toBe(true)
   })
 })

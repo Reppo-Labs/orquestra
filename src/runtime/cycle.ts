@@ -17,8 +17,16 @@ export interface CycleDeps {
   topN: number
   getRubric(datanetId: string): Promise<DatanetRubric>
   getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
+  /** Reset the per-CYCLE video-pod budget. Called once at the start of each runCycle so the
+   *  `videoPodsPerCycle` cap is global across datanets, not re-armed per datanet. Optional:
+   *  tests/wirings without video support omit it. */
+  resetVideoBudget?(): void
   getAdapter(adapterId: string): DatanetAdapter | undefined
-  voteScorer: PodScorer
+  /** Per-datanet vote scorer factory. Returns the scorer to use for THIS datanet, or a
+   *  skip reason (e.g. no API key for the datanet's chosen provider) — the cycle records
+   *  the skip and casts no votes for the datanet, reusing the per-datanet skip mechanism.
+   *  Resolved per datanet so each can run on its own provider/model (wiring.ts). */
+  voteScorerFor(datanetId: string): { scorer: PodScorer } | { skip: string }
   candidateScorer: CandidateScorer
   seenKeysFor(datanetId: string): Promise<Set<string>>
   executor: WalletExecutor
@@ -78,6 +86,8 @@ export interface CycleReport {
  *  mint (if enabled + adapter + capable). The executor enforces the budget. */
 export async function runCycle(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<CycleReport> {
   deps.ledger.startCycle(cycleId)
+  // Arm the per-cycle video-pod budget once (global across datanets, not per-datanet).
+  deps.resetVideoBudget?.()
   const datanets: DatanetReport[] = []
 
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
@@ -221,8 +231,23 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // skip so an otherwise-idle datanet still explains why it produced nothing.
         recordSkip('per-cycle vote budget/rate exhausted — skipping vote scoring', { activity: votes.length === 0 })
       } else if (policy.vote && rubric.canVote) {
+        const scorerResult = deps.voteScorerFor(datanetId)
+        if ('skip' in scorerResult) {
+          // Per-datanet isolation: an unresolvable scoring model (e.g. no API key for the
+          // datanet's chosen provider) skips THIS datanet's voting with a recorded reason —
+          // never aborts the cycle. Record when otherwise idle so the dashboard explains it.
+          recordSkip(`vote skipped — ${scorerResult.skip}`, { activity: votes.length === 0 })
+        } else {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
-        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, deps.voteScorer)
+        // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
+        // dashboard activity here so an idle datanet explains why a pod produced no vote —
+        // before this they were swallowed with only a stderr line. The reason is already
+        // redacted by selectVotes.
+        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, scorerResult.scorer,
+          (podId, reason) => deps.recordActivity({
+            ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+            podId, reason: `pod scoring skipped — ${reason}`, status: 'skipped',
+          }))
         for (let i = 0; i < intents.length; i++) {
           const intent = intents[i]
           const r = await deps.executor.executeVote(intent)
@@ -268,6 +293,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             ...(intent.podName ? { podName: intent.podName } : {}),
             ...(intent.panel ? { panel: intent.panel } : {}),
           })
+        }
         }
       }
 

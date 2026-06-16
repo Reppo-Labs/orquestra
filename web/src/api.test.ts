@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { loadAll } from './api'
+import { loadAll, loadModels } from './api'
 
 const res = (status: number, body: unknown) =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response
@@ -58,5 +58,22 @@ describe('loadAll resilience', () => {
     expect(data.activity).toHaveLength(1)
     expect(data.config).toEqual({ horizonDays: 7 })
     expect(data.netNames).toEqual({ '9': 'Hyperliquid' })
+  })
+})
+
+describe('loadModels', () => {
+  it('returns the providers array on a 200', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res(200, { providers: [{ provider: 'google', hasKey: true, models: ['gemini-3-pro'] }] })))
+    const out = await loadModels()
+    expect(out.providers[0].provider).toBe('google')
+    expect(out.providers[0].models).toContain('gemini-3-pro')
+  })
+  it('degrades to an empty providers list on an HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res(500, { error: 'boom' })))
+    expect((await loadModels()).providers).toEqual([])
+  })
+  it('degrades to an empty providers list on a network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    expect((await loadModels()).providers).toEqual([])
   })
 })

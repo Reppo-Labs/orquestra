@@ -21,7 +21,8 @@ import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { createSportsAdapter } from './adapter/sports/index.js'
-import { resolveModel, type LlmProvider } from './llm/model.js'
+import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
+import { buildProviderKeyRegistry } from './llm/registry.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
@@ -29,15 +30,27 @@ import { startDashboard } from './dashboard/server.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
+/** Parse an optional positive-integer env var; undefined (use the default downstream) on
+ *  absent OR non-numeric/non-positive input. `Number(undefined)` is NaN, so a bare ternary
+ *  on truthiness would pass NaN through for a value like "abc". */
+function parsePositiveInt(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
 async function onboard(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true })
-  const apiKey = process.env.LLM_API_KEY ?? ''
+  // Registry-aware: an operator may set LLM_KEY_<PROVIDER> and drop LLM_API_KEY.
+  // buildProviderKeyRegistry folds the legacy LLM_API_KEY into the default provider's
+  // slot, so registry.get(provider) is the right key from either source.
+  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
+  const apiKey = buildProviderKeyRegistry(process.env).get(provider) ?? ''
   if (!apiKey) {
-    console.error('orquestra: onboarding needs an LLM key — set LLM_PROVIDER + LLM_API_KEY and re-run.')
+    console.error('orquestra: onboarding needs an LLM key — set LLM_KEY_<PROVIDER> (or LLM_PROVIDER + LLM_API_KEY) and re-run.')
     process.exitCode = 1
     return
   }
-  const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const model = resolveModel(provider, apiKey)
   const p = terminalPrompter()
   try {
@@ -111,14 +124,22 @@ async function start(): Promise<void> {
   const canGrantNonReppo = supportsNonReppoGrants(reppoVersion)
   mkdirSync(DATA_DIR, { recursive: true })
 
+  // Multi-provider key registry (env-only): the per-datanet vote scorer resolves a model
+  // from this. Built FIRST so the node-default model's key is derived from it too — an
+  // operator who sets LLM_KEY_<PROVIDER> and drops LLM_API_KEY still gets a non-empty key
+  // for the default model (onboarding/strategy chat, mint scorer, panel, learn, adapters).
+  // buildProviderKeyRegistry folds the back-compat LLM_PROVIDER/LLM_API_KEY default in.
+  const providerKeyRegistry = buildProviderKeyRegistry(process.env)
   const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
-  const model = resolveModel(provider, process.env.LLM_API_KEY ?? '')
+  const defaultKey = providerKeyRegistry.get(provider) ?? ''
+  const defaultModel = DEFAULT_MODEL[provider]
+  const model = resolveModel(provider, defaultKey, defaultModel)
 
   // Dashboard FIRST: on a fresh node it hosts the conversational onboarding;
   // the scheduler starts only once a strategy config exists.
   const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
   const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
-  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model }) : null
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model, availableProviders: [...providerKeyRegistry.keys()] }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   if (needsOnboarding(DATA_DIR)) {
@@ -168,6 +189,14 @@ async function start(): Promise<void> {
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,
+    providerKeyRegistry,
+    defaultProvider: provider,
+    defaultModel,
+    // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
+    // not the on-chain budget). Default (4) lives in buildCycleDeps. NaN-safe: a non-numeric
+    // value falls back to undefined (the default) rather than passing NaN through, which
+    // would make `videoBudget > 0` always false and silently disable the whole video feature.
+    videoPodsPerCycle: parsePositiveInt(process.env.VIDEO_PODS_PER_CYCLE),
     // Self-learning reflection runs on the same model as the scorer/panel.
     learnModel: model,
     rpcUrl: rpcUrl || undefined,

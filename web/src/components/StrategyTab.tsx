@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { DatanetEntry } from '../api'
+import { type DatanetEntry, loadModels, type ModelProvider } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
 import { netLabel } from '../lib/format'
 import { AddDatanetModal } from './AddDatanetModal'
@@ -51,8 +51,8 @@ function Num({ label, value, int, onChange, hint }: {
 
 type Params = { focus?: string; angle?: string; topN?: number; minImportance?: number }
 
-function NetCard({ id, d, name, edit }: {
-  id: string; d: DatanetEntry; name: string; edit: Strategy['edit']
+function NetCard({ id, d, name, edit, providers }: {
+  id: string; d: DatanetEntry; name: string; edit: Strategy['edit']; providers: ModelProvider[]
 }) {
   const [open, setOpen] = useState(false)
   const upd = (fn: (n: DatanetEntry) => void) => edit((c) => fn(c.datanets[id]))
@@ -65,6 +65,20 @@ function NetCard({ id, d, name, edit }: {
       if (Object.keys(next).length) n.adapterParams = next
       else delete n.adapterParams
     })
+  // Set the slug verbatim — an empty string is a valid mid-edit state and must NOT snap
+  // back to models[0] (that jumped the input back to e.g. gemini-3-pro on clear). The
+  // node falls back to its default slug for an empty override at resolve time.
+  const setModel = (provider: string, model: string) =>
+    upd((n) => {
+      if (!provider) delete n.model
+      else n.model = { provider, model }
+    })
+  // Provider (re)selection: auto-fill a sensible default slug for the new provider. This is
+  // the ONLY place models[0] is substituted — slug keystrokes go through setModel untouched.
+  const selectProvider = (provider: string) =>
+    setModel(provider, provider ? (providers.find((p) => p.provider === provider)?.models[0] ?? '') : '')
+  const curProvider = d.model?.provider ?? ''
+  const curModels = providers.find((p) => p.provider === curProvider)?.models ?? []
 
   return (
     <div className={`net ${d.mint ? 'active-mint' : ''}`}>
@@ -96,6 +110,32 @@ function NetCard({ id, d, name, edit }: {
             {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
           </select>
         </label>
+      </div>
+      <div className="net-row">
+        <label className="field">
+          <span>vote model <Tip label="what vote model does">Which LLM scores votes for THIS datanet. Blank = the node's default model. Only providers whose API key is set on the node appear here (keys are never entered in the dashboard). Pick a Gemini (google) model if this datanet's pods are videos.</Tip></span>
+          <select value={curProvider} onChange={(e) => selectProvider(e.target.value)}>
+            <option value="">node default</option>
+            {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
+            {/* A persisted override whose provider has no key on the node (key removed from
+                env) is NOT in `providers`. Surface it as a selected option so the select shows
+                the real saved value instead of silently snapping to "node default" — a plain
+                Save would otherwise re-persist the dead override and skip votes silently. */}
+            {curProvider && !providers.some((p) => p.provider === curProvider) && (
+              <option value={curProvider}>{curProvider} (no key configured)</option>
+            )}
+          </select>
+        </label>
+        {curProvider && (
+          <label className="field">
+            <span>model slug <Tip label="what model slug does">The provider's model id (slugs drift, so free text is allowed). Suggestions come from the node; type any valid slug for {curProvider}.</Tip></span>
+            <input type="text" list={`models-${id}`} value={d.model?.model ?? ''} placeholder={curModels[0] ?? 'model id'}
+              onChange={(e) => setModel(curProvider, e.target.value)} />
+            <datalist id={`models-${id}`}>
+              {curModels.map((m) => <option key={m} value={m} />)}
+            </datalist>
+          </label>
+        )}
       </div>
       <div className={`net-strategy ${open ? '' : 'collapsed'}`}>
         <label className="field">
@@ -132,6 +172,8 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
   strategy: Strategy; netNames: Record<string, string>; onReconfigure: () => void
 }) {
   const [adding, setAdding] = useState(false)
+  const [providers, setProviders] = useState<ModelProvider[]>([])
+  useEffect(() => { void loadModels().then((r) => setProviders(r.providers)) }, [])
   const { candidate, edit } = strategy
   if (!candidate) return <div className="muted">loading strategy…</div>
 
@@ -153,7 +195,7 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
       </div>
       <div className="net-grid stagger">
         {rows.map(([id, d]) => (
-          <NetCard key={id} id={id} d={d} name={netNames[id] ?? netLabel(id, netNames)} edit={edit} />
+          <NetCard key={id} id={id} d={d} name={netNames[id] ?? netLabel(id, netNames)} edit={edit} providers={providers} />
         ))}
         <button className="net add" onClick={() => setAdding(true)}>
           <div style={{ textAlign: 'center' }}><div className="plus">+</div><div>add datanet</div></div>

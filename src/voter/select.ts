@@ -3,9 +3,13 @@ import { STRICTNESS_THRESHOLDS, type StrictnessLevel } from '../config/schema.js
 import type { DatanetRubric } from '../rubric/types.js'
 import type { VoteIntent } from '../wallet/intents.js'
 import type { VoterPod, VoteFilter, PodScorer } from './types.js'
+import { redactSecrets } from '../util/redact.js'
 
 /** Score each votable pod and turn the 1-10 score into a VoteIntent.
- *  up if score >= like-threshold, down if <= dislike-threshold, else skip. */
+ *  up if score >= like-threshold, down if <= dislike-threshold, else skip.
+ *  `onSkip` (optional) is called with a redacted per-pod skip reason when a pod's scoring
+ *  throws (e.g. a video ingest skip, a non-conforming model response) — the cycle records
+ *  it as dashboard activity so an idle datanet explains itself instead of showing nothing. */
 export async function selectVotes(
   datanetId: string,
   pods: VoterPod[],
@@ -13,6 +17,7 @@ export async function selectVotes(
   strictness: StrictnessLevel,
   filter: VoteFilter,
   scorer: PodScorer,
+  onSkip?: (podId: string, reason: string) => void,
 ): Promise<VoteIntent[]> {
   if (!rubric.canVote) return []
   const { like, dislike } = STRICTNESS_THRESHOLDS[strictness]
@@ -36,7 +41,10 @@ export async function selectVotes(
       // Pass the thresholds so a tiered (panel) scorer knows the ambiguity band.
       result = await scorer.scorePod(pod, rubric, { like, dislike })
     } catch (e) {
-      console.error(`orquestra: pod ${pod.podId} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+      // Redact: a skip reason can fold in a provider error string that echoes a key.
+      const reason = redactSecrets(e instanceof Error ? e.message : String(e))
+      console.error(`orquestra: pod ${pod.podId} (datanet ${datanetId}) scoring failed, skipped — ${reason}`)
+      onSkip?.(pod.podId, reason)
       continue
     }
     const { score, reason, panel } = result

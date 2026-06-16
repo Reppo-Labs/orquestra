@@ -64,7 +64,7 @@ export function buildReflectionPrompt(datanetLabel: string, stats: LearnStats, c
 
 export async function reflect(model: LanguageModel, datanetLabel: string, stats: LearnStats, current: CurrentTunables): Promise<Reflection> {
   const { system, prompt } = buildReflectionPrompt(datanetLabel, stats, current)
-  return generateObjectWithRetry(model, ReflectionSchema, system, prompt)
+  return generateObjectWithRetry(model, ReflectionSchema, system, { prompt })
 }
 
 /** Orchestrate one datanet's reflection: stats → LLM lessons → persist (replacing the

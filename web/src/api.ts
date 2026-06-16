@@ -94,6 +94,8 @@ export interface DatanetEntry {
   /** 'pin' (default) pins the dataset to IPFS (needs Pinata); 'url-only' registers
    *  the source URL with no pinning. */
   mintMode?: 'pin' | 'url-only'
+  /** Per-datanet LLM override for the voting scorer (provider+model). Absent ⇒ node default. */
+  model?: { provider: string; model: string }
 }
 
 /** The whitelisted subset of strategy.config.json that /api/config serves. */
@@ -169,6 +171,16 @@ export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; e
   })
   const out = await r.json().catch(() => ({}))
   return r.ok ? { ok: true } : { ok: false, error: out.error || String(r.status) }
+}
+
+// ── Model picker (mirrors GET /api/models — names only, never keys) ──
+export interface ModelProvider { provider: string; hasKey: boolean; models: string[] }
+export interface ModelsResponse { providers: ModelProvider[] }
+
+/** Providers whose API key is present in the node's env, with seed model slugs.
+ *  Degrades to an empty list on any error (no key entry happens in the UI). */
+export async function loadModels(): Promise<ModelsResponse> {
+  return getJson<ModelsResponse>('/api/models', { providers: [] })
 }
 
 // ── Onboarding (mirrors src/onboarding/types.ts) ──

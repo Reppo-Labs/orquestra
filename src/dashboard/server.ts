@@ -11,6 +11,7 @@ import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
 import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
+import { KNOWN_MODELS, type LlmProvider } from '../llm/model.js'
 import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError } from '../config/load.js'
 import { buildLearnView } from '../learn/view.js'
 import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from '../learn/store.js'
@@ -297,6 +298,13 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       json(res, 200, buildHealth(readActivitySince(dataDir, since), { sinceMs: since })); return
     }
     if (url === '/api/datanets') { json(res, 200, await datanetNames()); return }
+    if (url === '/api/models') {
+      // Provider/model NAMES only — never keys (ADR 0002: dashboard holds no secrets).
+      const providers = (opts.availableProviders ?? []).map((provider) => ({
+        provider, hasKey: true as const, models: KNOWN_MODELS[provider],
+      }))
+      json(res, 200, { providers }); return
+    }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
       const activity = readActivity(dataDir, { limit: 5000 })
@@ -339,6 +347,9 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
  *  Operators who must expose it deliberately set DASHBOARD_HOST and should add auth first. */
 export interface DashboardOpts {
   chatModel?: LanguageModel
+  /** Providers whose API key is present in env (the key registry's keys). The
+   *  /api/models endpoint lists these — names only, NEVER keys. */
+  availableProviders?: LlmProvider[]
   /** Override the built-SPA dir (defaults to `public/` beside this file); tests use this. */
   publicDir?: string
   /** Override the onboarding turn-runner (tests); defaults to the live model runner. */

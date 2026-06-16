@@ -289,6 +289,48 @@ describe('GET /api/datanets', () => {
   })
 })
 
+describe('GET /api/models', () => {
+  let mdir: string
+  let mh: DashboardHandle
+  beforeEach(async () => {
+    mdir = mkdtempSync(join(tmpdir(), 'orq-models-'))
+    mh = await startDashboard(mdir, 0, { availableProviders: ['google', 'virtuals'] })
+  })
+  afterEach(async () => { await mh.close(); rmSync(mdir, { recursive: true, force: true }) })
+
+  const mget = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${mh.port}${path}`)
+    return { status: res.status, body: await res.text() }
+  }
+
+  it('lists only providers with a key, each with hasKey:true and a models[]', async () => {
+    const r = await mget('/api/models')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body) as { providers: { provider: string; hasKey: boolean; models: string[] }[] }
+    const provs = body.providers.map((p) => p.provider).sort()
+    expect(provs).toEqual(['google', 'virtuals'])
+    for (const p of body.providers) {
+      expect(p.hasKey).toBe(true)
+      expect(Array.isArray(p.models)).toBe(true)
+      expect(p.models.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('returns NO secrets (no api keys in the body)', async () => {
+    const r = await mget('/api/models')
+    expect(r.body).not.toMatch(/acp[_-]|inf_|sk-|AIza|api[_-]?key/i)
+  })
+
+  it('returns an empty providers list when no provider has a key', async () => {
+    const bare = await startDashboard(mdir, 0, {})
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/api/models`)
+      const body = (await res.json()) as { providers: unknown[] }
+      expect(body.providers).toEqual([])
+    } finally { await bare.close() }
+  })
+})
+
 describe('network bind (ADR 0002: unauthenticated panel must not default to a public interface)', () => {
   const saved = process.env.DASHBOARD_HOST
   afterEach(() => { if (saved === undefined) delete process.env.DASHBOARD_HOST; else process.env.DASHBOARD_HOST = saved })
