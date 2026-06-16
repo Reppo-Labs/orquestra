@@ -65,11 +65,18 @@ function NetCard({ id, d, name, edit, providers }: {
       if (Object.keys(next).length) n.adapterParams = next
       else delete n.adapterParams
     })
+  // Set the slug verbatim — an empty string is a valid mid-edit state and must NOT snap
+  // back to models[0] (that jumped the input back to e.g. gemini-3-pro on clear). The
+  // node falls back to its default slug for an empty override at resolve time.
   const setModel = (provider: string, model: string) =>
     upd((n) => {
       if (!provider) delete n.model
-      else n.model = { provider, model: model || (providers.find((p) => p.provider === provider)?.models[0] ?? '') }
+      else n.model = { provider, model }
     })
+  // Provider (re)selection: auto-fill a sensible default slug for the new provider. This is
+  // the ONLY place models[0] is substituted — slug keystrokes go through setModel untouched.
+  const selectProvider = (provider: string) =>
+    setModel(provider, provider ? (providers.find((p) => p.provider === provider)?.models[0] ?? '') : '')
   const curProvider = d.model?.provider ?? ''
   const curModels = providers.find((p) => p.provider === curProvider)?.models ?? []
 
@@ -107,7 +114,7 @@ function NetCard({ id, d, name, edit, providers }: {
       <div className="net-row">
         <label className="field">
           <span>vote model <Tip label="what vote model does">Which LLM scores votes for THIS datanet. Blank = the node's default model. Only providers whose API key is set on the node appear here (keys are never entered in the dashboard). Pick a Gemini (google) model if this datanet's pods are videos.</Tip></span>
-          <select value={curProvider} onChange={(e) => setModel(e.target.value, '')}>
+          <select value={curProvider} onChange={(e) => selectProvider(e.target.value)}>
             <option value="">node default</option>
             {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
           </select>
