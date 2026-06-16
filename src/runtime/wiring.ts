@@ -226,7 +226,6 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         mintGasSpentEth: w.ledger.state.mintGasSpentEth,
         voteGasSpentEth: w.ledger.state.voteGasSpentEth,
         claimGasSpentEth: w.ledger.state.claimGasSpentEth,
-        grantReppoSpent: w.ledger.state.grantReppoSpent,
         caps: config.budget,
       }
       const snap = await collectSnapshot(w.dataDir, cycleId, {

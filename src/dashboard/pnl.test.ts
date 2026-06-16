@@ -9,7 +9,7 @@ const snapshot: Snapshot = {
   votingPower: { power: 500, lockupCount: 1 },
   emissionsDue: { totalReppo: 5, pods: [{ podId: '9', datanetId: '9', epoch: 101, reppo: 5 }] },
   budget: { mintReppoSpent: 100, mintGasSpentEth: 0.003, voteGasSpentEth: 0.001, claimGasSpentEth: 0.0007,
-    caps: { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05, grantReppoMax: 0 } },
+    caps: { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 } },
 }
 const a = (over: Partial<ActivityEntry>): ActivityEntry => ({ ts: 't', cycleId: 'c1', kind: 'claim', datanetId: '9', status: 'executed', ...over })
 

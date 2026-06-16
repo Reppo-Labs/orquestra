@@ -249,8 +249,9 @@ Logs: `docker compose logs -f`.
 
 - The node **cannot spend beyond your budget caps** — the budget ledger refuses
   before signing, not after.
-- Enabling a datanet is consent to pay its one-time subnet-access grant; cap or
-  disable grants with `budget.grantReppoMax`.
+- Enabling a datanet is your consent to pay its one-time, per-subnet access
+  grant fee (cached, charged once on first use). There is no separate grant
+  budget cap — don't enable a datanet whose access fee you don't want to pay.
 - The private key sits in `.env` in plaintext — **use a dedicated wallet**.
 - The dashboard is unauthenticated and localhost-bound on purpose (see
   [ADR 0002](adr/0002-dashboard-unauthenticated-localhost-bind.md)). Never publish

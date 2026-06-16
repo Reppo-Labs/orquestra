@@ -167,7 +167,7 @@ describe('buildTick config hot-reload', () => {
   function tickWiring(reload: () => ReturnType<typeof StrategyConfigSchema.parse>) {
     const w = wiring()
     const updateCaps = vi.fn()
-    w.ledger = { startCycle: vi.fn(), updateCaps, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0, grantReppoSpent: 0 } } as unknown as CycleWiring['ledger']
+    w.ledger = { startCycle: vi.fn(), updateCaps, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
     const ranWith: string[][] = []
     const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
     return { w, deps, updateCaps, ranWith, reload }

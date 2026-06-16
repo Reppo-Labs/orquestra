@@ -231,10 +231,10 @@ describe('runCycle', () => {
     expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
 
-  it('skips vote AND mint when subnet access is required and the grant is refused (no scoring waste)', async () => {
+  it('skips vote AND mint when subnet access is required and the grant fails (no scoring waste)', async () => {
     const executeGrantAccess = vi.fn(async () => ({
-      ok: false as const, status: 'refused-budget' as const,
-      detail: 'grant REPPO budget exhausted (set budget.grantReppoMax to enable subnet-access grants)',
+      ok: false as const, status: 'error' as const,
+      detail: 'grant-access failed: INSUFFICIENT_REPPO_BALANCE',
     }))
     const d = deps({
       executor: {
@@ -260,7 +260,7 @@ describe('runCycle', () => {
       .filter((e) => e.kind === 'skip')
     expect(skips.length).toBe(2) // datanets 9 and 2, one entry each per cycle
     expect(skips[0].status).toBe('skipped')
-    expect(skips[0].reason).toMatch(/grant-access refused-budget/)
+    expect(skips[0].reason).toMatch(/grant-access error/)
   })
 
   it('does not skip when access is already granted, when the grant succeeds, or when the rubric has no subnetUuid', async () => {

@@ -102,7 +102,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Without access every vote/mint reverts on-chain (VOTER_LACKS_SUBNET_ACCESS) — but
       // only AFTER paying for pod fetching and LLM scoring. So a failed/refused grant
       // skips the datanet for this cycle instead of proceeding; it resumes automatically
-      // the cycle after a grant succeeds (e.g. operator raises budget.grantReppoMax).
+      // the cycle after a grant succeeds (e.g. once the wallet has funds for the fee).
       if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
         const granted = await deps.grantedSubnets()
         if (!granted.has(datanetId)) {

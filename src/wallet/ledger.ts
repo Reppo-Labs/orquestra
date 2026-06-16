@@ -10,11 +10,6 @@ export interface BudgetCaps {
   mintReppoMax: number
   mintGasEthMax: number
   claimGasEthMax: number
-  /** Cumulative REPPO allowed for one-time subnet-access grants. 0 = grants disabled. */
-  /** Cumulative cap on subnet-access grant fees. undefined = no cap: joining a
-   *  datanet (vote/mint enabled in config) is the consent to pay its grant fee.
-   *  Set a number to bound total grant spend (0 disables grants entirely). */
-  grantReppoMax?: number
 }
 
 export interface LedgerState {
@@ -24,7 +19,6 @@ export interface LedgerState {
   mintReppoSpent: number // cumulative within the current horizon window
   mintGasSpentEth: number // cumulative within the current horizon window
   claimGasSpentEth: number // cumulative within the current horizon window
-  grantReppoSpent: number // cumulative REPPO spent on subnet-access grants (current window)
   /** ISO start of the current budget horizon window; cumulative spend resets when
    *  horizonDays elapse past this. '' until the first cycle initializes it. */
   horizonStart: string
@@ -44,11 +38,6 @@ export interface MintReservation {
 export interface ClaimReservation {
   kind: 'claim'
   estGasEth: number
-}
-
-export interface GrantReservation {
-  kind: 'grant'
-  estReppo: number
 }
 
 /** Thrown when the persisted ledger file exists but is corrupt or invalid.
@@ -71,12 +60,11 @@ const LedgerSchema = z.object({
   mintReppoSpent: nonNegativeFinite,
   mintGasSpentEth: nonNegativeFinite,
   claimGasSpentEth: nonNegativeFinite.default(0),
-  grantReppoSpent: nonNegativeFinite.default(0),
   horizonStart: z.string().default(''),
 })
 
 const fresh = (): LedgerState => ({
-  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, grantReppoSpent: 0, horizonStart: '',
+  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, horizonStart: '',
 })
 
 /** Persisted per-pool budget enforcement. The ONLY authority on whether an
@@ -164,7 +152,6 @@ export class BudgetLedger {
     this._state.mintReppoSpent = 0
     this._state.mintGasSpentEth = 0
     this._state.claimGasSpentEth = 0
-    this._state.grantReppoSpent = 0
     this._state.horizonStart = cycleId
     this.save()
   }
@@ -263,33 +250,6 @@ export class BudgetLedger {
   /** Swap budget caps at a cycle boundary (config hot-reload). Spent counters are
    *  untouched — only the ceilings move. */
   updateCaps(caps: BudgetCaps): void { this.caps = caps }
-
-  canGrant(estReppo: number): boolean {
-    if (this.caps.grantReppoMax === undefined) return true // no cap: datanet membership is the consent
-    return this._state.grantReppoSpent + estReppo <= this.caps.grantReppoMax
-  }
-
-  /** Debit and persist BEFORE signing. Returns null if over the explicit grant REPPO
-   *  cap (no debit). Unset cap always allows; spend is still tracked in the ledger. */
-  reserveGrant(estReppo: number): GrantReservation | null {
-    if (!this.canGrant(estReppo)) return null
-    this._state.grantReppoSpent += estReppo
-    this.save()
-    return { kind: 'grant', estReppo }
-  }
-
-  /** Adjust the grant fee to the CLI-reported actual (est is conservative). */
-  reconcileGrant(res: GrantReservation, actualReppo: number): void {
-    this._state.grantReppoSpent += (actualReppo - res.estReppo)
-    this._state.grantReppoSpent = Math.max(0, this._state.grantReppoSpent)
-    this.save()
-  }
-
-  /** Roll back the reservation when signing fails (or access was already granted). */
-  releaseGrant(res: GrantReservation): void {
-    this._state.grantReppoSpent = Math.max(0, this._state.grantReppoSpent - res.estReppo)
-    this.save()
-  }
 
   /** Persist the single ledger row. One UPSERT statement is atomic in SQLite —
    *  same crash-safety as the old tmp+rename, with no torn writes. */

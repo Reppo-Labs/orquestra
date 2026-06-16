@@ -14,7 +14,7 @@ const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   votingPower: { power: 500, lockupCount: 1 },
   emissionsDue: { totalReppo: 0, pods: [] },
   budget: { mintReppoSpent: 100, mintGasSpentEth: 0.003, voteGasSpentEth: 0.001, claimGasSpentEth: 0.0007,
-    caps: { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05, grantReppoMax: 0 } },
+    caps: { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 } },
   ...over,
 })
 
