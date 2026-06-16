@@ -123,7 +123,7 @@ async function start(): Promise<void> {
   // the scheduler starts only once a strategy config exists.
   const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
   const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
-  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model }) : null
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { chatModel: model, availableProviders: [...providerKeyRegistry.keys()] }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   if (needsOnboarding(DATA_DIR)) {
