@@ -53,7 +53,14 @@ export class WalletExecutor {
     try {
       const r = await this.cli.grantAccess(datanetId, { token })
       if (!r.txHash) return { ok: false, status: 'error', detail: 'no txHash' }
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
+      // Surface the actual fee paid (reppo >=0.8.5 reports feeAmount/feeToken on a
+      // non-REPPO grant) so the cycle can show "paid 50 EXY" in the activity log. The
+      // fee is consent-bounded (not budget-gated); this is informational only.
+      return {
+        ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth,
+        ...(r.feeAmount !== undefined ? { feeAmount: r.feeAmount } : {}),
+        ...(r.feeToken ? { feeToken: r.feeToken } : {}),
+      }
     } catch (e) {
       const detail = (e as Error).message
       // Already having access is success, not failure — report executed so the caller

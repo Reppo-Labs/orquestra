@@ -48,7 +48,7 @@ export interface PanelTranscript {
 
 export interface ActivityRow {
   ts: string | number
-  kind: 'vote' | 'mint' | 'claim' | 'skip'
+  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant'
   datanetId?: string
   podId?: string
   canonicalKey?: string

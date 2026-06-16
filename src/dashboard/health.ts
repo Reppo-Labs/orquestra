@@ -67,6 +67,10 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
       if (n.lastSkipReason === undefined) n.lastSkipReason = e.reason // first seen = newest
       continue
     }
+    // 'grant' is a one-time access-grant breadcrumb (setup), not a tx outcome we rate
+    // and not a skip — exclude it from the vote/mint/claim buckets, the skip count, AND
+    // the txRate (it would otherwise be miscounted as a claim by the else branch below).
+    if (e.kind === 'grant') continue
     const bucket = e.kind === 'vote' ? n.votes : e.kind === 'mint' ? n.mints : n.claims
     if (e.status === 'executed') bucket.executed++
     else if (e.status === 'refused-budget') bucket.refused++

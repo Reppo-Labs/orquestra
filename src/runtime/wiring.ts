@@ -18,6 +18,7 @@ import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
 import { queryEmissionsDueJson } from '../reppo/queryEmissionsDue.js'
+import { readTokenBalance } from '../reppo/tokenBalance.js'
 import { queryClaimableOnchain } from '../reppo/emissionsOnchain.js'
 import { makeDbPodCache } from '../reppo/podCacheStore.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
@@ -188,6 +189,15 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     recordGrant: (id) => w.dedup.recordGrant(id),
     revokeGrant: (id) => w.dedup.removeGrant(id),
     supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
+    // Wallet ERC20 balance reader for the NON-REPPO access-fee pre-check (cycle.ts). Wired
+    // ONLY when both an RPC URL and the wallet address are known — same RPC the CLI uses.
+    // When omitted (no RPC), the cycle skips the pre-check and lets the CLI fail closed.
+    ...(w.rpcUrl && w.walletAddress
+      ? {
+          walletAddress: w.walletAddress,
+          readTokenBalance: (token: string, owner: string) => readTokenBalance(w.rpcUrl as string, token, owner),
+        }
+      : {}),
   }
 }
 

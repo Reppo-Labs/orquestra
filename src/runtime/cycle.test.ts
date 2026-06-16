@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, type CycleDeps } from './cycle.js'
+import { runCycle, toRawUnits, type CycleDeps } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -59,6 +59,22 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     ...over,
   }
 }
+
+describe('toRawUnits (decimals-aware fee scaling — NEVER assume 18)', () => {
+  it('scales whole amounts by the token decimals', () => {
+    expect(toRawUnits(50, 6)).toBe(50_000_000n)   // 50 EXY @ 6 dp
+    expect(toRawUnits(50, 18)).toBe(50n * 10n ** 18n) // 50 @ 18 dp (REPPO-like)
+    expect(toRawUnits(1, 0)).toBe(1n)             // 0-decimal token
+  })
+  it('preserves fractional amounts at the token precision', () => {
+    expect(toRawUnits(50.5, 6)).toBe(50_500_000n)
+    expect(toRawUnits(0.000001, 6)).toBe(1n)       // smallest unit at 6 dp
+  })
+  it('zero is zero at any decimals', () => {
+    expect(toRawUnits(0, 6)).toBe(0n)
+    expect(toRawUnits(0, 18)).toBe(0n)
+  })
+})
 
 describe('runCycle', () => {
   it('starts the cycle, votes on every vote-enabled datanet, mints only where adapter+canMint', async () => {
@@ -365,6 +381,98 @@ describe('runCycle', () => {
     const report = await runCycle(nonReppoConfig, 'c-nonreppo-on', d)
     expect(executeGrantAccess).toHaveBeenCalledWith('42', 'primary')
     expect(report.datanets.find((r) => r.datanetId === '42')!.skipped).toBeUndefined()
+  })
+
+  it('skips a non-REPPO datanet when the wallet balance is below the access fee (decimals-aware)', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
+    // EXY has 6 decimals; need 50 EXY = 50_000_000 raw. Wallet holds 49 EXY = 49_000_000 raw.
+    const readTokenBalance = vi.fn(async () => 49_000_000n)
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: true,
+      readTokenBalance,
+      walletAddress: '0xWallet',
+    })
+    const report = await runCycle(nonReppoConfig, 'c-insufficient', d)
+    expect(readTokenBalance).toHaveBeenCalledWith(exyToken.address, '0xWallet')
+    expect(executeGrantAccess).not.toHaveBeenCalled()       // never paid — pre-check stopped it
+    expect(d.getPodsAndFilter).not.toHaveBeenCalled()       // skipped before scoring
+    const d42 = report.datanets.find((r) => r.datanetId === '42')!
+    expect(d42.skipped).toMatch(/insufficient EXY balance for access fee/)
+    expect(skipReasons(d.recordActivity as any).some((r) => /insufficient EXY balance/.test(r))).toBe(true)
+  })
+
+  it('grants a non-REPPO datanet with token=primary when the balance covers the fee', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
+    const readTokenBalance = vi.fn(async () => 50_000_000n) // exactly 50 EXY @ 6 dp — enough
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: true,
+      readTokenBalance,
+      walletAddress: '0xWallet',
+    })
+    const report = await runCycle(nonReppoConfig, 'c-sufficient', d)
+    expect(executeGrantAccess).toHaveBeenCalledWith('42', 'primary')
+    expect(report.datanets.find((r) => r.datanetId === '42')!.skipped).toBeUndefined()
+  })
+
+  it('does NOT block the grant when no balance reader is wired (CLI still fails closed)', async () => {
+    const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: true,
+      // readTokenBalance + walletAddress intentionally omitted (no RPC configured)
+    })
+    await runCycle(nonReppoConfig, 'c-noreader', d)
+    expect(executeGrantAccess).toHaveBeenCalledWith('42', 'primary') // grant still attempted
+  })
+
+  it('records a grant breadcrumb (kind:grant) with the fee paid on a successful non-REPPO grant', async () => {
+    const executeGrantAccess = vi.fn(async () => ({
+      ok: true as const, status: 'executed' as const, txHash: '0xg',
+      feeAmount: 50, feeToken: { symbol: 'EXY', address: exyToken.address, decimals: 6 },
+    }))
+    const d = deps({
+      getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeGrantAccess,
+      } as unknown as CycleDeps['executor'],
+      grantedSubnets: async () => new Set<string>(),
+      recordGrant: vi.fn(),
+      supportsNonReppoGrants: true,
+      readTokenBalance: vi.fn(async () => 100_000_000n),
+      walletAddress: '0xWallet',
+    })
+    await runCycle(nonReppoConfig, 'c-grantfee', d)
+    const grants = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => c[0] as { kind: string; reason?: string; status: string })
+      .filter((e) => e.kind === 'grant')
+    expect(grants).toHaveLength(1)
+    expect(grants[0].status).toBe('executed')
+    expect(grants[0].reason).toMatch(/granted access — paid 50 EXY/)
   })
 
   it('uses token=reppo for a REPPO-fee datanet regardless of the non-REPPO capability flag', async () => {
