@@ -1,5 +1,6 @@
 // src/config/schema.ts
 import { z } from 'zod'
+import { LlmProviderEnum } from '../llm/model.js'
 
 export const STRICTNESS_THRESHOLDS = {
   conservative: { like: 8, dislike: 4 },
@@ -23,6 +24,10 @@ const DatanetPolicy = z
     //   'url-only' → register the candidate's source URL as the pod, no pinning,
     //                no Pinata. Only valid for candidates that have a sourceUrl.
     mintMode: z.enum(['pin', 'url-only']).default('pin'),
+    // Per-datanet LLM override for the VOTING scorer. Absent ⇒ the node default
+    // (LLM_PROVIDER/LLM_API_KEY). provider must be a known LlmProvider; model is a
+    // non-empty slug (validated lazily — an unknown slug fails at request time).
+    model: z.object({ provider: LlmProviderEnum, model: z.string().min(1) }).optional(),
   })
   .strict()
 

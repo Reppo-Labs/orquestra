@@ -80,3 +80,26 @@ describe('StrategyConfig adapterParams', () => {
     expect(StrategyConfigSchema.parse(valid).datanets['9'].strictness).toBe('conservative')
   })
 })
+
+describe('StrategyConfig datanet model override', () => {
+  it('accepts an explicit { provider, model } override on a datanet policy', () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...valid,
+      datanets: { '9': { vote: true, strictness: 'balanced', model: { provider: 'google', model: 'gemini-3-pro' } } },
+    })
+    const p = cfg.datanets['9'] as { model?: { provider: string; model: string } }
+    expect(p.model).toEqual({ provider: 'google', model: 'gemini-3-pro' })
+  })
+  it('rejects an unknown provider in the model override', () => {
+    const bad = { ...valid, datanets: { '9': { vote: true, strictness: 'balanced', model: { provider: 'mistral', model: 'm' } } } }
+    expect(() => StrategyConfigSchema.parse(bad)).toThrow()
+  })
+  it('rejects an empty model string in the model override', () => {
+    const bad = { ...valid, datanets: { '9': { vote: true, strictness: 'balanced', model: { provider: 'google', model: '' } } } }
+    expect(() => StrategyConfigSchema.parse(bad)).toThrow()
+  })
+  it('parses a datanet with no model override (absent ⇒ node default)', () => {
+    const cfg = StrategyConfigSchema.parse(valid)
+    expect((cfg.datanets['9'] as { model?: unknown }).model).toBeUndefined()
+  })
+})
