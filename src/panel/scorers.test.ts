@@ -49,6 +49,19 @@ describe('createPanelPodScorer (votes, all-or-none)', () => {
     expect(r.panel).toBeUndefined()
   })
 
+  it('VIDEO pod (mediaUrl set) bypasses the panel and goes to the multimodal base scorer, even with votePanel=true', async () => {
+    // The panel personas are text-only; a video pod must reach the multimodal screen
+    // scorer (base) or the whole video feature is dead by default (votePanel defaults true).
+    const base = basePod(7)
+    const gen = vi.fn() as unknown as ReturnType<typeof vi.fn> & PanelGenerate
+    const videoPod = { podId: 'v', validityEpoch: '1', name: 'clip', description: '', mediaUrl: 'https://x/c.mp4', mediaType: 'video/mp4' }
+    const r = await createPanelPodScorer(base, opts({ enabled: true, votePanel: true, generate: gen })).scorePod(videoPod, rubric, { like: 7, dislike: 3 })
+    expect(base.scorePod).toHaveBeenCalledTimes(1) // routed to the multimodal scorer
+    expect(gen).not.toHaveBeenCalled()             // runPanel never convened
+    expect(r.score).toBe(7)                        // base scorer's score, not the judge's 6
+    expect(r.panel).toBeUndefined()
+  })
+
   it('injects the per-datanet lessons block into the JUDGE prompt only (personas stay lesson-free)', async () => {
     let judgePrompt = ''
     let personaPrompt = ''

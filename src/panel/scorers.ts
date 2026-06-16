@@ -33,6 +33,12 @@ export interface PanelScorerOpts {
 export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): PodScorer {
   return {
     async scorePod(pod, rubric, thresholds): Promise<PodScore> {
+      // A VIDEO pod (mediaUrl set) MUST go to the multimodal screen scorer (`base`,
+      // createLlmScorer's `pod.mediaUrl` branch). The panel personas are text-only and
+      // drop the media, so routing a video pod through runPanel would silently score it
+      // blind. This bypass is unconditional — independent of deliberation.votePanel —
+      // because the panel can never see the video. Text pods are unaffected.
+      if (pod.mediaUrl) return base.scorePod(pod, rubric, thresholds)
       const { enabled, votePanel } = opts.getDeliberation()
       if (!enabled || !votePanel) return base.scorePod(pod, rubric, thresholds)
       try {
