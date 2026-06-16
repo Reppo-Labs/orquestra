@@ -87,6 +87,17 @@ google, alongside the existing default scorer).
 - If no Google key is configured, video pods are **skipped with a recorded reason**
   ("video scoring needs a Google API key"); text datanets are unaffected.
 
+**Why not reuse the existing `virtuals` key?** Evaluated and rejected. The
+`virtuals` provider is an OpenAI-compatible gateway (`createOpenAI({ baseURL:
+'https://compute.virtuals.io/v1' })`, POSTs `/chat/completions`). Its model list
+does expose a Gemini slug (`gemini-3-flash-preview`), but the OpenAI Chat
+Completions wire schema carries only `image_url` (images), with **no video content
+part** — so video cannot be sent through virtuals regardless of which model it
+proxies. Native Gemini video (the `inlineData`/`fileData` video part + Files API)
+is only expressible through `@ai-sdk/google`, which is why this path needs its own
+Google key. (Reusing virtuals would force frame-sampling — images, not motion —
+defeating the reason Gemini was chosen.)
+
 ### 5. Failure & limits (per-datanet isolation)
 
 Fetch failure / unsupported codec / over `VIDEO_MAX_BYTES` / Gemini error /
