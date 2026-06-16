@@ -21,7 +21,8 @@ import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { createSportsAdapter } from './adapter/sports/index.js'
-import { resolveModel, type LlmProvider } from './llm/model.js'
+import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
+import { buildProviderKeyRegistry } from './llm/registry.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
@@ -113,6 +114,10 @@ async function start(): Promise<void> {
 
   const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const model = resolveModel(provider, process.env.LLM_API_KEY ?? '')
+  // Multi-provider key registry (env-only): the per-datanet vote scorer resolves a model
+  // from this. Includes the back-compat LLM_PROVIDER/LLM_API_KEY default.
+  const providerKeyRegistry = buildProviderKeyRegistry(process.env)
+  const defaultModel = DEFAULT_MODEL[provider]
 
   // Dashboard FIRST: on a fresh node it hosts the conversational onboarding;
   // the scheduler starts only once a strategy config exists.
@@ -168,6 +173,9 @@ async function start(): Promise<void> {
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,
+    providerKeyRegistry,
+    defaultProvider: provider,
+    defaultModel,
     // Self-learning reflection runs on the same model as the scorer/panel.
     learnModel: model,
     rpcUrl: rpcUrl || undefined,
