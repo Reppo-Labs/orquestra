@@ -39,7 +39,7 @@ export function createLlmScorer(model: LanguageModel, opts: { brief?: string | (
       // (incl. the Anthropic-compatible Virtuals gateway), OpenAI, and Google — unlike
       // `json` mode, which Anthropic does not support. Retry once on a transient
       // non-conforming response.
-      return generateObjectWithRetry(model, ScoreSchema, system, prompt)
+      return generateObjectWithRetry(model, ScoreSchema, system, { prompt })
     },
   }
 }

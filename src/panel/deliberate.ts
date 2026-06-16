@@ -33,7 +33,7 @@ export interface PanelResult {
  *  non-conforming response (shared with the voter scorer). */
 function defaultGenerate(model: LanguageModel): PanelGenerate {
   return <T>({ schema, system, prompt }: { schema: ZodType<T>; system: string; prompt: string }): Promise<T> =>
-    generateObjectWithRetry(model, schema, system, prompt)
+    generateObjectWithRetry(model, schema, system, { prompt })
 }
 
 /** Run the full panel for one pod/candidate. Throws ONLY when no verdict can be
