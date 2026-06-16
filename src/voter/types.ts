@@ -15,6 +15,9 @@ export interface VoterPod {
   mediaUrl?: string
   /** (Phase B) The media MIME type captured at detection (e.g. 'video/mp4'). */
   mediaType?: string
+  /** (Phase B) Content-Length captured at detection, when the server reported it. Threaded
+   *  into ingestVideo so a known-oversize video is skipped BEFORE it is downloaded. */
+  contentLength?: number
 }
 
 /** Pre-rubric filter inputs (from the vote-filter the prefetch/CLI derives). */

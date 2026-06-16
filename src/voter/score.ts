@@ -101,15 +101,24 @@ export function createLlmScorer(
       if ('skip' in resolved) throw new Error(resolved.skip)
       // Ingest (size-branched) → FilePart, build messages, score. A skip reason THROWS so
       // selectVotes' per-pod try/catch records it (fail-closed, never aborts the cycle).
+      // contentLength (from detection, threaded onto the pod) lets ingestVideo skip a
+      // known-oversize video BEFORE downloading it (null ⇒ it fetches + re-measures).
       const ingest = await ingestVideo({
         url: pod.mediaUrl as string,
         mediaType: pod.mediaType ?? 'video/mp4',
-        contentLength: null, // ingestVideo re-measures + re-enforces VIDEO_MAX_BYTES from the byte fetch
+        contentLength: pod.contentLength ?? null,
         googleKey: ctx.registry.get('google'),
       })
       if ('skip' in ingest) throw new Error(ingest.skip)
-      const built = buildVotePrompt(pod, rubric, resolveBrief(), ingest.part)
-      return generateObjectWithRetry(resolved.model, ScoreSchema, built.system, { messages: (built as { messages: CoreMessage[] }).messages })
+      // The Files-API path returns a cleanup that deletes the uploaded file. Delete it AFTER
+      // generateObject has read the fileData URI (deleting before would 404 the request) —
+      // run it in finally so a scoring throw still cleans up the remote file.
+      try {
+        const built = buildVotePrompt(pod, rubric, resolveBrief(), ingest.part)
+        return await generateObjectWithRetry(resolved.model, ScoreSchema, built.system, { messages: (built as { messages: CoreMessage[] }).messages })
+      } finally {
+        await ingest.cleanup?.()
+      }
     },
   }
 }
