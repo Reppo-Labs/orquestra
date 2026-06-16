@@ -11,6 +11,10 @@ The robotics datanet's pods are **videos** — a pod's `url` points to an attach
 video file. To vote well, the node must actually *watch* the video and score it
 against the datanet rubric. Today it cannot: scoring is **text-only**.
 
+This is **not robotics-specific**: the mechanism is "any pod with an attached
+video, on any datanet, defaults to the Gemini video scorer." Robotics is simply
+the first datanet that needs it; the design adds no datanet-specific branch.
+
 `src/voter/score.ts:buildVotePrompt` (lines 19-29) builds plain `{system, prompt}`
 strings; the pod-enrichment loop in `src/runtime/wiring.ts` (~lines 160-163)
 fetches `pod.url` as **plain text** (max 4000 chars) and concatenates it onto the
@@ -36,9 +40,12 @@ AI SDK and all three configured providers support them.
    "did the robot complete the task"), not just keyframes.
 2. **Voting only; adapter-agnostic.** Voting scores on-chain pods by rubric with no
    adapter, so this is purely a **scorer-input** problem — no robotics adapter.
-3. **Auto-detect by Content-Type** (not a per-datanet config flag): a votable pod
-   whose `url` is `video/*` takes the video path; everything else takes the
-   unchanged text path. Mixed datanets and stray video pods just work.
+3. **Auto-detect by Content-Type, datanet-agnostic** (not a per-datanet config
+   flag): **any** votable pod whose `url` is `video/*` — on **any** datanet —
+   defaults to the Gemini video path; everything else takes the unchanged text
+   path. The robotics datanet is the motivating case, not a special case: there is
+   no datanet allow-list. Mixed datanets and stray video pods just work, and a
+   future video datanet needs zero config.
 4. **Fail-closed, per-datanet isolation.** Any failure (no Google key, fetch/codec
    error, over-size, Gemini/Files-API error) **skips that pod with a recorded
    reason** and never aborts the cycle.
