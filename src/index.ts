@@ -183,6 +183,9 @@ async function start(): Promise<void> {
     providerKeyRegistry,
     defaultProvider: provider,
     defaultModel,
+    // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
+    // not the on-chain budget). Default (4) lives in buildCycleDeps.
+    videoPodsPerCycle: process.env.VIDEO_PODS_PER_CYCLE ? Number(process.env.VIDEO_PODS_PER_CYCLE) : undefined,
     // Self-learning reflection runs on the same model as the scorer/panel.
     learnModel: model,
     rpcUrl: rpcUrl || undefined,
