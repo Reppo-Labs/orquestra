@@ -131,6 +131,12 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // node default) against the env key registry, then wrap in the panel exactly as before.
   // A skip (no key for the chosen provider) is returned straight to the cycle, which
   // records it per-datanet. isVideo is false in Phase A (no video detection yet).
+  //
+  // Build-once cache: datanets sharing a resolved provider:model reuse one scorer
+  // (per datanet per cycle was rebuilding it). Safe across hot-reload — the scorer reads
+  // brief/deliberation/lessons live via getters (getLessons takes datanetId at call time),
+  // so the cached object stays correct. Skips are not cached (cheap, no scorer built).
+  const scorerCache = new Map<string, PodScorer>()
   const voteScorerFor = (datanetId: string): { scorer: PodScorer } | { skip: string } => {
     const policyModel = (w.config.datanets[datanetId] as { model?: { provider: LlmProvider; model: string } } | undefined)?.model
     const resolved = resolveScoringModel({
@@ -138,8 +144,15 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       registry: w.providerKeyRegistry, defaultProvider: w.defaultProvider, defaultModel: w.defaultModel,
     })
     if ('skip' in resolved) return { skip: resolved.skip }
-    const screen = createLlmScorer(resolved.model, { brief: liveBrief })
-    const scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
+    // Key by the effective provider:model (isVideo always false in Phase A): identical
+    // resolutions yield an identical scorer, so one build serves every such datanet.
+    const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${w.defaultProvider}:${w.defaultModel}`
+    let scorer = scorerCache.get(cacheKey)
+    if (!scorer) {
+      const screen = createLlmScorer(resolved.model, { brief: liveBrief })
+      scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
+      scorerCache.set(cacheKey, scorer)
+    }
     return { scorer }
   }
   // Mint path is unchanged by per-datanet voting overrides (spec: override scopes to the

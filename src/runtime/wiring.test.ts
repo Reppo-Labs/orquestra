@@ -258,4 +258,40 @@ describe('buildCycleDeps voteScorerFor', () => {
     expect('skip' in r).toBe(true)
     expect((r as { skip: string }).skip).toContain('google')
   })
+
+  it('memoizes: same resolved provider:model reuses one scorer object', () => {
+    // Two datanets, both on the node default (no override) → one scorer.
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: {
+        '9': { vote: true, mint: false, strictness: 'balanced' },
+        '10': { vote: true, mint: false, strictness: 'balanced' },
+      },
+      notes: '',
+    })
+    const deps = buildCycleDeps(wiring({ config: cfg }))
+    const a = deps.voteScorerFor('9'), b = deps.voteScorerFor('10')
+    expect('scorer' in a && 'scorer' in b).toBe(true)
+    expect((a as { scorer: unknown }).scorer).toBe((b as { scorer: unknown }).scorer)
+    // a repeat call for the same datanet returns the same cached object
+    expect((deps.voteScorerFor('9') as { scorer: unknown }).scorer).toBe((a as { scorer: unknown }).scorer)
+  })
+
+  it('distinct resolved models get distinct scorers', () => {
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: {
+        '9': { vote: true, mint: false, strictness: 'balanced' }, // node default (virtuals)
+        '11': { vote: true, mint: false, strictness: 'balanced', model: { provider: 'virtuals', model: 'other-slug' } },
+      },
+      notes: '',
+    })
+    const deps = buildCycleDeps(wiring({ config: cfg }))
+    const a = deps.voteScorerFor('9'), c = deps.voteScorerFor('11')
+    expect((a as { scorer: unknown }).scorer).not.toBe((c as { scorer: unknown }).scorer)
+  })
 })
