@@ -1,0 +1,36 @@
+// src/llm/registry.ts — build the provider key registry from env at startup.
+// Keys are read from the ENVIRONMENT ONLY (never the dashboard, never persisted,
+// never logged). The map's keys are `availableProviders`. Per-provider LLM_KEY_*
+// vars win; LLM_PROVIDER + LLM_API_KEY register the DEFAULT provider's key only
+// when that provider has no explicit LLM_KEY_* (back-compat: an operator who set
+// just those keeps working).
+import { LlmProviderEnum, type LlmProvider } from './model.js'
+
+const ENV_BY_PROVIDER: Record<LlmProvider, string> = {
+  anthropic: 'LLM_KEY_ANTHROPIC',
+  openai: 'LLM_KEY_OPENAI',
+  google: 'LLM_KEY_GOOGLE',
+  virtuals: 'LLM_KEY_VIRTUALS',
+  surplus: 'LLM_KEY_SURPLUS',
+}
+
+type Env = Record<string, string | undefined>
+
+/** Map<provider, apiKey> from env. Blank/whitespace values are ignored. */
+export function buildProviderKeyRegistry(env: Env): Map<LlmProvider, string> {
+  const reg = new Map<LlmProvider, string>()
+  // 1) per-provider explicit keys (authoritative).
+  for (const provider of LlmProviderEnum.options) {
+    const v = env[ENV_BY_PROVIDER[provider]]?.trim()
+    if (v) reg.set(provider, v)
+  }
+  // 2) back-compat default: LLM_PROVIDER + LLM_API_KEY → that provider, only if it has
+  //    no explicit LLM_KEY_* above. Unknown LLM_PROVIDER (or blank key) is ignored.
+  const defKey = env.LLM_API_KEY?.trim()
+  const defProviderRaw = env.LLM_PROVIDER?.trim() || 'anthropic'
+  const defProvider = LlmProviderEnum.safeParse(defProviderRaw)
+  if (defKey && defProvider.success && !reg.has(defProvider.data)) {
+    reg.set(defProvider.data, defKey)
+  }
+  return reg
+}
