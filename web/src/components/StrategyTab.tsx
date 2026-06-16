@@ -117,6 +117,13 @@ function NetCard({ id, d, name, edit, providers }: {
           <select value={curProvider} onChange={(e) => selectProvider(e.target.value)}>
             <option value="">node default</option>
             {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
+            {/* A persisted override whose provider has no key on the node (key removed from
+                env) is NOT in `providers`. Surface it as a selected option so the select shows
+                the real saved value instead of silently snapping to "node default" — a plain
+                Save would otherwise re-persist the dead override and skip votes silently. */}
+            {curProvider && !providers.some((p) => p.provider === curProvider) && (
+              <option value={curProvider}>{curProvider} (no key configured)</option>
+            )}
           </select>
         </label>
         {curProvider && (
