@@ -6,10 +6,12 @@ import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
 import type { CycleDeps, CycleReport } from './cycle.js'
 import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
-import type { VoterPod } from '../voter/types.js'
+import type { VoterPod, PodScorer } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import { createLlmScorer } from '../voter/score.js'
 import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
+import { resolveScoringModel } from '../llm/resolveScoringModel.js'
+import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
@@ -78,6 +80,13 @@ export interface CycleWiring {
   config: StrategyConfig
   /** model the screen scorer + deliberation panel run on. */
   model: LanguageModel
+  /** provider → apiKey, built once at startup from env (src/llm/registry.ts). The
+   *  per-datanet scorer resolves a model from this; an absent key for a datanet's
+   *  chosen provider → that datanet's vote is skipped with a recorded reason. */
+  providerKeyRegistry: Map<LlmProvider, string>
+  /** Node default provider/model — used when a datanet has no `model` override. */
+  defaultProvider: LlmProvider
+  defaultModel: string
   ledger: BudgetLedger
   executor: WalletExecutor
   dedup: DedupState
@@ -117,16 +126,30 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // Screen scorer + panel decorators are built ONCE. They read the brief and the
   // deliberation settings live (via getters / liveBrief) so a hot-reload of either
   // takes effect on the next decision without rebuilding anything.
-  const screenScorer = createLlmScorer(w.model, { brief: liveBrief })
   const getDeliberation = () => w.config.deliberation
-  const voteScorer = createPanelPodScorer(screenScorer, { model: w.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-  // Mint base scorer: score the DATASET against the publisher spec, not just the
-  // summary line — otherwise every candidate scores low and nothing mints (see
-  // src/minter/score.ts). The panel (when enabled) replaces this for mints.
+  // Per-datanet vote scorer: resolve THIS datanet's model (its `model` override, else the
+  // node default) against the env key registry, then wrap in the panel exactly as before.
+  // A skip (no key for the chosen provider) is returned straight to the cycle, which
+  // records it per-datanet. isVideo is false in Phase A (no video detection yet).
+  const voteScorerFor = (datanetId: string): { scorer: PodScorer } | { skip: string } => {
+    const policyModel = (w.config.datanets[datanetId] as { model?: { provider: LlmProvider; model: string } } | undefined)?.model
+    const resolved = resolveScoringModel({
+      policyModel, isVideo: false,
+      registry: w.providerKeyRegistry, defaultProvider: w.defaultProvider, defaultModel: w.defaultModel,
+    })
+    if ('skip' in resolved) return { skip: resolved.skip }
+    const screen = createLlmScorer(resolved.model, { brief: liveBrief })
+    const scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
+    return { scorer }
+  }
+  // Mint path is unchanged by per-datanet voting overrides (spec: override scopes to the
+  // voting scorer only). Score the DATASET (not just the summary line) on the node default
+  // model — otherwise every candidate scores low and nothing mints (src/minter/score.ts).
+  const mintScreenScorer = createLlmScorer(w.model, { brief: liveBrief })
   const candidateBase: CandidateScorer = {
     scoreCandidate: (cand, rub) => {
       const { name, description } = candidateScoreInput(cand)
-      return screenScorer.scorePod({ podId: cand.canonicalKey, validityEpoch: '', name, description }, rub)
+      return mintScreenScorer.scorePod({ podId: cand.canonicalKey, validityEpoch: '', name, description }, rub)
     },
   }
   const candidateScorer = createPanelCandidateScorer(candidateBase, { model: w.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
@@ -164,7 +187,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
     },
     getAdapter: (id) => w.adapters.find((a) => a.id === id),
-    voteScorer,
+    voteScorerFor,
     candidateScorer,
     seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
     executor: w.executor,

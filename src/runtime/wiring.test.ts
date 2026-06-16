@@ -7,6 +7,7 @@ import { DedupState } from './state.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import { appendActivity } from '../dashboard/activityLog.js'
 import type { VoterPod } from '../voter/types.js'
+import type { LlmProvider } from '../llm/model.js'
 
 // Mocks for the post-cycle reporting/learning path (the reporting=false tests below
 // never reach these). Shared spies via vi.hoisted so the factories can reference them.
@@ -44,6 +45,9 @@ function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
   return {
     dataDir: dir, config,
     model: {} as CycleWiring['model'], // scorers aren't exercised in these tests
+    providerKeyRegistry: new Map<LlmProvider, string>([['virtuals', 'acp-v']]),
+    defaultProvider: 'virtuals',
+    defaultModel: 'claude-opus-4-8',
     ledger: { startCycle: vi.fn(), state: {} } as unknown as CycleWiring['ledger'],
     executor: {} as CycleWiring['executor'],
     dedup: new DedupState(dir),
@@ -229,5 +233,29 @@ describe('buildTick self-learning (reporting path)', () => {
     const w = wiring({ learnModel: {} as CycleWiring['model'] })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
+  })
+})
+
+describe('buildCycleDeps voteScorerFor', () => {
+  const cfgWith = (policy: Record<string, unknown>) => StrategyConfigSchema.parse({
+    horizonDays: 7, cadenceHours: 1,
+    stake: { lockReppo: 0, lockDurationDays: 7 },
+    budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+    datanets: { '9': { vote: true, mint: false, strictness: 'balanced', ...policy } },
+    notes: '',
+  })
+
+  it('resolves a scorer for a datanet using the node default provider', () => {
+    const w = wiring({ config: cfgWith({}) })
+    const deps = buildCycleDeps(w)
+    expect('scorer' in deps.voteScorerFor('9')).toBe(true)
+  })
+
+  it('skips a datanet whose policy model has no key in the registry', () => {
+    const w = wiring({ config: cfgWith({ model: { provider: 'google', model: 'gemini-3-pro' } }) })
+    const deps = buildCycleDeps(w)
+    const r = deps.voteScorerFor('9')
+    expect('skip' in r).toBe(true)
+    expect((r as { skip: string }).skip).toContain('google')
   })
 })
