@@ -24,7 +24,11 @@ export interface ResolveScoringInput {
 
 export type ScoringModelResult = { model: LanguageModel } | { skip: string }
 
-export function resolveScoringModel(input: ResolveScoringInput): ScoringModelResult {
+/** Builds the SDK model from provider + key + slug. Defaults to the real resolveModel;
+ *  injectable so tests can assert the resolved provider/slug without an SDK round-trip. */
+export type ModelResolver = (provider: LlmProvider, apiKey: string, model?: string) => LanguageModel
+
+export function resolveScoringModel(input: ResolveScoringInput, resolve: ModelResolver = resolveModel): ScoringModelResult {
   const { policyModel, isVideo, registry, defaultProvider, defaultModel } = input
 
   // 1) explicit per-datanet override.
@@ -34,18 +38,18 @@ export function resolveScoringModel(input: ResolveScoringInput): ScoringModelRes
     }
     const key = registry.get(policyModel.provider)
     if (!key) return { skip: `no API key for ${policyModel.provider} (this datanet is set to ${policyModel.provider}/${policyModel.model})` }
-    return { model: resolveModel(policyModel.provider, key, policyModel.model) }
+    return { model: resolve(policyModel.provider, key, policyModel.model) }
   }
 
   // 2) no override + video → Gemini default.
   if (isVideo) {
     const key = registry.get(VIDEO_DEFAULT_PROVIDER)
     if (!key) return { skip: 'video scoring needs a Google API key (set LLM_KEY_GOOGLE)' }
-    return { model: resolveModel(VIDEO_DEFAULT_PROVIDER, key, VIDEO_DEFAULT_MODEL) }
+    return { model: resolve(VIDEO_DEFAULT_PROVIDER, key, VIDEO_DEFAULT_MODEL) }
   }
 
   // 3) no override + text → node default.
   const key = registry.get(defaultProvider)
   if (!key) return { skip: `no API key for the node default provider (${defaultProvider})` }
-  return { model: resolveModel(defaultProvider, key, defaultModel) }
+  return { model: resolve(defaultProvider, key, defaultModel) }
 }
