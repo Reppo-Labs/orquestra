@@ -140,11 +140,19 @@ async function start(): Promise<void> {
   // (hot — a dashboard change takes effect with no restart) + the env-only key registry.
   // null when even the effective default has no key (handlers 503). loadConfig is tolerant:
   // a fresh node with no config yet falls back to the env default (bootstrap).
+  // Warn-once latch: resolveChatModel runs per chat request AND per /api/onboarding/status
+  // poll (~30s), so a stale config.defaultModel (its provider's key removed from env) would
+  // otherwise spam the same fallback warning to stderr forever. Log at most once per distinct
+  // message (mirrors warnedGrantReppoMax in src/config/load.ts).
+  let lastFallbackWarned: string | undefined
   const resolveChatModel = (): ReturnType<typeof resolveModel> | null => {
     let configDefault: { provider: LlmProvider; model: string } | undefined
     try { configDefault = loadConfig(DATA_DIR).defaultModel } catch { configDefault = undefined }
     const eff = effectiveDefault({ configDefault, registry: providerKeyRegistry, envProvider, envModel })
-    if (eff.usedFallback) console.error(`orquestra: ${eff.usedFallback}`)
+    if (eff.usedFallback && eff.usedFallback !== lastFallbackWarned) {
+      lastFallbackWarned = eff.usedFallback
+      console.error(`orquestra: ${eff.usedFallback}`)
+    }
     return eff.key ? resolveModel(eff.provider, eff.key, eff.model) : null
   }
 
