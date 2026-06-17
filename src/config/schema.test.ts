@@ -103,3 +103,25 @@ describe('StrategyConfig datanet model override', () => {
     expect((cfg.datanets['9'] as { model?: unknown }).model).toBeUndefined()
   })
 })
+
+describe('StrategyConfig defaultModel', () => {
+  it('accepts an optional top-level defaultModel', () => {
+    const cfg = StrategyConfigSchema.parse({
+      ...valid,
+      defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
+    })
+    expect(cfg.defaultModel).toEqual({ provider: 'usepod', model: 'deepseek-v3.2' })
+  })
+
+  it('rejects a defaultModel with an unknown provider', () => {
+    expect(() => StrategyConfigSchema.parse({
+      ...valid,
+      defaultModel: { provider: 'mistral-inc', model: 'x' },
+    })).toThrow()
+  })
+
+  it('treats defaultModel as optional (absent is valid)', () => {
+    const cfg = StrategyConfigSchema.parse({ ...valid })
+    expect(cfg.defaultModel).toBeUndefined()
+  })
+})
