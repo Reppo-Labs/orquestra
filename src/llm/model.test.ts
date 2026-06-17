@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, stripTemperature, usepodBaseURL, type LlmProvider } from './model.js'
+import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, isTemperatureUnsupportedError, withTemperatureFallback, usepodBaseURL, type LlmProvider } from './model.js'
+import type { LanguageModelV1 } from 'ai'
 
 const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals', 'usepod']
 
@@ -45,7 +46,7 @@ describe('resolveModel', () => {
   })
 
   it('builds the usepod base URL with the token in the path (not a header)', () => {
-    // The usepod model is wrapped (dropTemperature) so the openai client's internal
+    // The usepod model is wrapped (withTemperatureFallback) so the openai client's internal
     // `config.url` isn't reachable; assert the token-in-path contract via the helper.
     expect(usepodBaseURL('TOKHERE')).toBe('https://api.usepod.ai/proxy/TOKHERE/v1')
     expect(resolveModel('usepod', 'TOKHERE', 'deepseek-v3.2')).toBeTruthy()
@@ -56,12 +57,81 @@ describe('resolveModel', () => {
   })
 })
 
-describe('stripTemperature', () => {
-  it('drops temperature (the SDK forces temperature:0; usepod open-weight models reject it)', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const params = { temperature: 0, maxTokens: 100, prompt: 'x' } as any
-    const out = stripTemperature(params)
-    expect(out.temperature).toBeUndefined()
-    expect(out.maxTokens).toBe(100) // other params preserved
+describe('isTemperatureUnsupportedError', () => {
+  it('is TRUE when the message names temperature AND a rejection word', () => {
+    expect(isTemperatureUnsupportedError(new Error('temperature is deprecated for this model'))).toBe(true)
+    expect(isTemperatureUnsupportedError(new Error('temperature is not supported'))).toBe(true)
+    expect(isTemperatureUnsupportedError(new Error("Unsupported value: 'temperature'"))).toBe(true)
+  })
+  it('is FALSE for unrelated errors or temperature without a rejection word', () => {
+    expect(isTemperatureUnsupportedError(new Error('rate limit exceeded'))).toBe(false)
+    expect(isTemperatureUnsupportedError(new Error('high temperature warning'))).toBe(false)
+  })
+})
+
+describe('withTemperatureFallback', () => {
+  // A minimal LanguageModelV1 whose doGenerate rejects `temperature` (like usepod/deepseek):
+  // it throws an isTemperatureUnsupportedError when temperature is set, resolves when undefined.
+  function makeRejectingModel(modelId: string) {
+    const calls: Array<{ temperature: number | undefined }> = []
+    const model = {
+      specificationVersion: 'v1',
+      provider: 'fake',
+      modelId,
+      defaultObjectGenerationMode: 'json',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      doGenerate: async (opts: any) => {
+        calls.push({ temperature: opts.temperature })
+        if (opts.temperature != null) throw new Error('temperature is deprecated for this model')
+        return { text: 'ok', finishReason: 'stop', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} } }
+      },
+      doStream: async () => { throw new Error('not used') },
+    } as unknown as LanguageModelV1
+    return { model, calls }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const genParams = (temperature: number | undefined): any => ({
+    inputFormat: 'prompt',
+    mode: { type: 'regular' },
+    prompt: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
+    temperature,
+  })
+
+  it('retries stripped on a temperature-rejection, then latches the modelId for later calls', async () => {
+    const { model, calls } = makeRejectingModel('fake-reject-1')
+    const wrapped = withTemperatureFallback(model)
+
+    // (a) first call WITH temperature: original throws, wrapper retries stripped and succeeds.
+    const r1 = await wrapped.doGenerate(genParams(0))
+    expect(r1.text).toBe('ok')
+    expect(calls).toEqual([{ temperature: 0 }, { temperature: undefined }]) // tried then stripped
+
+    // (b) second call WITH temperature: modelId is latched, so it strips UP FRONT —
+    // doGenerate is never invoked with a temperature again (no failed round-trip).
+    calls.length = 0
+    const r2 = await wrapped.doGenerate(genParams(0))
+    expect(r2.text).toBe('ok')
+    expect(calls).toEqual([{ temperature: undefined }]) // stripped proactively, single call
+  })
+
+  it('does not strip when the model accepts temperature (deterministic 0 preserved)', async () => {
+    const calls: Array<{ temperature: number | undefined }> = []
+    const accepting = {
+      specificationVersion: 'v1',
+      provider: 'fake',
+      modelId: 'fake-accept-1',
+      defaultObjectGenerationMode: 'json',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      doGenerate: async (opts: any) => {
+        calls.push({ temperature: opts.temperature })
+        return { text: 'ok', finishReason: 'stop', usage: { promptTokens: 1, completionTokens: 1 }, rawCall: { rawPrompt: null, rawSettings: {} } }
+      },
+      doStream: async () => { throw new Error('not used') },
+    } as unknown as LanguageModelV1
+    const wrapped = withTemperatureFallback(accepting)
+    const r = await wrapped.doGenerate(genParams(0))
+    expect(r.text).toBe('ok')
+    expect(calls).toEqual([{ temperature: 0 }]) // passed through untouched
   })
 })
