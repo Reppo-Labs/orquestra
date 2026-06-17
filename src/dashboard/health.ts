@@ -59,6 +59,9 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
   }
   const seen = new Set<string>()
   for (const e of entries) {
+    // Wallet-global breadcrumbs (a veREPPO 'stake' top-up) carry no datanetId — they are not
+    // per-datanet activity, so they must not register a phantom datanet row or flip its idle.
+    if (!e.datanetId) continue
     const n = net(e.datanetId)
     // entries are newest-first: the first entry seen per datanet is its current state.
     if (!seen.has(e.datanetId)) { seen.add(e.datanetId); n.idle = e.kind === 'skip' }
