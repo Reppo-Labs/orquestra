@@ -70,7 +70,9 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
     // 'grant' is a one-time access-grant breadcrumb (setup), not a tx outcome we rate
     // and not a skip — exclude it from the vote/mint/claim buckets, the skip count, AND
     // the txRate (it would otherwise be miscounted as a claim by the else branch below).
-    if (e.kind === 'grant') continue
+    // 'stake' (a veREPPO top-up breadcrumb) is treated the same way — also setup, not a
+    // vote/mint/claim outcome.
+    if (e.kind === 'grant' || e.kind === 'stake') continue
     const bucket = e.kind === 'vote' ? n.votes : e.kind === 'mint' ? n.mints : n.claims
     if (e.status === 'executed') bucket.executed++
     else if (e.status === 'refused-budget') bucket.refused++

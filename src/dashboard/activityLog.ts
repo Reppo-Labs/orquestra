@@ -17,7 +17,7 @@ export interface ActivityEntry {
   //  "granted access — paid 50 EXY"). Distinct from 'skip' so a successful grant is
   //  NOT counted as idleness/skip in buildHealth. The `kind` column is plain TEXT, so
   //  this needs no DDL change. (db.ts activity.kind has no CHECK constraint.)
-  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant'
+  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant' | 'stake'
   datanetId: string
   podId?: string
   direction?: 'up' | 'down'
