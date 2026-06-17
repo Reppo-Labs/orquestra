@@ -6,6 +6,7 @@ import type { FeedItem } from './feeds.js'
 import type { DatanetRubric } from '../../rubric/types.js'
 import type { CandidatePod } from '../types.js'
 import { clampPodName, POD_DESC_MAX } from '../podName.js'
+import { redactSecrets } from '../../util/redact.js'
 
 /** Per-operator strategy that personalizes signal curation. */
 export interface SportsStrategy {
@@ -63,7 +64,7 @@ export async function synthesizeSignals(
   try {
     out = await generate({ system, prompt })
   } catch (e) {
-    console.error(`orquestra: sports signal synthesis failed — ${e instanceof Error ? e.message : String(e)}`)
+    console.error(redactSecrets(`orquestra: sports signal synthesis failed — ${e instanceof Error ? e.message : String(e)}`))
     return []
   }
 

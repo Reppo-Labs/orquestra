@@ -1,5 +1,5 @@
 // src/minter/select.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -124,6 +124,26 @@ describe('selectMints (minScore 7)', () => {
     const intents = await selectMints('9', [cand('bad'), cand('good')], rubric,
       { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: flaky })
     expect(intents.map((i) => i.canonicalKey)).toEqual(['good']) // bad skipped, datanet not aborted
+  })
+
+  it('redacts a usepod token-in-URL folded into a scorer error before logging it', async () => {
+    // An AI-SDK error from the usepod provider can embed the auth-token-in-URL in its
+    // .message; the per-candidate skip log must scrub it (redactSecrets), not leak it to stderr.
+    const leaky: CandidateScorer = {
+      scoreCandidate: async () => {
+        throw new Error('POST https://api.usepod.ai/proxy/SECRETTOKEN123/v1/chat/completions 500')
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await selectMints('9', [cand('a')], rubric,
+        { dataDir: dir, minScore: 7, seenKeys: new Set(), scorer: leaky })
+      const logged = spy.mock.calls.map((c) => String(c[0])).join('\n')
+      expect(logged).toContain('api.usepod.ai/proxy/<redacted>')
+      expect(logged).not.toContain('SECRETTOKEN123')
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('per-candidate isolation: a dataset write failure skips that candidate, others still mint', async () => {

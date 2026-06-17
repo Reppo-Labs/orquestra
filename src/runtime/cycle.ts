@@ -9,6 +9,7 @@ import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult } from '../wallet/intents.js'
 import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
+import { redactSecrets } from '../util/redact.js'
 import { selectVotes } from '../voter/select.js'
 import { selectMints } from '../minter/select.js'
 
@@ -359,7 +360,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       datanets.push({ datanetId, votes, mints })
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
-      console.error(`orquestra: datanet ${datanetId} skipped — ${error}`)
+      console.error(redactSecrets(`orquestra: datanet ${datanetId} skipped — ${error}`))
       // Record the failure as a skip activity entry too: without it the dashboard's
       // health/idle panels can't tell "erroring every cycle" from "quietly fine".
       deps.recordActivity({

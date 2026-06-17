@@ -5,6 +5,7 @@ import type { CandidatePod, CandidateScorer } from '../adapter/types.js'
 import { clampPodName, POD_DESC_MAX } from '../adapter/podName.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { MintIntent } from '../wallet/intents.js'
+import { redactSecrets } from '../util/redact.js'
 
 export interface SelectMintsOpts {
   dataDir: string
@@ -45,7 +46,7 @@ export async function selectMints(
     try {
       result = await opts.scorer.scoreCandidate(c, rubric)
     } catch (e) {
-      console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+      console.error(redactSecrets(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) scoring failed, skipped — ${e instanceof Error ? e.message : String(e)}`))
       continue
     }
     const { score, reason, panel } = result
@@ -66,7 +67,7 @@ export async function selectMints(
       try {
         writeFileSync(datasetPath, JSON.stringify(c.dataset))
       } catch (e) {
-        console.error(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) dataset write failed, skipped — ${e instanceof Error ? e.message : String(e)}`)
+        console.error(redactSecrets(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) dataset write failed, skipped — ${e instanceof Error ? e.message : String(e)}`))
         continue
       }
     }
