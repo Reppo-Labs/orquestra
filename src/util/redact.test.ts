@@ -110,6 +110,19 @@ describe('redactSecrets', () => {
     expect(redactSecrets('sku-12345 in stock')).toBe('sku-12345 in stock') // not an sk- prefix
   })
 
+  it('redacts the usepod proxy token in a URL path', () => {
+    const s = 'request to https://api.usepod.ai/proxy/SECRETTOKEN123/v1/chat/completions failed'
+    const out = redactSecrets(s)
+    expect(out).not.toContain('SECRETTOKEN123')
+    expect(out).toContain('https://api.usepod.ai/proxy/<redacted>')
+    expect(out).toContain('/v1/chat/completions') // path after the token is preserved
+  })
+
+  it('does not alter a non-usepod URL', () => {
+    const s = 'https://example.com/proxy/abc/v1'
+    expect(redactSecrets(s)).toBe(s)
+  })
+
   it('leaves ordinary content untouched', () => {
     expect(redactSecrets('plain error, nothing secret; pod 925')).toBe('plain error, nothing secret; pod 925')
   })
