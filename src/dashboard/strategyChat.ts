@@ -2,9 +2,10 @@
 // The dashboard's "goal chat": a scoped LLM call that PROPOSES strategy-config
 // changes — it never writes. The single write path is POST /api/strategy, which
 // the operator triggers explicitly (Save) after seeing the proposal in the grid.
-import { generateObject, type LanguageModel } from 'ai'
+import { type LanguageModel } from 'ai'
 import { z } from 'zod'
 import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
+import { generateObjectWithRetry } from '../llm/generate.js'
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
@@ -31,10 +32,10 @@ export interface StrategyChatResult {
   warning?: string
 }
 
-const defaultGenerate = (model: LanguageModel) => async ({ system, prompt }: { system: string; prompt: string }): Promise<ChatOut> => {
-  const { object } = await generateObject({ model, schema: ChatOutSchema, mode: 'tool', system, prompt })
-  return object
-}
+const defaultGenerate = (model: LanguageModel) => ({ system, prompt }: { system: string; prompt: string }): Promise<ChatOut> =>
+  // Via the shared retry helper: 'tool' mode then a 'json' fallback, so open-weight models
+  // (e.g. usepod's deepseek) that don't emit a forced tool call still return structured output.
+  generateObjectWithRetry(model, ChatOutSchema, system, { prompt })
 
 /** One chat turn: reply + optional validated config proposal. Never throws; never writes. */
 export async function runStrategyChat(deps: StrategyChatDeps): Promise<StrategyChatResult> {
