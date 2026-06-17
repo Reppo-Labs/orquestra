@@ -7,6 +7,7 @@ import type { PanelistVerdict, PanelTranscript } from './types.js'
 import { PERSONAS, PanelistSchema, buildPersonaPrompt, type PanelInput } from './personas.js'
 import { JudgeSchema, buildJudgePrompt } from './judge.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
+import { redactSecrets } from '../util/redact.js'
 
 /** One structured generation. Injectable so tests script the panel without a real
  *  model (the same seam strategyChat.ts uses). */
@@ -49,7 +50,7 @@ export async function runPanel(model: LanguageModel, input: PanelInput, opts: Ru
         const out = await generate({ schema: PanelistSchema, system, prompt })
         return { persona: persona.id, score: out.score, argument: out.argument }
       } catch (e) {
-        console.error(`orquestra: panel persona ${persona.id} failed, dropping from panel — ${e instanceof Error ? e.message : String(e)}`)
+        console.error(redactSecrets(`orquestra: panel persona ${persona.id} failed, dropping from panel — ${e instanceof Error ? e.message : String(e)}`))
         return null
       }
     }),

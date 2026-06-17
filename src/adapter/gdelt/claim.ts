@@ -6,6 +6,7 @@ import type { GeoArticle } from './gdelt.js'
 import type { DatanetRubric } from '../../rubric/types.js'
 import type { CandidatePod } from '../types.js'
 import { clampPodName, POD_DESC_MAX } from '../podName.js'
+import { redactSecrets } from '../../util/redact.js'
 
 /** Per-operator strategy that personalizes claim synthesis. */
 export interface GdeltStrategy {
@@ -66,7 +67,7 @@ export async function synthesizeClaims(
   try {
     out = await generate({ system, prompt })
   } catch (e) {
-    console.error(`orquestra: gdelt claim synthesis failed — ${e instanceof Error ? e.message : String(e)}`)
+    console.error(redactSecrets(`orquestra: gdelt claim synthesis failed — ${e instanceof Error ? e.message : String(e)}`))
     return []
   }
 

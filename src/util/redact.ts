@@ -62,4 +62,8 @@ export function redactSecrets(s: string): string {
     .replace(/\bsk-[A-Za-z0-9-]{20,}/g, 'sk-<redacted>')
     //  Google `AIza…` keys: the literal `AIza` prefix + 35 url-safe chars (fixed-length shape).
     .replace(/\bAIza[A-Za-z0-9_-]{35}/g, 'AIza<redacted>')
+    // usepod carries its auth token in the URL PATH: https://api.usepod.ai/proxy/<token>/v1.
+    // No existing rule matches a path segment (the others cover ?key= queries + bearer +
+    // inf_/acp_ + LLM key shapes), so redact the token between `/proxy/` and the next `/`.
+    .replace(/(api\.usepod\.ai\/proxy\/)[^/\s"']+/gi, '$1<redacted>')
 }

@@ -12,6 +12,7 @@ const ENV_BY_PROVIDER: Record<LlmProvider, string> = {
   google: 'LLM_KEY_GOOGLE',
   virtuals: 'LLM_KEY_VIRTUALS',
   surplus: 'LLM_KEY_SURPLUS',
+  usepod: 'LLM_KEY_USEPOD',
 }
 
 type Env = Record<string, string | undefined>

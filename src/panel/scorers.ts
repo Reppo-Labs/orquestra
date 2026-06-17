@@ -11,6 +11,7 @@ import type { CandidateScorer, CandidatePod } from '../adapter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { runPanel, type PanelGenerate } from './deliberate.js'
+import { redactSecrets } from '../util/redact.js'
 
 export interface PanelScorerOpts {
   model: LanguageModel
@@ -46,7 +47,7 @@ export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): Po
         return { score: r.score, reason: r.reason, panel: r.transcript }
       } catch (e) {
         // Panel failed entirely — fall back to the single scorer (never more fragile).
-        console.error(`orquestra: panel fell back to single scorer for pod ${pod.podId} — ${e instanceof Error ? e.message : String(e)}`)
+        console.error(redactSecrets(`orquestra: panel fell back to single scorer for pod ${pod.podId} — ${e instanceof Error ? e.message : String(e)}`))
         return base.scorePod(pod, rubric, thresholds)
       }
     },

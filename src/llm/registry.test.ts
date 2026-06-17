@@ -15,6 +15,11 @@ describe('buildProviderKeyRegistry', () => {
     expect(r.get('surplus')).toBe('inf_y')
   })
 
+  it('registers usepod from LLM_KEY_USEPOD', () => {
+    const reg = buildProviderKeyRegistry({ LLM_KEY_USEPOD: 'tok_abc' })
+    expect(reg.get('usepod')).toBe('tok_abc')
+  })
+
   it('registers LLM_PROVIDER + LLM_API_KEY as the default provider key (back-compat)', () => {
     const r = buildProviderKeyRegistry({ LLM_PROVIDER: 'virtuals', LLM_API_KEY: 'acp-default' })
     expect(r.get('virtuals')).toBe('acp-default')
