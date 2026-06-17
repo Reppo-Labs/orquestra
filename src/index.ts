@@ -15,7 +15,7 @@ import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
 import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
-import { planStakeTopUp, stakeTopUpKey } from './wallet/stakeTopUp.js'
+import { planStakeTopUp, stakeTopUpKey, markStakeTargetAttempted } from './wallet/stakeTopUp.js'
 import { defaultReppoCli } from './reppo/cli.js'
 import { readMintReppoFee, readClaimedReppo } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
@@ -97,6 +97,10 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
         })
         console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
       }
+      // Seed the shared latch so cycle-1 doesn't re-attempt the SAME target with a slightly
+      // different `current` reading (which would change the lock diff → IDEMPOTENCY_ARGS_MISMATCH
+      // in reppo-cli → the top-up never lands until restart). Mark on attempt, success OR failure.
+      markStakeTargetAttempted(config.stake.lockReppo)
     }
   }
 

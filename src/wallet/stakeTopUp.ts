@@ -16,6 +16,24 @@ export function planStakeTopUp(
   }
 }
 
+// Per-process latch: the target last attempted for a stake top-up. Shared module state so
+// setupNode (startup) and the per-cycle path agree — setupNode SEEDS it after its attempt so
+// cycle-1 doesn't re-attempt the same target with a slightly different `current` reading (which
+// would change the lock diff → reppo-cli IDEMPOTENCY_ARGS_MISMATCH → the top-up never lands).
+// A successful lock drives veREPPO to the target so planStakeTopUp returns null next cycle anyway;
+// a FAILED attempt is held off until the target changes.
+let lastAttemptedTarget: number | null = null
+
+/** True once a top-up to this exact target has been attempted in this process. */
+export function wasStakeTargetAttempted(target: number): boolean {
+  return lastAttemptedTarget === target
+}
+
+/** Mark a top-up to this target as attempted (success OR failure). */
+export function markStakeTargetAttempted(target: number): void {
+  lastAttemptedTarget = target
+}
+
 /** Stable idempotency key for a top-up to a given target — a crash-retry before the
  *  lock tx lands reuses it (no double-lock); a later further bump uses a new key. */
 export function stakeTopUpKey(stake: { lockReppo: number; lockDurationDays: number }): string {

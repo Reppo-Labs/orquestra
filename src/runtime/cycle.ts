@@ -12,19 +12,16 @@ import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { redactSecrets } from '../util/redact.js'
 import { selectVotes } from '../voter/select.js'
 import { selectMints } from '../minter/select.js'
-import { planStakeTopUp, stakeTopUpKey } from '../wallet/stakeTopUp.js'
-
-// Per-process latch: the target last attempted. Prevents re-locking every cycle (the
-// cycle runs ~every 0.3h). Success drives veREPPO to the target so planStakeTopUp
-// returns null next cycle anyway; a FAILED attempt is held off until the target changes.
-let lastAttemptedStakeTarget: number | null = null
+import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 
 /** Top up the wallet's veREPPO toward config.stake.lockReppo at the START of a cycle, on the
  *  HOT-RELOADED config — no restart needed. Locks the difference (an additional lockup) when
- *  the target exceeds current veREPPO, at most once per target (the per-process latch + the
- *  target-based idempotency key both guard against re-lock spam). Wallet-global: the breadcrumb
- *  carries no datanetId (empty). Fail-closed: a top-up failure is logged + recorded but NEVER
- *  aborts the cycle — the node keeps voting/minting on its existing veREPPO. */
+ *  the target exceeds current veREPPO, at most once per target (the SHARED per-process latch +
+ *  the target-based idempotency key both guard against re-lock spam; the latch is shared with
+ *  setupNode, which seeds it after its own startup attempt so cycle-1 doesn't re-attempt the same
+ *  target). Wallet-global: the breadcrumb carries no datanetId (empty). Fail-closed: a top-up
+ *  failure is logged + recorded but NEVER aborts the cycle — the node keeps voting/minting on its
+ *  existing veREPPO. */
 async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<void> {
   try {
     const current = await deps.getVeReppo()
@@ -36,8 +33,8 @@ async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: Cy
     }
     const plan = planStakeTopUp(current, config.stake)
     if (!plan) return
-    if (config.stake.lockReppo === lastAttemptedStakeTarget) return // already attempted this target
-    lastAttemptedStakeTarget = config.stake.lockReppo
+    if (wasStakeTargetAttempted(config.stake.lockReppo)) return // already attempted this target
+    markStakeTargetAttempted(config.stake.lockReppo)
     const r = await deps.executor.lock({
       amountReppo: plan.lockAmount,
       durationSeconds: plan.durationSeconds,
