@@ -2,7 +2,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import { wrapLanguageModel, type LanguageModel, type LanguageModelV1CallOptions } from 'ai'
+import { wrapLanguageModel, type LanguageModel } from 'ai'
 import { z } from 'zod'
 
 export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtuals' | 'usepod'
@@ -31,20 +31,53 @@ const USEPOD_BASE_PREFIX = 'https://api.usepod.ai/proxy'
  *  for testing (the wrapped model hides the openai client's internal `config.url`). */
 export const usepodBaseURL = (token: string): string => `${USEPOD_BASE_PREFIX}/${token}/v1`
 
-/** Drop `temperature` from a model-call's params. The AI SDK v4 core forces
- *  `temperature: 0` on every call (its own "TODO v5 remove default 0 for temperature"),
- *  and some usepod-hosted open-weight models (e.g. deepseek) reject it with
- *  "temperature is deprecated for this model". Exported for testing. */
-export const stripTemperature = (params: LanguageModelV1CallOptions): LanguageModelV1CallOptions =>
-  ({ ...params, temperature: undefined })
+/** True when a provider rejected `temperature` (deprecated/unsupported for that model).
+ *  Requires the word "temperature" PLUS a rejection word, so unrelated errors don't match. */
+export function isTemperatureUnsupportedError(e: unknown): boolean {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase()
+  return msg.includes('temperature') && /(deprecat|not supported|unsupported|does not support|isn't supported|not allowed)/.test(msg)
+}
 
-/** Wrap a model so `temperature` is stripped before the provider request. Scoped to
- *  usepod only — the REPPO-side providers (Claude/GPT/Gemini) want the deterministic
- *  temperature:0 the SDK supplies for scoring. */
-function dropTemperature(model: LanguageModel): LanguageModel {
+/** Module-level latch of modelIds known to reject `temperature` — so a model that
+ *  rejected it once is stripped PROACTIVELY on later calls (only the first call eats a
+ *  failed round-trip). */
+const rejectsTemperature = new Set<string>()
+
+/** Wrap a model so `temperature` is dropped for models that don't support it — detected
+ *  at runtime (the SDK forces temperature:0; some models reject it). Error-driven + latched:
+ *  the first rejecting call retries stripped and records the modelId; later calls strip up
+ *  front. Models that accept temperature are untouched (keep the deterministic 0). */
+export function withTemperatureFallback(model: LanguageModel): LanguageModel {
   return wrapLanguageModel({
     model,
-    middleware: { transformParams: async ({ params }) => stripTemperature(params) },
+    middleware: {
+      wrapGenerate: async ({ doGenerate, params, model: m }) => {
+        if (params.temperature != null && rejectsTemperature.has(m.modelId)) {
+          return m.doGenerate({ ...params, temperature: undefined })
+        }
+        try { return await doGenerate() }
+        catch (e) {
+          if (isTemperatureUnsupportedError(e) && params.temperature != null) {
+            rejectsTemperature.add(m.modelId)
+            return await m.doGenerate({ ...params, temperature: undefined })
+          }
+          throw e
+        }
+      },
+      wrapStream: async ({ doStream, params, model: m }) => {
+        if (params.temperature != null && rejectsTemperature.has(m.modelId)) {
+          return m.doStream({ ...params, temperature: undefined })
+        }
+        try { return await doStream() }
+        catch (e) {
+          if (isTemperatureUnsupportedError(e) && params.temperature != null) {
+            rejectsTemperature.add(m.modelId)
+            return await m.doStream({ ...params, temperature: undefined })
+          }
+          throw e
+        }
+      },
+    },
   })
 }
 
@@ -81,30 +114,38 @@ export const KNOWN_MODELS: Record<LlmProvider, string[]> = {
 }
 
 export function resolveModel(provider: LlmProvider, apiKey: string, model?: string): LanguageModel {
+  let built: LanguageModel
   switch (provider) {
     case 'anthropic':
-      return createAnthropic({ apiKey })(model ?? DEFAULT_MODEL.anthropic)
+      built = createAnthropic({ apiKey })(model ?? DEFAULT_MODEL.anthropic)
+      break
     case 'openai':
-      return createOpenAI({ apiKey })(model ?? DEFAULT_MODEL.openai)
+      built = createOpenAI({ apiKey })(model ?? DEFAULT_MODEL.openai)
+      break
     case 'google':
-      return createGoogleGenerativeAI({ apiKey })(model ?? DEFAULT_MODEL.google)
+      built = createGoogleGenerativeAI({ apiKey })(model ?? DEFAULT_MODEL.google)
+      break
     case 'surplus':
-      return createOpenAI({ apiKey, baseURL: SURPLUS_BASE_URL })(model ?? DEFAULT_MODEL.surplus)
+      built = createOpenAI({ apiKey, baseURL: SURPLUS_BASE_URL })(model ?? DEFAULT_MODEL.surplus)
+      break
     case 'virtuals':
       // OpenAI-compatible: Bearer acp- key, POSTs to /v1/chat/completions.
-      return createOpenAI({ apiKey, baseURL: VIRTUALS_BASE_URL })(model ?? DEFAULT_MODEL.virtuals)
+      built = createOpenAI({ apiKey, baseURL: VIRTUALS_BASE_URL })(model ?? DEFAULT_MODEL.virtuals)
+      break
     case 'usepod':
       // OpenAI-compatible, but the auth token is in the URL PATH (api_key unused).
       // The configured key IS the usepod token; interpolate it into the base URL.
-      // dropTemperature: usepod's open-weight models (e.g. deepseek) reject the
-      // temperature:0 the AI SDK forces on every call.
-      return dropTemperature(createOpenAI({
+      built = createOpenAI({
         apiKey: 'unused',
         baseURL: usepodBaseURL(apiKey),
-      })(model ?? DEFAULT_MODEL.usepod))
+      })(model ?? DEFAULT_MODEL.usepod)
+      break
     default: {
       const _exhaustive: never = provider
       throw new Error(`unknown LLM provider: ${String(_exhaustive)}`)
     }
   }
+  // Strip `temperature` for ANY model that rejects it (error-driven + latched). Models
+  // that accept it (Claude/GPT/Gemini) keep the deterministic temperature:0 the SDK supplies.
+  return withTemperatureFallback(built)
 }
