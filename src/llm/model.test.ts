@@ -24,7 +24,7 @@ describe('KNOWN_MODELS', () => {
 
 describe('resolveModel', () => {
   it('resolves a model for every supported provider (no network, just construction)', () => {
-    for (const p of ['anthropic', 'openai', 'google', 'surplus', 'virtuals'] as LlmProvider[]) {
+    for (const p of ['anthropic', 'openai', 'google', 'surplus', 'virtuals', 'usepod'] as LlmProvider[]) {
       expect(resolveModel(p, 'test-key')).toBeTruthy()
     }
   })
@@ -37,6 +37,22 @@ describe('resolveModel', () => {
   it('resolves virtuals (OpenAI-compatible gateway) with the acp- key + model override', () => {
     expect(resolveModel('virtuals', 'acp-test')).toBeTruthy()
     expect(resolveModel('virtuals', 'acp-test', 'claude-opus-4-8')).toBeTruthy()
+  })
+
+  it('resolves usepod (OpenAI-compatible, token-in-URL) with a model override', () => {
+    expect(resolveModel('usepod', 'tok_test')).toBeTruthy()
+    expect(resolveModel('usepod', 'tok_test', 'deepseek-v3.2')).toBeTruthy()
+  })
+
+  it('builds the usepod base URL from the token (token in the path, not a header)', () => {
+    const m = resolveModel('usepod', 'TOKHERE', 'deepseek-v3.2') as unknown as {
+      config?: { url?: (opts: { path: string; modelId: string }) => string }
+    }
+    // The installed @ai-sdk/openai does NOT expose a plain `config.baseURL`; the
+    // configured base URL is captured in the `config.url({ path, modelId })` closure
+    // (it returns `<baseURL><path>`). Assert the token rides in that URL path.
+    const url = m.config?.url?.({ path: '/chat/completions', modelId: 'deepseek-v3.2' })
+    expect(url).toBe('https://api.usepod.ai/proxy/TOKHERE/v1/chat/completions')
   })
 
   it('throws on an unknown provider', () => {

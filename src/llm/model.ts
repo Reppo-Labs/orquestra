@@ -72,6 +72,13 @@ export function resolveModel(provider: LlmProvider, apiKey: string, model?: stri
     case 'virtuals':
       // OpenAI-compatible: Bearer acp- key, POSTs to /v1/chat/completions.
       return createOpenAI({ apiKey, baseURL: VIRTUALS_BASE_URL })(model ?? DEFAULT_MODEL.virtuals)
+    case 'usepod':
+      // OpenAI-compatible, but the auth token is in the URL PATH (api_key unused).
+      // The configured key IS the usepod token; interpolate it into the base URL.
+      return createOpenAI({
+        apiKey: 'unused',
+        baseURL: `${USEPOD_BASE_PREFIX}/${apiKey}/v1`,
+      })(model ?? DEFAULT_MODEL.usepod)
     default: {
       const _exhaustive: never = provider
       throw new Error(`unknown LLM provider: ${String(_exhaustive)}`)
