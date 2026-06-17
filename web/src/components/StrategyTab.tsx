@@ -174,9 +174,14 @@ function NetCard({ id, d, name, edit, providers }: {
 function DefaultModelPicker({ candidate, edit, providers }: {
   candidate: Candidate; edit: Strategy['edit']; providers: ModelProvider[]
 }) {
+  // A blank slug is NOT a valid persisted default: StrategyConfigSchema requires
+  // defaultModel.model to be min(1), so writing { provider, model: '' } would 400 the
+  // ENTIRE config save (losing other edits). Treat an empty/whitespace slug as UNSET —
+  // delete the field, exactly like the empty "node default (env)" provider option does.
+  // The operator must type a free-text slug for a provider default to take effect.
   const setModel = (provider: string, model: string) =>
     edit((c) => {
-      if (!provider) delete c.defaultModel
+      if (!provider || model.trim() === '') delete c.defaultModel
       else c.defaultModel = { provider, model }
     })
   // Provider (re)selection auto-fills a sensible default slug — the only place models[0]
