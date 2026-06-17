@@ -15,9 +15,9 @@ import { computeStats, type LearnStats } from './stats.js'
 import { readOutcomes, insertLesson, clearLessons, insertProposal } from './store.js'
 
 /** Below this many matured outcomes, abstain entirely (cold start → no overfit lessons). */
-export const MIN_SAMPLE = 10
-/** Config proposals are higher-stakes than prompt nudges — require more evidence. */
-export const MIN_SAMPLE_PROPOSAL = 20
+export const MIN_SAMPLE = 5
+/** Config proposals are higher-stakes than prompt nudges — require more evidence (2× lessons). */
+export const MIN_SAMPLE_PROPOSAL = 10
 
 const STRICTNESS = ['conservative', 'balanced', 'aggressive'] as const
 
