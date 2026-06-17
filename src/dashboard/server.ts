@@ -185,7 +185,8 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
 
       if (url === '/api/onboarding/chat') {
-        const turn = opts.onboardingTurn ?? (opts.chatModel ? defaultOnboardingTurn(opts.chatModel) : null)
+        const chatModel = opts.resolveChatModel?.() ?? null
+        const turn = opts.onboardingTurn ?? (chatModel ? defaultOnboardingTurn(chatModel) : null)
         if (!turn) { json(res, 503, { error: 'onboarding chat unavailable — node started without an LLM model' }); return }
         const b = body as { message?: string; reset?: boolean }
         if (b?.reset) {
@@ -222,7 +223,8 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       }
 
       if (url === '/api/strategy/chat') {
-        if (!opts.chatModel) { json(res, 503, { error: 'strategy chat unavailable — node started without an LLM model' }); return }
+        const chatModel = opts.resolveChatModel?.() ?? null
+        if (!chatModel) { json(res, 503, { error: 'strategy chat unavailable — no LLM model (set a node default with a configured provider key)' }); return }
         const messages = (body as { messages?: ChatMessage[] })?.messages
         if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
         // Tolerant read (mirrors safeConfig / the write path): a missing or invalid
@@ -236,7 +238,7 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
             : 'strategy config is invalid — fix or re-onboard before using the assistant'
           json(res, 409, { error: msg }); return
         }
-        const result = await runStrategyChat({ messages, currentConfig: current, model: opts.chatModel })
+        const result = await runStrategyChat({ messages, currentConfig: current, model: chatModel })
         json(res, 200, result)
         return
       }
@@ -275,7 +277,7 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     if (url === '/api/onboarding/status') {
       json(res, 200, {
         needed: needsOnboarding(dataDir),
-        chatAvailable: Boolean(opts.onboardingTurn ?? opts.chatModel),
+        chatAvailable: Boolean(opts.onboardingTurn ?? opts.resolveChatModel?.()),
       })
       return
     }
@@ -346,7 +348,10 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
  *  `docker run -p 7070:7070 <image>` (no `127.0.0.1:` prefix) WOULD expose the panel.
  *  Operators who must expose it deliberately set DASHBOARD_HOST and should add auth first. */
 export interface DashboardOpts {
-  chatModel?: LanguageModel
+  /** Resolve the current node-default chat model PER REQUEST (so a dashboard
+   *  defaultModel change takes effect with no restart). Returns null when the
+   *  effective default has no API key — handlers 503. */
+  resolveChatModel?: () => LanguageModel | null
   /** Providers whose API key is present in env (the key registry's keys). The
    *  /api/models endpoint lists these — names only, NEVER keys. */
   availableProviders?: LlmProvider[]

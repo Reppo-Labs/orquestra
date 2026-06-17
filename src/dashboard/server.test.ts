@@ -129,6 +129,24 @@ describe('POST /api/strategy/chat', () => {
     expect(r.status).toBe(503)
     expect(r.body).toMatch(/chat unavailable/i)
   })
+
+  it('strategy chat uses resolveChatModel() per request (503 when it returns null)', async () => {
+    const cdir = mkdtempSync(join(tmpdir(), 'orq-chat-'))
+    writeConfig(cdir, {
+      horizonDays: 30, cadenceHours: 1, claimEmissions: true,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteRateMaxPerCycle: 30, mintReppoMax: 500, claimGasEthMax: 0.05 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } }, notes: '',
+    } as never)
+    const ch = await startDashboard(cdir, 0, { resolveChatModel: () => null })
+    try {
+      const res = await fetch(`http://127.0.0.1:${ch.port}/api/strategy/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      expect(res.status).toBe(503)
+    } finally { await ch.close(); rmSync(cdir, { recursive: true, force: true }) }
+  })
 })
 
 describe('static SPA serving (publicDir)', () => {
