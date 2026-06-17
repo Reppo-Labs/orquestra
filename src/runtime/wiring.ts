@@ -12,6 +12,7 @@ import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
 import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
 import { resolveScoringModel } from '../llm/resolveScoringModel.js'
 import { effectiveDefault } from '../llm/effectiveDefault.js'
+import { resolveModel } from '../llm/model.js'
 import { detectContentType, isVideoType } from '../llm/contentType.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
@@ -97,7 +98,10 @@ const defaultIo: WiringIo = {
 export interface CycleWiring {
   dataDir: string
   config: StrategyConfig
-  /** model the screen scorer + deliberation panel run on. */
+  /** Startup env-default model. NO LONGER used by the mint screen scorer / deliberation panel /
+   *  reflection — those now resolve the LIVE node default (config.defaultModel, hot-reloaded) via
+   *  effectiveDefaultModel(). Kept because index.ts still threads it to the adapters, which stay
+   *  on the env default for now (out of scope). */
   model: LanguageModel
   /** provider → apiKey, built once at startup from env (src/llm/registry.ts). The
    *  per-datanet scorer resolves a model from this; an absent key for a datanet's
@@ -114,8 +118,10 @@ export interface CycleWiring {
   executor: WalletExecutor
   dedup: DedupState
   adapters: DatanetAdapter[]
-  /** Model the self-learning reflection runs on (same model as `model` in production).
-   *  Omitted in tests → reflection is skipped entirely. */
+  /** On/off gate for self-learning reflection. When set, reflection runs on the LIVE node
+   *  default (config.defaultModel, hot-reloaded) — NOT on this value; the field is now just a
+   *  presence flag (in production: the startup model). Omitted in tests / when learning is wired
+   *  off → reflection is skipped entirely. */
   learnModel?: LanguageModel
   /** Base RPC + our wallet address. When both are set, emissions to claim are detected
    *  ON-CHAIN (the platform `emissions-due` API under-reports); else fall back to the CLI. */
@@ -126,6 +132,22 @@ export interface CycleWiring {
    *  non-REPPO access fee is skipped (recorded) rather than fired on an older CLI. */
   supportsNonReppoGrants?: boolean
   io?: Partial<WiringIo>
+}
+
+/** The LIVE node-default model: dashboard-selected `config.defaultModel` when its provider is
+ *  keyed, else the env default (`w.defaultProvider`/`w.defaultModel`). Read from w.config each
+ *  call so a dashboard default change takes effect on the next cycle (hot-reload), mirroring the
+ *  vote scorer + chat. null when even the effective default has no key — callers that can't
+ *  proceed without a model (mint scorer, reflection) skip/throw, matching their existing
+ *  no-model behavior. Keys are env-only (registry); never read from config. */
+function effectiveDefaultModel(w: CycleWiring): LanguageModel | null {
+  const eff = effectiveDefault({
+    configDefault: w.config.defaultModel,
+    registry: w.providerKeyRegistry,
+    envProvider: w.defaultProvider,
+    envModel: w.defaultModel,
+  })
+  return eff.key ? resolveModel(eff.provider, eff.key, eff.model) : null
 }
 
 /** Build the CycleDeps that runCycle consumes. Everything stateful (dedup, ledger)
@@ -197,14 +219,27 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // Mint path is unchanged by per-datanet voting overrides (spec: override scopes to the
   // voting scorer only). Score the DATASET (not just the summary line) on the node default
   // model — otherwise every candidate scores low and nothing mints (src/minter/score.ts).
-  const mintScreenScorer = createLlmScorer(w.model, { brief: liveBrief })
-  const candidateBase: CandidateScorer = {
+  // The model is the LIVE effective default (config.defaultModel, hot-reloaded), resolved at
+  // scoreCandidate-call time — NOT captured at startup. A missing key (eff.key === '') THROWS,
+  // which selectMints catches per-candidate and records as a skip (parity with a scoring
+  // failure); it never aborts the datanet's mint batch. The screen scorer + panel are rebuilt
+  // per call against the live model — cheap (no SDK round-trip until scorePod/runPanel runs),
+  // and necessary because both capture `model` at construction.
+  const candidateScorer: CandidateScorer = {
     scoreCandidate: (cand, rub) => {
-      const { name, description } = candidateScoreInput(cand)
-      return mintScreenScorer.scorePod({ podId: cand.canonicalKey, validityEpoch: '', name, description }, rub)
+      const model = effectiveDefaultModel(w)
+      if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
+      const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
+      const candidateBase: CandidateScorer = {
+        scoreCandidate: (c, r) => {
+          const { name, description } = candidateScoreInput(c)
+          return mintScreenScorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
+        },
+      }
+      const panel = createPanelCandidateScorer(candidateBase, { model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
+      return panel.scoreCandidate(cand, rub)
     },
   }
-  const candidateScorer = createPanelCandidateScorer(candidateBase, { model: w.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
   // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
   // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
   // remaining budget in this closure and reset it once per cycle via resetVideoBudget
@@ -392,9 +427,14 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
 
       // Reflect once per epoch boundary: one LLM call per learn-datanet, gated again by
       // a cold-start sample floor inside runReflection. Best-effort + a hard timeout so
-      // a slow reflection can never stall the next cycle. Skipped when no learnModel.
-      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch && w.learnModel) {
-        const model = w.learnModel
+      // a slow reflection can never stall the next cycle. `w.learnModel` is the on/off gate
+      // (omitted in tests / when learning is wired off); the model reflection actually runs on
+      // is the LIVE node default (config.defaultModel, hot-reloaded) resolved here — not the
+      // startup model. If the live default has no key, skip this epoch's reflection (same as
+      // having no learnModel) rather than reflect on a stale/unkeyed model.
+      const learnModel = w.learnModel ? effectiveDefaultModel(w) : null
+      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch && learnModel) {
+        const model = learnModel
         for (const id of learnDatanets) {
           if (!getLearnEnabled(w.dataDir, id)) continue        // operator veto: no LLM spend
           if (reflecting.has(id)) continue                     // prior run still in flight — don't race the supersede
