@@ -63,8 +63,8 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     // stake are NOT secrets (caps already surface via the snapshot).
     const parsed = StrategyConfigSchema.safeParse(c)
     if (parsed.success) {
-      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation } = parsed.data
-      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation }
+      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel } = parsed.data
+      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel }
     }
     // tolerant fallback for a file the schema rejects (node likely won't run on it either).
     // deliberation falls back to the schema default so the editor reflects real behavior.
@@ -72,6 +72,7 @@ function safeConfig(dataDir: string): Record<string, unknown> {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
       budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, votePanel: true },
+      defaultModel: c.defaultModel,
     }
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config
