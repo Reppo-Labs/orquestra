@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, type LlmProvider } from './model.js'
 
-const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals']
+const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals', 'usepod']
 
 describe('LlmProviderEnum', () => {
   it('matches the LlmProvider union exactly', () => {
