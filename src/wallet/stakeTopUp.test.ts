@@ -17,6 +17,13 @@ describe('planStakeTopUp', () => {
   it('returns null when staking is not configured (target <= 0)', () => {
     expect(planStakeTopUp(0, { lockReppo: 0, lockDurationDays: 30 })).toBeNull()
   })
+  it('returns null when within MIN_TOPUP of target (dust gap — would reject as scientific notation)', () => {
+    expect(planStakeTopUp(1999.9999999, { lockReppo: 2000, lockDurationDays: 30 })).toBeNull()
+  })
+  it('rounds the lock amount to 6 decimals (no float noise / scientific notation)', () => {
+    expect(planStakeTopUp(1031.4726688, { lockReppo: 2000, lockDurationDays: 30 }))
+      .toEqual({ lockAmount: 968.527331, durationSeconds: 30 * 86400 })
+  })
 })
 
 describe('stake-target latch', () => {

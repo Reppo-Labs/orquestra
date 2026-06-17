@@ -1,17 +1,26 @@
+/** Below this REPPO gap to target, a top-up is treated as already-done. veREPPO is
+ *  fractional, so `target - current` can be sub-wei dust whose `String()` renders in
+ *  scientific notation (e.g. `2.27e-13`) — the CLI's `parseUnits` rejects that
+ *  (INVALID_AMOUNT) — and a dust lock is meaningless anyway. */
+const MIN_TOPUP = 0.01
+
 /** Plan a veREPPO top-up: when the configured target `stake.lockReppo` exceeds the
- *  wallet's current veREPPO, lock the difference as an additional lockup (aggregate
- *  veREPPO = sum of lockups). Returns null when staking is off (target <= 0) or the
- *  wallet is already at/above target (incl. a down-bump — locks can't be reduced).
- *  Amount-only: a new lockup gets `lockDurationDays`; existing lockups keep their
- *  expiry (extending them is impossible — VeReppo is not ERC721-enumerable). */
+ *  wallet's current veREPPO by at least MIN_TOPUP, lock the difference as an additional
+ *  lockup (aggregate veREPPO = sum of lockups). Returns null when staking is off
+ *  (target <= 0) or the wallet is already at/within MIN_TOPUP of target (incl. a
+ *  down-bump — locks can't be reduced). Amount-only: a new lockup gets `lockDurationDays`;
+ *  existing lockups keep their expiry (extending them is impossible — VeReppo is not
+ *  ERC721-enumerable). The lock amount is rounded to 6 decimals so it never serializes in
+ *  scientific notation (stable idempotency fingerprint, exact enough for REPPO). */
 export function planStakeTopUp(
   currentVeReppo: number,
   stake: { lockReppo: number; lockDurationDays: number },
 ): { lockAmount: number; durationSeconds: number } | null {
   if (stake.lockReppo <= 0) return null
-  if (currentVeReppo >= stake.lockReppo) return null
+  // Subsumes the current >= target check: a non-positive gap is always < MIN_TOPUP.
+  if (stake.lockReppo - currentVeReppo < MIN_TOPUP) return null
   return {
-    lockAmount: stake.lockReppo - currentVeReppo,
+    lockAmount: Math.round((stake.lockReppo - currentVeReppo) * 1e6) / 1e6,
     durationSeconds: stake.lockDurationDays * 86400,
   }
 }
