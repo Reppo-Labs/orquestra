@@ -3,6 +3,7 @@ import { loadAll, onboardingStatus, type ActivityRow, type DashData, type Onboar
 import { useStrategy } from './lib/useStrategy'
 import { Nav, type TabId } from './components/Nav'
 import { PnlCards } from './components/PnlCards'
+import { EmissionsSummary } from './components/EmissionsSummary'
 import { BudgetBurn } from './components/BudgetBurn'
 import { Emissions } from './components/Emissions'
 import { StrategyTab } from './components/StrategyTab'
@@ -72,6 +73,8 @@ export function App() {
                 ? `${earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'} · ${earn.mintedPods} pod(s) · ${fmt(earn.claimableReppo)} claimable + ${fmt(earn.claimedReppo)} claimed · ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
                 : 'earn-test pending first cycle'}
             </div>
+            <SecHead title="Emissions" />
+            <EmissionsSummary pnl={data?.pnl ?? null} />
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
