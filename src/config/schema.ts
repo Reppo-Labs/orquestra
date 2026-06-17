@@ -63,6 +63,10 @@ export const StrategyConfigSchema = z
       })
       .default({ enabled: true, votePanel: true }),
     datanets: z.record(z.string(), DatanetPolicy),
+    // Node default LLM model — the dashboard-selectable fallback used wherever there is
+    // no per-datanet `model` override (scoring) and by the Assistant/onboarding chat.
+    // Absent ⇒ the env LLM_PROVIDER default. `provider` must be a known LlmProvider.
+    defaultModel: z.object({ provider: LlmProviderEnum, model: z.string().min(1) }).optional(),
     notes: z.string().default(''),
   })
   .transform((cfg) => ({

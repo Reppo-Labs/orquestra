@@ -168,6 +168,58 @@ function NetCard({ id, d, name, edit, providers }: {
   )
 }
 
+/** Node-level default model picker — mirrors the per-datanet picker (NetCard), but writes
+ *  the top-level `candidate.defaultModel`. Used wherever a datanet has no override AND by the
+ *  assistant chat. Empty provider ("node default (env)") deletes the field → the env default. */
+function DefaultModelPicker({ candidate, edit, providers }: {
+  candidate: Candidate; edit: Strategy['edit']; providers: ModelProvider[]
+}) {
+  // A blank slug is NOT a valid persisted default: StrategyConfigSchema requires
+  // defaultModel.model to be min(1), so writing { provider, model: '' } would 400 the
+  // ENTIRE config save (losing other edits). Treat an empty/whitespace slug as UNSET —
+  // delete the field, exactly like the empty "node default (env)" provider option does.
+  // The operator must type a free-text slug for a provider default to take effect.
+  const setModel = (provider: string, model: string) =>
+    edit((c) => {
+      if (!provider || model.trim() === '') delete c.defaultModel
+      else c.defaultModel = { provider, model }
+    })
+  // Provider (re)selection auto-fills a sensible default slug — the only place models[0]
+  // is substituted; slug keystrokes go through setModel untouched.
+  const selectProvider = (provider: string) =>
+    setModel(provider, provider ? (providers.find((p) => p.provider === provider)?.models[0] ?? '') : '')
+  const curProvider = candidate.defaultModel?.provider ?? ''
+  const curModels = providers.find((p) => p.provider === curProvider)?.models ?? []
+
+  return (
+    <div className="net-row">
+      <label className="field">
+        <span>node default model <Tip label="what the node default model does">The LLM the node uses wherever a datanet has no per-datanet override, and for the assistant chat. Blank = the node's env default (LLM_PROVIDER). Only providers whose API key is set on the node appear here (keys are never entered in the dashboard). Changing it applies with no restart.</Tip></span>
+        <select value={curProvider} onChange={(e) => selectProvider(e.target.value)}>
+          <option value="">node default (env)</option>
+          {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
+          {/* A persisted default whose provider has no key on the node (key removed from env)
+              is NOT in `providers`. Surface it as a selected option so the select shows the real
+              saved value instead of silently snapping to the env default. */}
+          {curProvider && !providers.some((p) => p.provider === curProvider) && (
+            <option value={curProvider}>{curProvider} (no key configured)</option>
+          )}
+        </select>
+      </label>
+      {curProvider && (
+        <label className="field">
+          <span>model slug <Tip label="what model slug does">The provider's model id (slugs drift, so free text is allowed). Suggestions come from the node; type any valid slug for {curProvider}.</Tip></span>
+          <input type="text" list="default-models" value={candidate.defaultModel?.model ?? ''} placeholder={curModels[0] ?? 'model id'}
+            onChange={(e) => setModel(curProvider, e.target.value)} />
+          <datalist id="default-models">
+            {curModels.map((m) => <option key={m} value={m} />)}
+          </datalist>
+        </label>
+      )}
+    </div>
+  )
+}
+
 export function StrategyTab({ strategy, netNames, onReconfigure }: {
   strategy: Strategy; netNames: Record<string, string>; onReconfigure: () => void
 }) {
@@ -189,6 +241,11 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
 
   return (
     <div>
+      <div className="sec-head"><h2>Node default model</h2><div className="rule" /></div>
+      <div className="settings">
+        <DefaultModelPicker candidate={candidate} edit={edit} providers={providers} />
+      </div>
+
       <div className="sec-head">
         <h2>Datanets</h2><div className="rule" />
         <button className="btn ghost sm" onClick={onReconfigure}>↻ reconfigure with assistant</button>

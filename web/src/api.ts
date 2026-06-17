@@ -108,6 +108,9 @@ export interface StrategyConfig {
   budget?: Record<string, number | undefined>
   stake?: Record<string, number | undefined>
   deliberation?: { enabled?: boolean; votePanel?: boolean }
+  /** Node default LLM model (provider+model). Absent ⇒ the env LLM_PROVIDER default.
+   *  Used wherever a datanet has no per-datanet override and by the assistant chat. */
+  defaultModel?: { provider: string; model: string }
 }
 
 export interface ChatMsg { role: 'user' | 'assistant'; content: string }

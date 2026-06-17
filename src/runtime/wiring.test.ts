@@ -8,6 +8,8 @@ import { StrategyConfigSchema } from '../config/schema.js'
 import { appendActivity } from '../dashboard/activityLog.js'
 import type { VoterPod } from '../voter/types.js'
 import type { LlmProvider } from '../llm/model.js'
+import type { DatanetRubric } from '../rubric/types.js'
+import type { CandidatePod } from '../adapter/types.js'
 
 // Mocks for the post-cycle reporting/learning path (the reporting=false tests below
 // never reach these). Shared spies via vi.hoisted so the factories can reference them.
@@ -15,6 +17,11 @@ const h = vi.hoisted(() => ({
   collectOutcomes: vi.fn(() => 0),
   runReflection: vi.fn(async () => {}),
   queryDatanetPodVotes: vi.fn(async () => [] as unknown[]),
+  // Spy on model resolution so the mint-default test can assert WHICH provider/key/slug the
+  // node default resolved to. Returns a sentinel LanguageModel — scoring is stubbed out below.
+  resolveModel: vi.fn((provider: string, _key: string, model?: string) => ({ provider, model } as unknown)),
+  // Stub the scorer's LLM call so the mint-default test never hits the network; returns a fixed score.
+  generateObjectWithRetry: vi.fn(async () => ({ score: 5, reason: 'r' })),
   snap: { ts: 't', cycleId: 'c', balance: {}, votingPower: {}, emissionsDue: { totalReppo: 0, pods: [] }, budget: {}, epoch: { epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 } },
 }))
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
@@ -25,6 +32,18 @@ vi.mock('../dashboard/snapshot.js', () => ({
   writeSnapshot: vi.fn(),
   readSnapshot: vi.fn(() => h.snap),
 }))
+// Preserve the rest of llm/model.js (DEFAULT_MODEL, LlmProviderEnum, KNOWN_MODELS used by the
+// schema + by resolveScoringModel) and only spy resolveModel. resolveScoringModel imports
+// resolveModel from this module, so the spy also covers the vote path (harmless — those tests
+// don't assert resolveModel output).
+vi.mock('../llm/model.js', async (orig) => {
+  const actual = await orig<typeof import('../llm/model.js')>()
+  return { ...actual, resolveModel: h.resolveModel }
+})
+vi.mock('../llm/generate.js', async (orig) => {
+  const actual = await orig<typeof import('../llm/generate.js')>()
+  return { ...actual, generateObjectWithRetry: h.generateObjectWithRetry }
+})
 
 const config = StrategyConfigSchema.parse({
   horizonDays: 7, cadenceHours: 1,
@@ -402,5 +421,64 @@ describe('buildCycleDeps voteScorerFor', () => {
     const deps = buildCycleDeps(wiring({ config: cfg }))
     const a = deps.voteScorerFor('9'), c = deps.voteScorerFor('11')
     expect((a as { scorer: unknown }).scorer).not.toBe((c as { scorer: unknown }).scorer)
+  })
+
+  it('the default scorer follows config.defaultModel when set (hot, over the env default)', () => {
+    // datanet 9 has NO per-datanet model. The env default provider (virtuals) has NO key,
+    // but config.defaultModel (usepod) DOES — so the default scorer must resolve via usepod.
+    // Before the change it resolves against the env default (virtuals) → skip; after → scorer.
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } },
+      defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
+      notes: '',
+    })
+    const w = wiring({
+      config: cfg,
+      providerKeyRegistry: new Map<LlmProvider, string>([['usepod', 'tok']]), // env default (virtuals) unkeyed
+      defaultProvider: 'virtuals',
+      defaultModel: 'claude-opus-4-8',
+    })
+    const r = buildCycleDeps(w).voteScorerFor('9')
+    expect('scorer' in r).toBe(true) // resolves via the config default (usepod, keyed)
+  })
+})
+
+describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () => {
+  it('mint candidate scoring resolves the node default via config.defaultModel, not the env default', async () => {
+    // The env default provider (virtuals) has NO key — were the mint scorer captured on the
+    // env default (w.model) it would resolve against virtuals. config.defaultModel (usepod) IS
+    // keyed, so the candidate scorer must resolve LIVE via the config default. We assert by
+    // spying resolveModel: it must be called with ('usepod', 'tok', 'deepseek-v3.2').
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: { '9': { vote: false, mint: true, strictness: 'balanced' } },
+      defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
+      // deliberation enabled=false → the candidate scorer passes through to the screen scorer
+      // (createLlmScorer), whose text path calls generateObjectWithRetry on the resolved model.
+      deliberation: { enabled: false, votePanel: false },
+      notes: '',
+    })
+    const w = wiring({
+      config: cfg,
+      providerKeyRegistry: new Map<LlmProvider, string>([['usepod', 'tok']]), // env default (virtuals) unkeyed
+      defaultProvider: 'virtuals',
+      defaultModel: 'claude-opus-4-8',
+    })
+    h.resolveModel.mockClear()
+    h.generateObjectWithRetry.mockClear()
+    const deps = buildCycleDeps(w)
+    const rubric = { datanetId: '9', subnetUuid: 'u', canVote: false, canMint: true, voteRubric: '', mintSpec: 'spec', subnetDescription: '' } as unknown as DatanetRubric
+    const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
+    await deps.candidateScorer.scoreCandidate(candidate, rubric)
+    // resolveModel was driven by the LIVE effective default (config.defaultModel = usepod),
+    // NOT the env default (virtuals). Before the change it captured w.model (virtuals).
+    expect(h.resolveModel).toHaveBeenCalledWith('usepod', 'tok', 'deepseek-v3.2')
+    expect(h.resolveModel).not.toHaveBeenCalledWith('virtuals', expect.anything(), expect.anything())
+    expect(h.generateObjectWithRetry).toHaveBeenCalled() // a model WAS resolved + scored
   })
 })
