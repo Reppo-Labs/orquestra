@@ -12,6 +12,49 @@ import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { redactSecrets } from '../util/redact.js'
 import { selectVotes } from '../voter/select.js'
 import { selectMints } from '../minter/select.js'
+import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
+
+/** Top up the wallet's veREPPO toward config.stake.lockReppo at the START of a cycle, on the
+ *  HOT-RELOADED config — no restart needed. Locks the difference (an additional lockup) when
+ *  the target exceeds current veREPPO, at most once per target (the SHARED per-process latch +
+ *  the target-based idempotency key both guard against re-lock spam; the latch is shared with
+ *  setupNode, which seeds it after its own startup attempt so cycle-1 doesn't re-attempt the same
+ *  target). Wallet-global: the breadcrumb carries no datanetId (empty). Fail-closed: a top-up
+ *  failure is logged + recorded but NEVER aborts the cycle — the node keeps voting/minting on its
+ *  existing veREPPO. */
+async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<void> {
+  try {
+    const current = await deps.getVeReppo()
+    if (current === null) {
+      // A failed balance read is NOT zero — treating it as 0 would lock the FULL target on
+      // top of whatever the wallet already holds (over-lock). Skip; retry next cycle.
+      console.error('orquestra: veREPPO read failed — skipping stake top-up this cycle')
+      return
+    }
+    const plan = planStakeTopUp(current, config.stake)
+    if (!plan) return
+    if (wasStakeTargetAttempted(config.stake.lockReppo)) return // already attempted this target
+    markStakeTargetAttempted(config.stake.lockReppo)
+    const r = await deps.executor.lock({
+      amountReppo: plan.lockAmount,
+      durationSeconds: plan.durationSeconds,
+      idempotencyKey: stakeTopUpKey(config.stake),
+    })
+    deps.recordActivity({
+      ts: new Date().toISOString(), cycleId, kind: 'stake', datanetId: '',
+      reason: `topped up veREPPO ${current} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`,
+      status: r.status === 'executed' ? 'executed' : 'skipped',
+      ...(r.txHash ? { txHash: r.txHash } : {}),
+    })
+  } catch (e) {
+    // Never abort the cycle on a stake top-up failure; the node runs on existing veREPPO.
+    console.error(`orquestra: veREPPO top-up failed — ${e instanceof Error ? e.message : String(e)}`)
+    deps.recordActivity({
+      ts: new Date().toISOString(), cycleId, kind: 'stake', datanetId: '',
+      reason: `veREPPO top-up failed — ${e instanceof Error ? e.message : String(e)}`, status: 'skipped',
+    })
+  }
+}
 
 export interface CycleDeps {
   dataDir: string
@@ -30,6 +73,9 @@ export interface CycleDeps {
   voteScorerFor(datanetId: string): { scorer: PodScorer } | { skip: string }
   candidateScorer: CandidateScorer
   seenKeysFor(datanetId: string): Promise<Set<string>>
+  /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
+   *  top-up rather than coercing to 0 (which would over-lock the full target). */
+  getVeReppo(): Promise<number | null>
   executor: WalletExecutor
   ledger: BudgetLedger
   recordVote(datanetId: string, podId: string): void
@@ -86,6 +132,9 @@ export interface CycleReport {
 /** One swarm cycle: for each configured datanet, vote (if enabled + capable) and
  *  mint (if enabled + adapter + capable). The executor enforces the budget. */
 export async function runCycle(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<CycleReport> {
+  // Live veREPPO top-up FIRST (on the hot-reloaded config), before any datanet work. Never
+  // aborts the cycle — fail-closed inside maybeTopUpStake.
+  await maybeTopUpStake(config, cycleId, deps)
   deps.ledger.startCycle(cycleId)
   // Arm the per-cycle video-pod budget once (global across datanets, not per-datanet).
   deps.resetVideoBudget?.()

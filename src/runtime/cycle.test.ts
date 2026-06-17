@@ -7,6 +7,8 @@ import { runCycle, type CycleDeps } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
+import type { LockArgs } from '../reppo/cli.js'
+import { markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 
 const rubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
@@ -45,6 +47,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     voteScorerFor: () => ({ scorer: { scorePod: async () => ({ score: 9, reason: 'good' }) } }),
     candidateScorer: { scoreCandidate: async () => ({ score: 9, reason: 'good' }) },
     seenKeysFor: async () => new Set<string>(),
+    getVeReppo: async () => 0,
     executor: {
       executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvote' })),
       executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
@@ -634,6 +637,60 @@ describe('runCycle claim phase', () => {
     })
     const report = await runCycle(config, 'c3', d)
     expect(report.claims.filter((c) => c.status === 'executed')).toHaveLength(1) // pod 2 still claimed
+  })
+})
+
+describe('runCycle stake top-up', () => {
+  // The once-per-target guard (the shared latch in stakeTopUp.ts) is module-level per-process,
+  // so it persists across tests in this file. Use DISTINCT targets per test so cross-test state
+  // doesn't interfere (2000, 1700, 1500, 1300, 2222).
+  const stakeExecutor = (lock: CycleDeps['executor']['lock']): CycleDeps['executor'] => ({
+    executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+    executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+    lock,
+  }) as unknown as CycleDeps['executor']
+  const cfgStake = (lockReppo: number, lockDurationDays = 30) =>
+    StrategyConfigSchema.parse({ ...config, stake: { lockReppo, lockDurationDays } })
+
+  it('locks the difference when veREPPO is below the config target, once per target', async () => {
+    const lock = vi.fn(async (_args: LockArgs) => ({ ok: true as const, status: 'executed' as const, txHash: '0xlock' }))
+    const d = deps({ getVeReppo: async () => 1031, executor: stakeExecutor(lock) })
+    const cfg = cfgStake(2000)
+    await runCycle(cfg, 'c1', d)
+    await runCycle(cfg, 'c2', d) // same target → no second lock (guard)
+    expect(lock).toHaveBeenCalledTimes(1)
+    expect(lock.mock.calls[0][0]).toMatchObject({ amountReppo: 969, durationSeconds: 30 * 86400 })
+  })
+
+  it('does not lock when veREPPO is at/above target', async () => {
+    const lock = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xlock' }))
+    const d = deps({ getVeReppo: async () => 1700, executor: stakeExecutor(lock) })
+    await runCycle(cfgStake(1700), 'c-ata', d)
+    expect(lock).not.toHaveBeenCalled()
+  })
+
+  it('a lock failure does not abort the cycle', async () => {
+    const lock = vi.fn(async () => { throw new Error('INSUFFICIENT_REPPO_BALANCE') })
+    const d = deps({ getVeReppo: async () => 0, executor: stakeExecutor(lock) })
+    const r = await runCycle(cfgStake(1500), 'c-fail', d)
+    expect(r).toBeDefined() // cycle completed despite the lock throwing
+  })
+
+  it('SKIPS the top-up on a failed balance read (never locks the full target)', async () => {
+    const lock = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xlock' }))
+    // null = read failure. Must NOT be treated as 0 (which would lock the full target).
+    const d = deps({ getVeReppo: async () => null, executor: stakeExecutor(lock) })
+    await runCycle(cfgStake(1300), 'c-readfail', d)
+    expect(lock).not.toHaveBeenCalled()
+  })
+
+  it('does not re-attempt a target the shared latch already marked (setupNode seed)', async () => {
+    const lock = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xlock' }))
+    // Simulate setupNode having already attempted this target at startup.
+    markStakeTargetAttempted(2222)
+    const d = deps({ getVeReppo: async () => 100, executor: stakeExecutor(lock) })
+    await runCycle(cfgStake(2222), 'c-seeded', d)
+    expect(lock).not.toHaveBeenCalled()
   })
 })
 
