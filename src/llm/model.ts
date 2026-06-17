@@ -2,7 +2,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import type { LanguageModel } from 'ai'
+import { wrapLanguageModel, type LanguageModel, type LanguageModelV1CallOptions } from 'ai'
 import { z } from 'zod'
 
 export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtuals' | 'usepod'
@@ -26,6 +26,27 @@ const VIRTUALS_BASE_URL = 'https://compute.virtuals.io/v1'
  *  Model ids are canonical/host-advertised (e.g. `deepseek-v3.2`); list at
  *  GET <prefix>/<token>/v1/models. */
 const USEPOD_BASE_PREFIX = 'https://api.usepod.ai/proxy'
+
+/** usepod base URL with the auth token in the PATH: `<prefix>/<token>/v1`. Exported
+ *  for testing (the wrapped model hides the openai client's internal `config.url`). */
+export const usepodBaseURL = (token: string): string => `${USEPOD_BASE_PREFIX}/${token}/v1`
+
+/** Drop `temperature` from a model-call's params. The AI SDK v4 core forces
+ *  `temperature: 0` on every call (its own "TODO v5 remove default 0 for temperature"),
+ *  and some usepod-hosted open-weight models (e.g. deepseek) reject it with
+ *  "temperature is deprecated for this model". Exported for testing. */
+export const stripTemperature = (params: LanguageModelV1CallOptions): LanguageModelV1CallOptions =>
+  ({ ...params, temperature: undefined })
+
+/** Wrap a model so `temperature` is stripped before the provider request. Scoped to
+ *  usepod only — the REPPO-side providers (Claude/GPT/Gemini) want the deterministic
+ *  temperature:0 the SDK supplies for scoring. */
+function dropTemperature(model: LanguageModel): LanguageModel {
+  return wrapLanguageModel({
+    model,
+    middleware: { transformParams: async ({ params }) => stripTemperature(params) },
+  })
+}
 
 /** Resolve a model from any supported provider + the user's API key.
  *  "Optimize for inference" = the node runs its OWN inference on the user's
@@ -75,10 +96,12 @@ export function resolveModel(provider: LlmProvider, apiKey: string, model?: stri
     case 'usepod':
       // OpenAI-compatible, but the auth token is in the URL PATH (api_key unused).
       // The configured key IS the usepod token; interpolate it into the base URL.
-      return createOpenAI({
+      // dropTemperature: usepod's open-weight models (e.g. deepseek) reject the
+      // temperature:0 the AI SDK forces on every call.
+      return dropTemperature(createOpenAI({
         apiKey: 'unused',
-        baseURL: `${USEPOD_BASE_PREFIX}/${apiKey}/v1`,
-      })(model ?? DEFAULT_MODEL.usepod)
+        baseURL: usepodBaseURL(apiKey),
+      })(model ?? DEFAULT_MODEL.usepod))
     default: {
       const _exhaustive: never = provider
       throw new Error(`unknown LLM provider: ${String(_exhaustive)}`)
