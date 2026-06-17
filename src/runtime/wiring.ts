@@ -11,6 +11,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
 import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
 import { resolveScoringModel } from '../llm/resolveScoringModel.js'
+import { effectiveDefault } from '../llm/effectiveDefault.js'
 import { detectContentType, isVideoType } from '../llm/contentType.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
@@ -161,14 +162,23 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   const scorerCache = new Map<string, PodScorer>()
   const voteScorerFor = (datanetId: string): { scorer: PodScorer } | { skip: string } => {
     const policyModel = (w.config.datanets[datanetId] as { model?: { provider: LlmProvider; model: string } } | undefined)?.model
+    // The node default is the dashboard-selected config.defaultModel when its provider is
+    // keyed, else the env default (w.defaultProvider/w.defaultModel). Read live from w.config
+    // (hot-reloaded each cycle), so a dashboard default change takes effect on the next cycle.
+    const eff = effectiveDefault({
+      configDefault: w.config.defaultModel,
+      registry: w.providerKeyRegistry,
+      envProvider: w.defaultProvider,
+      envModel: w.defaultModel,
+    })
     const resolved = resolveScoringModel({
       policyModel, isVideo: false,
-      registry: w.providerKeyRegistry, defaultProvider: w.defaultProvider, defaultModel: w.defaultModel,
+      registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model,
     })
     if ('skip' in resolved) return { skip: resolved.skip }
     // Key by the effective provider:model (isVideo always false in Phase A): identical
     // resolutions yield an identical scorer, so one build serves every such datanet.
-    const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${w.defaultProvider}:${w.defaultModel}`
+    const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${eff.provider}:${eff.model}`
     let scorer = scorerCache.get(cacheKey)
     if (!scorer) {
       // modelCtx lets the screen scorer RE-RESOLVE to a Gemini model for a video pod (a
@@ -176,7 +186,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // cacheKey, so binding it into the cached scorer is correct (datanets sharing a key
       // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
       const modelCtx: ScorerModelCtx = {
-        registry: w.providerKeyRegistry, defaultProvider: w.defaultProvider, defaultModel: w.defaultModel, policyModel,
+        registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model, policyModel,
       }
       const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
       scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })

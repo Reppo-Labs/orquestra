@@ -403,4 +403,26 @@ describe('buildCycleDeps voteScorerFor', () => {
     const a = deps.voteScorerFor('9'), c = deps.voteScorerFor('11')
     expect((a as { scorer: unknown }).scorer).not.toBe((c as { scorer: unknown }).scorer)
   })
+
+  it('the default scorer follows config.defaultModel when set (hot, over the env default)', () => {
+    // datanet 9 has NO per-datanet model. The env default provider (virtuals) has NO key,
+    // but config.defaultModel (usepod) DOES — so the default scorer must resolve via usepod.
+    // Before the change it resolves against the env default (virtuals) → skip; after → scorer.
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } },
+      defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
+      notes: '',
+    })
+    const w = wiring({
+      config: cfg,
+      providerKeyRegistry: new Map<LlmProvider, string>([['usepod', 'tok']]), // env default (virtuals) unkeyed
+      defaultProvider: 'virtuals',
+      defaultModel: 'claude-opus-4-8',
+    })
+    const r = buildCycleDeps(w).voteScorerFor('9')
+    expect('scorer' in r).toBe(true) // resolves via the config default (usepod, keyed)
+  })
 })
