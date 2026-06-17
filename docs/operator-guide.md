@@ -77,11 +77,19 @@ docker compose up -d
 
 This pulls the published image, runs it detached with a persistent data volume
 and `restart: unless-stopped`, and binds the dashboard to `127.0.0.1:7070`.
-`docker ps` shows `healthy` once it's up. (Pin a version in `docker-compose.yml`,
-e.g. `:0.1.0`, for production.)
+`docker ps` shows `healthy` once it's up.
 
-Prefer to build from source? `docker build -t orquestra .`, then point
-`docker-compose.yml`'s `image:` at `orquestra`.
+Build from source (the supported path): always tag the image **`orquestra:latest`** —
+do not use per-feature or per-version image tags. Rollback is by git, not by image
+tag (`git checkout <commit> && docker build -t orquestra:latest .`):
+
+```sh
+docker build -t orquestra:latest .
+```
+
+Point `docker-compose.yml`'s `image:` at `orquestra:latest` (or run directly with
+`docker run ... orquestra:latest`). To upgrade: rebuild `orquestra:latest` from the
+new commit and recreate the container.
 
 ### 3c. Reach the dashboard
 

@@ -72,13 +72,17 @@ Virtuals).
 The published image is built from this repo's `Dockerfile`. To build and run it
 yourself instead of pulling:
 
+Always tag the image **`orquestra:latest`** — do not use per-feature or per-version
+image tags. Rollback is by git, not by image tag (`git checkout <commit> && docker
+build -t orquestra:latest .`).
+
 ```sh
-docker build -t orquestra .
-# then point docker-compose.yml's `image:` at `orquestra`, or docker run it directly
+docker build -t orquestra:latest .
+# then point docker-compose.yml's `image:` at `orquestra:latest`, or docker run it directly
 ```
 
 Headless/CI with no dashboard? Run the terminal onboarding fallback:
-`docker run -it --rm --env-file .env -v "$PWD/orquestra-data:/data" orquestra configure`.
+`docker run -it --rm --env-file .env -v "$PWD/orquestra-data:/data" orquestra:latest configure`.
 It produces a strategy like
 [docs/examples/strategy.config.example.json](docs/examples/strategy.config.example.json).
 
