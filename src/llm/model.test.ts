@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, type LlmProvider } from './model.js'
+import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, stripTemperature, usepodBaseURL, type LlmProvider } from './model.js'
 
 const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals', 'usepod']
 
@@ -44,18 +44,24 @@ describe('resolveModel', () => {
     expect(resolveModel('usepod', 'tok_test', 'deepseek-v3.2')).toBeTruthy()
   })
 
-  it('builds the usepod base URL from the token (token in the path, not a header)', () => {
-    const m = resolveModel('usepod', 'TOKHERE', 'deepseek-v3.2') as unknown as {
-      config?: { url?: (opts: { path: string; modelId: string }) => string }
-    }
-    // The installed @ai-sdk/openai does NOT expose a plain `config.baseURL`; the
-    // configured base URL is captured in the `config.url({ path, modelId })` closure
-    // (it returns `<baseURL><path>`). Assert the token rides in that URL path.
-    const url = m.config?.url?.({ path: '/chat/completions', modelId: 'deepseek-v3.2' })
-    expect(url).toBe('https://api.usepod.ai/proxy/TOKHERE/v1/chat/completions')
+  it('builds the usepod base URL with the token in the path (not a header)', () => {
+    // The usepod model is wrapped (dropTemperature) so the openai client's internal
+    // `config.url` isn't reachable; assert the token-in-path contract via the helper.
+    expect(usepodBaseURL('TOKHERE')).toBe('https://api.usepod.ai/proxy/TOKHERE/v1')
+    expect(resolveModel('usepod', 'TOKHERE', 'deepseek-v3.2')).toBeTruthy()
   })
 
   it('throws on an unknown provider', () => {
     expect(() => resolveModel('bogus' as LlmProvider, 'k')).toThrow(/unknown LLM provider/)
+  })
+})
+
+describe('stripTemperature', () => {
+  it('drops temperature (the SDK forces temperature:0; usepod open-weight models reject it)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const params = { temperature: 0, maxTokens: 100, prompt: 'x' } as any
+    const out = stripTemperature(params)
+    expect(out.temperature).toBeUndefined()
+    expect(out.maxTokens).toBe(100) // other params preserved
   })
 })
