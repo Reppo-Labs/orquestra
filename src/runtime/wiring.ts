@@ -306,9 +306,10 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     candidateScorer,
     seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
     // Live veREPPO for the per-cycle stake top-up — same balance query setupNode/snapshot use.
-    // Tolerant: a failed read → 0, so planStakeTopUp sees "below target" and the top-up retries
-    // next cycle rather than crashing the cycle (the lock itself is fail-closed in maybeTopUpStake).
-    getVeReppo: async () => (await queryBalanceJson().catch(() => null))?.veReppo ?? 0,
+    // null on a failed read (NOT 0): maybeTopUpStake skips this cycle's top-up rather than
+    // treating a read miss as zero veREPPO, which would lock the FULL target on top of whatever
+    // the wallet already holds (over-lock). The top-up retries next cycle.
+    getVeReppo: async () => (await queryBalanceJson().catch(() => null))?.veReppo ?? null,
     executor: w.executor,
     ledger: w.ledger,
     recordVote: (id, podId) => w.dedup.recordVote(id, podId),

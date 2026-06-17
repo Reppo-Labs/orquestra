@@ -674,6 +674,14 @@ describe('runCycle stake top-up', () => {
     const r = await runCycle(cfgStake(1500), 'c-fail', d)
     expect(r).toBeDefined() // cycle completed despite the lock throwing
   })
+
+  it('SKIPS the top-up on a failed balance read (never locks the full target)', async () => {
+    const lock = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xlock' }))
+    // null = read failure. Must NOT be treated as 0 (which would lock the full target).
+    const d = deps({ getVeReppo: async () => null, executor: stakeExecutor(lock) })
+    await runCycle(cfgStake(1300), 'c-readfail', d)
+    expect(lock).not.toHaveBeenCalled()
+  })
 })
 
 describe('runCycle per-datanet vote scorer', () => {

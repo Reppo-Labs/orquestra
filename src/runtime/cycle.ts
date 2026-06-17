@@ -28,6 +28,12 @@ let lastAttemptedStakeTarget: number | null = null
 async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<void> {
   try {
     const current = await deps.getVeReppo()
+    if (current === null) {
+      // A failed balance read is NOT zero — treating it as 0 would lock the FULL target on
+      // top of whatever the wallet already holds (over-lock). Skip; retry next cycle.
+      console.error('orquestra: veREPPO read failed — skipping stake top-up this cycle')
+      return
+    }
     const plan = planStakeTopUp(current, config.stake)
     if (!plan) return
     if (config.stake.lockReppo === lastAttemptedStakeTarget) return // already attempted this target
@@ -70,8 +76,9 @@ export interface CycleDeps {
   voteScorerFor(datanetId: string): { scorer: PodScorer } | { skip: string }
   candidateScorer: CandidateScorer
   seenKeysFor(datanetId: string): Promise<Set<string>>
-  /** Live veREPPO balance (for stake top-up). */
-  getVeReppo(): Promise<number>
+  /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
+   *  top-up rather than coercing to 0 (which would over-lock the full target). */
+  getVeReppo(): Promise<number | null>
   executor: WalletExecutor
   ledger: BudgetLedger
   recordVote(datanetId: string, podId: string): void

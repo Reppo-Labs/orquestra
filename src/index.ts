@@ -79,18 +79,24 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
     // the difference as an additional lockup. Skip when already at/above target. A lock
     // error is non-fatal — the node still runs/votes on existing veREPPO.
     const existing = await queryBalanceJson().catch(() => null)
-    const current = existing?.veReppo ?? 0
-    const plan = planStakeTopUp(current, config.stake)
-    if (!plan) {
-      console.error(`orquestra: veREPPO ${current} ≥ target ${config.stake.lockReppo} — no lock needed.`)
+    if (existing === null) {
+      // A failed balance read is NOT zero — locking against current=0 would lock the FULL
+      // target on top of whatever the wallet already holds (over-lock). Skip the lock here;
+      // the per-cycle top-up retries once the balance query recovers.
+      console.error('orquestra: could not read veREPPO balance — skipping stake setup')
     } else {
-      console.error(`orquestra: topping up veREPPO ${current} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`)
-      const r = await executor.lock({
-        amountReppo: plan.lockAmount,
-        durationSeconds: plan.durationSeconds,
-        idempotencyKey: stakeTopUpKey(config.stake),
-      })
-      console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
+      const plan = planStakeTopUp(existing.veReppo, config.stake)
+      if (!plan) {
+        console.error(`orquestra: veREPPO ${existing.veReppo} ≥ target ${config.stake.lockReppo} — no lock needed.`)
+      } else {
+        console.error(`orquestra: topping up veREPPO ${existing.veReppo} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`)
+        const r = await executor.lock({
+          amountReppo: plan.lockAmount,
+          durationSeconds: plan.durationSeconds,
+          idempotencyKey: stakeTopUpKey(config.stake),
+        })
+        console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
+      }
     }
   }
 
