@@ -1,7 +1,9 @@
 // src/llm/generate.ts — shared structured-generation helper.
-// generateObject in tool mode with a single retry on a non-conforming response
-// ("No object generated: response did not match schema" is a transient the model
-// usually fixes on the second try). Used by the voter scorer and the panel.
+// generateObject across two attempts: 'tool' mode (function-calling) then 'json' mode.
+// 'tool' is reliable on models that support it; 'json' is the fallback for open-weight
+// models (via OpenAI-compatible proxies) that don't emit a forced tool call, and also
+// serves as the schema-mismatch retry. Used by the voter scorer, panel, learn, and the
+// dashboard strategy chat.
 //
 // Input is EITHER a text `prompt` (text pods, the original path — byte-for-byte
 // unchanged on the wire) OR `messages` (multimodal: a video pod's rubric text +
@@ -18,10 +20,16 @@ export async function generateObjectWithRetry<T>(
   input: GenerateInput,
 ): Promise<T> {
   const payload = 'prompt' in input ? { prompt: input.prompt } : { messages: input.messages }
+  // Attempt 1: 'tool' (function-calling) — reliable structured output on models that
+  // support it (Claude/GPT/Gemini, virtuals-claude). Attempt 2: 'json' — the fallback for
+  // open-weight models (deepseek/qwen/llama via OpenAI-compatible proxies like usepod) that
+  // don't emit the forced tool call ("No object generated: the tool was not called"). The
+  // mode switch also doubles as the schema-mismatch retry for tool-capable models.
+  const MODES = ['tool', 'json'] as const
   let lastErr: unknown
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (const mode of MODES) {
     try {
-      const { object } = await generateObject({ model, schema, mode: 'tool', system, ...payload })
+      const { object } = await generateObject({ model, schema, mode, system, ...payload })
       return object
     } catch (e) {
       lastErr = e

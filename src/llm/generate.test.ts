@@ -31,6 +31,17 @@ describe('generateObjectWithRetry', () => {
     expect(call.prompt).toBeUndefined()
   })
 
+  it('falls back to json mode when tool mode fails (open-weight model: tool not called)', async () => {
+    h.generateObject
+      .mockRejectedValueOnce(new Error('No object generated: the tool was not called'))
+      .mockResolvedValueOnce({ object: { n: 7 } })
+    const out = await generateObjectWithRetry(model, schema, 'sys', { prompt: 'x' })
+    expect(out).toEqual({ n: 7 })
+    expect(h.generateObject).toHaveBeenCalledTimes(2)
+    expect(h.generateObject.mock.calls[0][0].mode).toBe('tool') // attempt 1: function-calling
+    expect(h.generateObject.mock.calls[1][0].mode).toBe('json') // attempt 2: json fallback
+  })
+
   it('retries once then throws on a persistently non-conforming response', async () => {
     // vitest 2.1 records a throw/reject from a vi.mock'd module fn in mock.results and
     // reports it as a test error at teardown EVEN when the code under test caught it
