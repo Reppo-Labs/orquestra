@@ -15,6 +15,11 @@ services:
     # exposure boundary (ADR 0002).
     environment:
       - DASHBOARD_HOST=0.0.0.0
+      # Pin the data dir to the mounted volume below. The image already defaults this, but
+      # setting it here guarantees the strategy config + ledgers + activity DB always land on
+      # the named volume — never the container's writable layer (which `compose down && up`
+      # discards, the cause of "onboarding lost after down/up but kept on restart").
+      - ORQUESTRA_DATA_DIR=/data
     # Localhost-only by design: the dashboard is unauthenticated (ADR 0002).
     # Do NOT change the mapping below to 0.0.0.0 without adding a dashboard secret first.
     ports:
