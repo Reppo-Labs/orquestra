@@ -24,7 +24,11 @@ const SEL = {
 }
 /** First-run block lookback when no scan checkpoint exists (~Base 2s blocks → ~3 months). */
 const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
-const LOG_CHUNK = 40_000n
+// eth_getLogs block-range cap. Most public RPCs (incl. mainnet.base.org) reject ranges
+// wider than ~10k blocks with HTTP 400; the old 40k chunk failed the whole emissions scan
+// on the default RPC. 9_000 (→ 9_001-block spans) stays under the common cap. Discovery is
+// incremental + cached, so the extra requests only hit the one-time first-run backfill.
+const LOG_CHUNK = 9_000n
 
 const word = (v: bigint): string => v.toString(16).padStart(64, '0')
 const hexBlock = (b: bigint): string => '0x' + b.toString(16)

@@ -60,6 +60,29 @@ describe('discoverOwnedPods', () => {
     const ids = await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 100n)
     expect(ids.sort()).toEqual([1n, 2n])
   })
+
+  it('keeps every eth_getLogs span under the ~10k public-RPC cap (no HTTP 400)', async () => {
+    // Operator hit HTTP 400 because the old 40k chunk exceeded mainnet.base.org's getLogs
+    // limit. Capture each requested [fromBlock,toBlock] span over a wide range and assert none
+    // exceeds 10_000 blocks — and that the whole range is covered with no gaps/overlaps.
+    const spans: Array<[bigint, bigint]> = []
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') {
+        spans.push([BigInt(params[0].fromBlock), BigInt(params[0].toBlock)])
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: [] }))
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+
+    await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 100_000n)
+
+    expect(spans.length).toBeGreaterThan(1) // 100k blocks must be chunked
+    for (const [from, to] of spans) expect(to - from + 1n).toBeLessThanOrEqual(10_000n)
+    expect(spans[0][0]).toBe(0n)                                  // starts at fromBlock
+    expect(spans[spans.length - 1][1]).toBe(100_000n)            // ends at toBlock
+    for (let i = 1; i < spans.length; i++) expect(spans[i][0]).toBe(spans[i - 1][1] + 1n) // contiguous
+  })
 })
 
 describe('queryClaimableOnchain', () => {
