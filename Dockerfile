@@ -13,12 +13,14 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.8.6
-# @reppo/cli@0.8.6: grant-access --token primary (pay a datanet's access fee in
-# its primary token, e.g. $EXY) + query datanet surfaces primaryToken {address,
-# symbol, decimals} + approve --token <addr>. Gates the node's non-REPPO access
-# path (NONREPPO_GRANT_MIN_VERSION=0.8.5). 0.8.4 added gasEth in write results;
-# 0.8.0 added datanet rubric metadata + epoch data.
+ && npm i -g @reppo/cli@0.9.0
+# @reppo/cli@0.9.0: lock + grant-access auto-approve the ERC20 allowance (unlimited
+# approve() + wait when short) so an operator never has to send approve() by hand —
+# removes the manual-cast onboarding blocker. 0.8.6: grant-access --token primary (pay
+# a datanet's access fee in its primary token, e.g. $EXY) + query datanet surfaces
+# primaryToken {address, symbol, decimals} + approve --token <addr>. Gates the node's
+# non-REPPO access path (NONREPPO_GRANT_MIN_VERSION=0.8.5). 0.8.4 added gasEth in write
+# results; 0.8.0 added datanet rubric metadata + epoch data.
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
