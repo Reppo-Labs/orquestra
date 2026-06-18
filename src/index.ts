@@ -139,6 +139,10 @@ async function start(): Promise<void> {
   await checkReppoVersion({ getVersion: async () => reppoVersion }) // warn-only: old CLI fails every vote/mint cryptically
   const canGrantNonReppo = supportsNonReppoGrants(reppoVersion)
   mkdirSync(DATA_DIR, { recursive: true })
+  // Surface the resolved data dir so an operator can confirm it points at the mounted
+  // volume. If this prints a path that isn't on a Docker volume, `compose down && up` will
+  // silently discard the strategy config + ledgers (kept across a plain restart).
+  console.error(`orquestra: data dir ${DATA_DIR} (persist strategy/ledgers/activity here — keep this on a mounted volume)`)
 
   // Multi-provider key registry (env-only): the per-datanet vote scorer resolves a model
   // from this. Built FIRST so the node-default model's key is derived from it too — an

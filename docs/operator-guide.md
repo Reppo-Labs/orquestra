@@ -233,7 +233,12 @@ cheap; only ambiguous votes and mints pay the full cost.
 docker compose pull && docker compose up -d
 ```
 
-Your data volume (strategy, ledgers, activity log) persists across updates.
+Your data volume (strategy, ledgers, activity log) persists across updates — it lives in
+the named `orquestra-data` Docker volume, not the container. `docker compose down && up`
+keeps it; **`docker compose down -v` deletes it** (you'd have to re-onboard). To confirm the
+node is writing to the volume, check the `orquestra: data dir /data …` line on startup — it
+must read `/data`. To back it up: `docker run --rm -v orquestra-data:/data -v "$PWD:/out"
+alpine tar czf /out/orquestra-backup.tgz -C /data .`
 
 ---
 
@@ -243,11 +248,13 @@ Your data volume (strategy, ledgers, activity log) persists across updates.
 |---|---|
 | Dashboard won't load | Check the SSH tunnel is up and you're hitting `localhost:7070`. `docker ps` should show `healthy`. |
 | `PUBLIC_API_UNREACHABLE` in logs | A transient reppo.ai blip. The node retries automatically; a one-off is harmless. Persistent = check the node's internet/DNS. |
-| Datanet skips with `INTERNAL_ERROR` | The public Base RPC is rate-limiting. Set `RPC_URL` to a private endpoint. |
+| Datanet skips with `INTERNAL_ERROR` / `429` / `rate limit` | The public Base RPC is rate-limiting. The node now retries these with backoff, but a busy cycle can still exhaust the retries — set `RPC_URL` to a private endpoint (Alchemy/QuickNode) for a clean run. |
+| `eth_getLogs HTTP 400` in logs | The on-chain emissions scan hit an RPC `getLogs` range cap. Non-fatal: the claim phase skips that cycle and votes/mints continue. The node now chunks to ≤10k blocks; if it persists, set `RPC_URL` to a higher-capacity endpoint. |
 | 0 votes every cycle | Nothing new to vote on (all current pods already voted, yours, or skipped mid-range). Normal between fresh pods. |
 | Mints score low / nothing mints | The strictness gate is rejecting candidates. Don't loosen it just to force mints — that publishes low-value data that gets downvoted. |
 | `claimable: 0` despite upvotes | Emissions lag — wait for the epoch to finalize (§6). |
 | Onboarding chat 503s | The node started without `LLM_PROVIDER` / `LLM_API_KEY`. Set them in `.env` and restart. |
+| Onboarding lost after `compose down && up` (kept on plain restart) | The data dir wasn't on the named volume. Confirm the `orquestra: data dir /data …` line at startup reads `/data`, and never run `docker compose down -v` (the `-v` deletes the `orquestra-data` volume). See §9. |
 
 Logs: `docker compose logs -f`.
 

@@ -34,6 +34,15 @@ const TRANSIENT = [
   /socket hang up/i,
   /\bUND_ERR/i, // undici network errors
   /timed? ?out/i,
+  // Public Base RPC (mainnet.base.org) rate-limits a full cycle's datanet queries and
+  // answers JSON-RPC -32603 INTERNAL_ERROR (and HTTP 429 / "rate limit" / "too many
+  // requests"). These are load blips, not bad requests — retry with backoff instead of
+  // skipping the datanet. A genuinely permanent internal error just burns the retry budget.
+  /INTERNAL_ERROR/i,
+  /-32603/,
+  /rate.?limit/i,
+  /too many requests/i,
+  /\b429\b/,
 ]
 
 /** Is this reppo CLI failure a transient network/upstream blip (vs a permanent error)? */

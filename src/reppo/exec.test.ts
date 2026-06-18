@@ -52,6 +52,13 @@ describe('isTransientReppoError', () => {
     expect(isTransientReppoError('request to https://x failed, reason: ECONNRESET')).toBe(true)
     expect(isTransientReppoError('reppo command timed out')).toBe(true)
   })
+  it('matches public-RPC rate-limit / INTERNAL_ERROR blips (operator hit these on mainnet.base.org)', () => {
+    expect(isTransientReppoError('query datanet failed: INTERNAL_ERROR')).toBe(true)
+    expect(isTransientReppoError('{"error":{"code":-32603,"message":"Internal error"}}')).toBe(true)
+    expect(isTransientReppoError('HTTP 429 Too Many Requests')).toBe(true)
+    expect(isTransientReppoError('rate limit exceeded')).toBe(true)
+    expect(isTransientReppoError('rate-limited by upstream')).toBe(true)
+  })
   it('does NOT match permanent errors', () => {
     expect(isTransientReppoError('CANNOT_VOTE_FOR_OWN_POD')).toBe(false)
     expect(isTransientReppoError('invalid argument --datanet')).toBe(false)
