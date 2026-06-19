@@ -20,8 +20,18 @@ describe('resolveDriveUrl', () => {
     expect(resolveDriveUrl('https://drive.google.com/uc?id=1AbC_dEfGhI&export=download')).toBe(DL('1AbC_dEfGhI'))
   })
 
-  it('rewrites a docs.google.com /d/<ID> URL', () => {
+  it('rewrites a docs.google.com /file/d/<ID> URL (a real binary file)', () => {
     expect(resolveDriveUrl('https://docs.google.com/file/d/1AbC_dEfGhI/edit')).toBe(DL('1AbC_dEfGhI'))
+  })
+
+  it('leaves a native docs.google.com Doc (/document/d/<ID>) unchanged — not a downloadable file', () => {
+    const u = 'https://docs.google.com/document/d/1AbC_dEfGhI/edit'
+    expect(resolveDriveUrl(u)).toBe(u)
+  })
+
+  it('leaves a native docs.google.com Sheet (/spreadsheets/d/<ID>) unchanged', () => {
+    const u = 'https://docs.google.com/spreadsheets/d/1AbC_dEfGhI/edit#gid=0'
+    expect(resolveDriveUrl(u)).toBe(u)
   })
 
   it('is idempotent on an already-resolved usercontent download URL', () => {
