@@ -14,6 +14,7 @@ import { resolveScoringModel } from '../llm/resolveScoringModel.js'
 import { effectiveDefault } from '../llm/effectiveDefault.js'
 import { resolveModel } from '../llm/model.js'
 import { detectContentType, isVideoType } from '../llm/contentType.js'
+import { resolveDriveUrl } from '../llm/driveResolve.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
@@ -282,14 +283,20 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       for (const p of pods) {
         const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
         if (!eligible || !p.url) continue
+        // A Google Drive viewer/share link (drive.google.com/file/d/<ID>/view) serves an
+        // HTML shell, not bytes — detectType would see text/html and the pod would be
+        // text-fetched (model scores the page chrome, not the video). Rewrite it to a
+        // direct-download URL FIRST so the probe sees video/* and ingestVideo can fetch it.
+        // Non-Drive URLs pass through unchanged.
+        const mediaSrc = resolveDriveUrl(p.url)
         let info: { mediaType: string; contentLength: number | null } | null = null
-        try { info = await io.detectType(p.url) } catch { info = null }
+        try { info = await io.detectType(mediaSrc) } catch { info = null }
         if (info && isVideoType(info.mediaType)) {
           // A detected video MUST NOT be text-fetched (binary sliced into description = junk
           // votes), whether or not it fits the cap. Under the cap → mark for the video path;
           // over the cap → leave unmarked and skip it entirely this cycle (retried next cycle).
           if (videoBudget > 0) {
-            p.mediaUrl = p.url
+            p.mediaUrl = mediaSrc
             p.mediaType = info.mediaType
             if (info.contentLength !== null) p.contentLength = info.contentLength
             videoBudget--
