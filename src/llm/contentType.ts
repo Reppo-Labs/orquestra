@@ -14,6 +14,14 @@ export function isVideoType(mediaType: string | undefined | null): boolean {
   return !!mediaType && /^video\//i.test(mediaType.trim())
 }
 
+/** True iff `mediaType` is a generic binary type a download endpoint serves when it does
+ *  not report a precise type. Drive's file-download endpoint commonly returns
+ *  `application/octet-stream` for a video, so a Drive-resolved URL reporting this is
+ *  treated as the clip (see the pod-enrichment loop in runtime/wiring.ts). */
+export function isGenericBinaryType(mediaType: string | undefined | null): boolean {
+  return !!mediaType && /^(?:application|binary)\/octet-stream$/i.test(mediaType.trim())
+}
+
 function parseType(res: Response): string | null {
   const ct = res.headers.get('content-type')
   return ct ? ct.split(';')[0].trim().toLowerCase() : null

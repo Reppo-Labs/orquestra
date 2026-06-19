@@ -12,13 +12,19 @@ const DRIVE_HOSTS = new Set(['drive.google.com', 'docs.google.com'])
 const FILE_ID = /^[A-Za-z0-9_-]{8,}$/
 
 /** Pull the file id from the known Drive URL shapes:
- *  - /file/d/<ID>/view, /file/d/<ID>
- *  - /d/<ID> (docs-style)
- *  - ?id=<ID> (open?id=, uc?id=, download?id=)
- *  Returns null when no id is present. */
+ *  - /file/d/<ID>/view, /file/d/<ID>  (a real binary Drive file, either host)
+ *  - /d/<ID>, ?id=<ID>  (drive.google.com share/open shapes)
+ *  Returns null when no id is present.
+ *
+ *  docs.google.com fronts native Docs/Sheets/Slides at /<kind>/d/<ID> (e.g.
+ *  /document/d/<ID>/edit) — those are NOT downloadable binary files, so on that host
+ *  only /file/d/<ID> is rewritten; a bare /d/<ID> there is left alone. */
 function extractFileId(u: URL): string | null {
-  const byPath = u.pathname.match(/\/(?:file\/)?d\/([^/]+)/)
-  if (byPath && FILE_ID.test(byPath[1])) return byPath[1]
+  const filePath = u.pathname.match(/\/file\/d\/([^/]+)/)
+  if (filePath && FILE_ID.test(filePath[1])) return filePath[1]
+  if (u.hostname === 'docs.google.com') return null
+  const dPath = u.pathname.match(/\/d\/([^/]+)/)
+  if (dPath && FILE_ID.test(dPath[1])) return dPath[1]
   const byQuery = u.searchParams.get('id')
   if (byQuery && FILE_ID.test(byQuery)) return byQuery
   return null

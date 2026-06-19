@@ -1,6 +1,6 @@
 // src/llm/contentType.test.ts
 import { describe, it, expect, vi } from 'vitest'
-import { detectContentType, isVideoType } from './contentType.js'
+import { detectContentType, isVideoType, isGenericBinaryType } from './contentType.js'
 
 const res = (status: number, headers: Record<string, string>): Response =>
   new Response(null, { status, headers })
@@ -11,6 +11,18 @@ describe('isVideoType', () => {
     expect(isVideoType('VIDEO/MP4; codecs=avc1')).toBe(true)
     expect(isVideoType('application/json')).toBe(false)
     expect(isVideoType(undefined)).toBe(false)
+  })
+})
+
+describe('isGenericBinaryType', () => {
+  it('true for octet-stream variants, false otherwise', () => {
+    // detectContentType strips ;params before this runs, so inputs are bare types.
+    expect(isGenericBinaryType('application/octet-stream')).toBe(true)
+    expect(isGenericBinaryType('APPLICATION/OCTET-STREAM')).toBe(true)
+    expect(isGenericBinaryType('binary/octet-stream')).toBe(true)
+    expect(isGenericBinaryType('video/mp4')).toBe(false)
+    expect(isGenericBinaryType('text/html')).toBe(false)
+    expect(isGenericBinaryType(undefined)).toBe(false)
   })
 })
 
