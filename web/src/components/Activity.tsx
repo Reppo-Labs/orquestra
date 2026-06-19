@@ -31,11 +31,21 @@ export function Activity({ activity, netNames, onOpenPanel }: {
   onOpenPanel: (r: ActivityRow) => void
 }) {
   const [kind, setKind] = useState('')
-  const rows = activity.filter((r) => !kind || r.kind === kind)
+  const [net, setNet] = useState('')
+  // Datanets to offer in the filter: those that actually appear in the activity,
+  // sorted numerically. Derived from the rows so the dropdown never lists a datanet
+  // with nothing to show.
+  const netIds = [...new Set(activity.map((r) => r.datanetId).filter((id): id is string => !!id))]
+    .sort((a, b) => Number(a) - Number(b))
+  const rows = activity.filter((r) => (!kind || r.kind === kind) && (!net || r.datanetId === net))
   return (
     <div>
       <div className="sec-head">
         <h2>Activity</h2><div className="rule" />
+        <select value={net} onChange={(e) => setNet(e.target.value)}>
+          <option value="">all datanets</option>
+          {netIds.map((id) => <option key={id} value={id}>{netLabel(id, netNames)}</option>)}
+        </select>
         <select value={kind} onChange={(e) => setKind(e.target.value)}>
           <option value="">all kinds</option>
           <option value="vote">votes</option><option value="mint">mints</option>
