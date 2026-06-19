@@ -204,6 +204,73 @@ describe('buildCycleDeps', () => {
     expect(txt.mediaUrl).toBeUndefined()
   })
 
+  it('resolves a Google Drive viewer URL to a direct download before probing → routes to the video path', async () => {
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    // The Drive viewer URL serves HTML; only the resolved usercontent download URL probes as video.
+    const detectType = vi.fn(async (url: string) =>
+      url.startsWith('https://drive.usercontent.google.com/download')
+        ? { mediaType: 'video/mp4', contentLength: 1000 }
+        : null)
+    const fetchContent = vi.fn(async () => 'TEXT')
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all
+          ? [pod('vid', { url: 'https://drive.google.com/file/d/1AbC_dEfGhI/view?usp=sharing' })]
+          : [],
+        fetchContent,
+        detectType,
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    const vid = pods.find((p) => p.podId === 'vid')!
+    // detectType was probed with the RESOLVED url, and the resolved url is what ingestVideo will fetch.
+    expect(detectType).toHaveBeenCalledWith('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
+    expect(vid.mediaUrl).toBe('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
+    expect(vid.mediaType).toBe('video/mp4')
+    expect(fetchContent).not.toHaveBeenCalled() // never text-fetched
+  })
+
+  it('treats a Drive-resolved URL serving application/octet-stream as video and coerces mediaType to video/mp4', async () => {
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    // Drive's download endpoint often serves a generic binary type, not video/mp4.
+    const detectType = vi.fn(async () => ({ mediaType: 'application/octet-stream', contentLength: 1000 }))
+    const fetchContent = vi.fn(async () => 'TEXT')
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all
+          ? [pod('vid', { url: 'https://drive.google.com/file/d/1AbC_dEfGhI/view' })]
+          : [],
+        fetchContent,
+        detectType,
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    const vid = pods.find((p) => p.podId === 'vid')!
+    expect(vid.mediaUrl).toBe('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
+    expect(vid.mediaType).toBe('video/mp4') // coerced: Gemini needs a concrete video mime
+    expect(fetchContent).not.toHaveBeenCalled()
+  })
+
+  it('does NOT treat a non-Drive URL serving application/octet-stream as video (text path)', async () => {
+    const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
+    const detectType = vi.fn(async () => ({ mediaType: 'application/octet-stream', contentLength: 1000 }))
+    const fetchContent = vi.fn(async () => 'TEXT')
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all ? [pod('bin', { url: 'https://cdn.example.com/blob' })] : [],
+        fetchContent,
+        detectType,
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    const bin = pods.find((p) => p.podId === 'bin')!
+    expect(bin.mediaUrl).toBeUndefined()           // octet-stream alone is NOT video
+    expect(fetchContent).toHaveBeenCalledWith('https://cdn.example.com/blob')
+  })
+
   it('caps the number of video pods marked per cycle (videoPodsPerCycle)', async () => {
     const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
     const detectType = vi.fn(async () => ({ mediaType: 'video/mp4', contentLength: 1000 }))
