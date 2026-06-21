@@ -110,6 +110,13 @@ function NetCard({ id, d, name, edit, providers }: {
             {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
           </select>
         </label>
+        <Num label="vote share" int value={d.voteShare} onChange={(n) => upd((m) => {
+          // Only a positive integer is a valid weight (schema is .int().positive()). Blank, 0,
+          // or negative ⇒ unset, which the node reads as the default 1 (equal share). This keeps
+          // a stray "0" from 400-ing the whole config save.
+          if (n === undefined || n < 1) delete m.voteShare; else m.voteShare = n
+        })}
+          hint="Relative weight for splitting this cycle's vote slots across datanets. 3 vs 1 means this datanet gets 3× the votes of a weight-1 one. Blank = 1 (equal share). Whole numbers only; divides the per-cycle vote cap, does not raise it." />
       </div>
       <div className="net-row">
         <label className="field">

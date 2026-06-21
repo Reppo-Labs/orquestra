@@ -28,6 +28,13 @@ const DatanetPolicy = z
     // (LLM_PROVIDER/LLM_API_KEY). provider must be a known LlmProvider; model is a
     // non-empty slug (validated lazily — an unknown slug fails at request time).
     model: z.object({ provider: LlmProviderEnum, model: z.string().min(1) }).optional(),
+    // Relative weight for splitting this cycle's vote slots across vote-enabled datanets
+    // (largest-remainder apportionment of budget.voteRateMaxPerCycle). Only ratios matter
+    // (3 vs 1 == 75%/25%). Default 1 = equal share. A positive INTEGER: weights are whole
+    // numbers (the dashboard input is integer too), and .int() also rejects Infinity/NaN that
+    // would collapse the apportionment. Decides distribution within the per-cycle cap; never
+    // raises it.
+    voteShare: z.number().int().positive().default(1),
   })
   .strict()
 
@@ -71,7 +78,7 @@ export const StrategyConfigSchema = z
   })
   .transform((cfg) => ({
     ...cfg,
-    datanets: { '*': { vote: false, mint: false, strictness: 'balanced' as const, mintMode: 'pin' as const }, ...cfg.datanets } as Record<string, z.infer<typeof DatanetPolicy>>,
+    datanets: { '*': { vote: false, mint: false, strictness: 'balanced' as const, mintMode: 'pin' as const, voteShare: 1 }, ...cfg.datanets } as Record<string, z.infer<typeof DatanetPolicy>>,
   }))
 
 export type StrategyConfig = z.infer<typeof StrategyConfigSchema>

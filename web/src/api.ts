@@ -96,6 +96,9 @@ export interface DatanetEntry {
   mintMode?: 'pin' | 'url-only'
   /** Per-datanet LLM override for the voting scorer (provider+model). Absent ⇒ node default. */
   model?: { provider: string; model: string }
+  /** Relative weight for splitting this cycle's vote slots across vote-enabled datanets.
+   *  Absent ⇒ node default of 1 (equal share). */
+  voteShare?: number
 }
 
 /** The whitelisted subset of strategy.config.json that /api/config serves. */

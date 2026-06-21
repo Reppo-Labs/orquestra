@@ -66,6 +66,8 @@ export function buildStrategyChatPrompt(messages: ChatMessage[], current: Strate
     'operator reviews your proposal in a grid and saves it explicitly. When the user asks for a change, ' +
     'return the FULL updated config as proposedConfig (not a fragment), preserving everything they did ' +
     'not ask to change — especially budget caps: never raise budget or stake values unless explicitly asked. ' +
+    'Carry every per-datanet field through unchanged unless asked (vote, mint, strictness, adapter, ' +
+    'adapterParams, mintMode, model, voteShare) — omitting a field silently resets it to its default. ' +
     'Keep replies short and concrete: say exactly what you changed and why. For pure questions, reply without a proposal.'
   const transcript = messages.map((m) => `${m.role}: ${m.content}`).join('\n')
   const prompt =
