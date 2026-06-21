@@ -21,6 +21,16 @@ describe('BudgetLedger', () => {
     expect(l.canVote()).toBe(false)
   })
 
+  it('reports the votes remaining in the per-cycle rate cap', () => {
+    const l = new BudgetLedger(dir, caps)
+    l.startCycle('c1')
+    expect(l.votesRemaining()).toBe(3)
+    l.reserveVote(0.001)
+    expect(l.votesRemaining()).toBe(2)
+    l.reserveVote(0.001); l.reserveVote(0.001)
+    expect(l.votesRemaining()).toBe(0) // never negative
+  })
+
   it('resets the per-cycle vote count on a new cycle but keeps cumulative gas', () => {
     const l = new BudgetLedger(dir, caps)
     l.startCycle('c1'); l.reserveVote(0.001); l.reserveVote(0.001); l.reserveVote(0.001)

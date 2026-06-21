@@ -15,7 +15,7 @@ describe('StrategyConfigSchema', () => {
   it('accepts a valid config and applies the wildcard default', () => {
     const parsed = StrategyConfigSchema.parse(valid)
     expect(parsed.datanets['9'].strictness).toBe('conservative')
-    expect(parsed.datanets['*']).toEqual({ vote: false, mint: false, strictness: 'balanced', mintMode: 'pin' })
+    expect(parsed.datanets['*']).toEqual({ vote: false, mint: false, strictness: 'balanced', mintMode: 'pin', voteShare: 1 })
   })
 
   it('rejects an unknown strictness', () => {
@@ -101,6 +101,25 @@ describe('StrategyConfig datanet model override', () => {
   it('parses a datanet with no model override (absent ⇒ node default)', () => {
     const cfg = StrategyConfigSchema.parse(valid)
     expect((cfg.datanets['9'] as { model?: unknown }).model).toBeUndefined()
+  })
+})
+
+describe('StrategyConfig datanet voteShare', () => {
+  it('defaults voteShare to 1 when absent', () => {
+    expect(StrategyConfigSchema.parse(valid).datanets['9'].voteShare).toBe(1)
+  })
+  it('accepts an explicit positive voteShare', () => {
+    const cfg = StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: 3 } } })
+    expect(cfg.datanets['9'].voteShare).toBe(3)
+  })
+  it('rejects voteShare of 0', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: 0 } } })).toThrow()
+  })
+  it('rejects a negative voteShare', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: -2 } } })).toThrow()
+  })
+  it('rejects a non-finite voteShare (Infinity)', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: Infinity } } })).toThrow()
   })
 })
 

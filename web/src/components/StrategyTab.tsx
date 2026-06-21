@@ -110,6 +110,8 @@ function NetCard({ id, d, name, edit, providers }: {
             {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
           </select>
         </label>
+        <Num label="vote share" int value={d.voteShare} onChange={(n) => upd((m) => { if (n === undefined) delete m.voteShare; else m.voteShare = n })}
+          hint="Relative weight for splitting this cycle's vote slots across datanets. 3 vs 1 means this datanet gets 3× the votes of a weight-1 one. Blank = 1 (equal share). Divides the per-cycle vote cap; does not raise it." />
       </div>
       <div className="net-row">
         <label className="field">

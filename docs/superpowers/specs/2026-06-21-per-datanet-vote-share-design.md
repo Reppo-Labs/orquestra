@@ -72,15 +72,17 @@ Map<string, number>`.
 2. **Pass 1 — inside the existing per-datanet loop, unchanged structure.** Setup, grant
    (with its `continue`-gating), and mint stay exactly as today. The only change is the vote
    block: after `selectVotes` returns `intents`, execute at most `slots[datanetId]` of them
-   (highest-conviction first — sort intents by conviction desc before slicing). The remaining
-   intents are **stashed** as `leftover[datanetId]` (already scored — no re-scoring later).
-   Dedup-on-executed, `CANNOT_VOTE_FOR_OWN_POD`, refused-budget handling, and the per-pod
-   scoring-skip activity rows are all **unchanged**.
+   (in `selectVotes` order — NOT sorted by conviction: conviction is the raw 1–10 score, so a
+   desc sort would systematically keep strong upvotes and drop strong downvotes, an unwanted
+   bias). The remaining intents are **stashed** as `leftover[datanetId]` (already scored — no
+   re-scoring later). Casting also stops on the first `refused-budget` (monotonic). Dedup-on-
+   executed, `CANNOT_VOTE_FOR_OWN_POD`, stale-grant eviction, and the per-pod scoring-skip
+   activity rows are all **unchanged** (factored into a shared `castVote` helper).
 
 3. **Pass 2 — redistribution, after the loop.** `remaining = voteRateMaxPerCycle − executed
    so far`. Compute a second split with `allocateVoteSlots(weights restricted to datanets
    that still have stashed leftover, remaining)`, then execute that many leftover intents per
-   datanet (highest-conviction first), bounded by `ledger.canVote()`. If a datanet's leftover
+   datanet (in stash order), bounded by `ledger.canVote()`. If a datanet's leftover
    is smaller than its second-pass allotment, the surplus is re-split among the rest in the
    same way (iterate until `remaining` is spent or all stashes empty). Stop on the global cap.
 

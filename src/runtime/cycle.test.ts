@@ -52,7 +52,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
       executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvote' })),
       executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
     } as unknown as CycleDeps['executor'],
-    ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => true } as unknown as CycleDeps['ledger'],
+    ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => true, votesRemaining: () => 99 } as unknown as CycleDeps['ledger'],
     recordVote: vi.fn(),
     recordMint: vi.fn(),
     getEmissionsDue: async () => [],
@@ -105,6 +105,51 @@ describe('runCycle', () => {
     expect(d9.votes[0].txHash).toBe('0xvote')
     expect(d9.mints[0].txHash).toBe('0xmint')
     expect(report.datanets.find((r) => r.datanetId === '2')!.mints).toEqual([])
+  })
+
+  it('splits the per-cycle vote cap across datanets by voteShare (3:1)', async () => {
+    const pods = (n: number) => Array.from({ length: n }, (_, i) => ({ podId: `p${i}`, validityEpoch: '100', name: `pod${i}`, description: 'd' }))
+    let cast = 0
+    const CAP = 8
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6, stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: CAP, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'aggressive', voteShare: 3 }, '2': { vote: true, mint: false, strictness: 'aggressive', voteShare: 1 } },
+    })
+    const executeVote = vi.fn(async () => { cast++; return { ok: true, status: 'executed', txHash: '0xv' } })
+    const d = deps({
+      getPodsAndFilter: vi.fn(async () => ({ pods: pods(10), filter: { currentEpoch: '100', ownPodIds: [], votedPodIds: [] } })),
+      executor: { executeVote, executeMint: vi.fn() } as unknown as CycleDeps['executor'],
+      ledger: { startCycle: vi.fn(), canVote: () => cast < CAP, canMint: () => false, votesRemaining: () => Math.max(0, CAP - cast) } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(cfg, 'cyc-share', d)
+    const calls = (executeVote as any).mock.calls.map((c: any[]) => c[0].datanetId as string)
+    expect(calls.filter((id: string) => id === '9').length).toBe(6)
+    expect(calls.filter((id: string) => id === '2').length).toBe(2)
+    expect(cast).toBe(CAP)
+  })
+
+  it('redistributes a datanet\'s unused slots to a datanet that still has pods', async () => {
+    const pods = (n: number) => Array.from({ length: n }, (_, i) => ({ podId: `p${i}`, validityEpoch: '100', name: `pod${i}`, description: 'd' }))
+    let cast = 0
+    const CAP = 8
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6, stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: CAP, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'aggressive', voteShare: 3 }, '2': { vote: true, mint: false, strictness: 'aggressive', voteShare: 1 } },
+    })
+    const executeVote = vi.fn(async () => { cast++; return { ok: true, status: 'executed', txHash: '0xv' } })
+    const d = deps({
+      // '9' has plenty of pods; '2' has only 1 (uses 1 of its 2 slots → 1 leftover redistributes to '9').
+      getPodsAndFilter: vi.fn(async (id: string) => ({ pods: id === '2' ? pods(1) : pods(10), filter: { currentEpoch: '100', ownPodIds: [], votedPodIds: [] } })),
+      executor: { executeVote, executeMint: vi.fn() } as unknown as CycleDeps['executor'],
+      ledger: { startCycle: vi.fn(), canVote: () => cast < CAP, canMint: () => false, votesRemaining: () => Math.max(0, CAP - cast) } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(cfg, 'cyc-redist', d)
+    const calls = (executeVote as any).mock.calls.map((c: any[]) => c[0].datanetId as string)
+    expect(calls.filter((id: string) => id === '2').length).toBe(1)   // only 1 pod available
+    expect(calls.filter((id: string) => id === '9').length).toBe(7)   // 6 share + 1 redistributed
+    expect(cast).toBe(CAP)
   })
 
   it('grants subnet access once before voting/minting and caches it (no re-grant for a shared subnet)', async () => {
@@ -556,12 +601,14 @@ describe('runCycle', () => {
     expect(errored.recordMint).toHaveBeenCalledWith('9', 'k1') // executed mint IS recorded
   })
 
-  it('on a vote rate/budget refusal, stops the datanet and logs ONE deferral note (not a refused row per pod)', async () => {
+  it('defers pods beyond the per-cycle budget with ONE deferral note (not a refused row per pod)', async () => {
     const activity: any[] = []
+    let cast = 0
+    const CAP = 1 // only one vote fits this cycle
     const single = StrategyConfigSchema.parse({
       horizonDays: 30, cadenceHours: 6,
       stake: { lockReppo: 0, lockDurationDays: 30 },
-      budget: { voteRateMaxPerCycle: 99, mintReppoMax: 1000 },
+      budget: { voteRateMaxPerCycle: CAP, mintReppoMax: 1000 },
       datanets: { '9': { vote: true, mint: false, strictness: 'aggressive' } },
     })
     const d = deps({
@@ -573,16 +620,17 @@ describe('runCycle', () => {
         ],
         filter: { currentEpoch: '100', ownPodIds: [], votedPodIds: [] },
       })),
-      executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn() } as unknown as CycleDeps['executor'],
+      executor: { executeVote: vi.fn(async () => { cast++; return { ok: true, status: 'executed', txHash: '0xv' } }), executeMint: vi.fn() } as unknown as CycleDeps['executor'],
+      ledger: { startCycle: vi.fn(), canVote: () => cast < CAP, canMint: () => false, votesRemaining: () => Math.max(0, CAP - cast) } as unknown as CycleDeps['ledger'],
       recordActivity: (e) => { activity.push(e) },
     })
     await runCycle(single, 'c-defer', d)
-    expect((d.executor.executeVote as any).mock.calls.length).toBe(1) // breaks on first refusal, does not attempt remaining pods
-    expect(activity.filter((e) => e.kind === 'vote')).toEqual([])     // no per-pod refused-budget vote rows
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(1) // only the one that fits is attempted; the rest are not
+    expect(activity.filter((e) => e.kind === 'vote')).toHaveLength(1)  // exactly one vote row (the executed one), no per-pod deferred rows
     const skips = activity.filter((e) => e.kind === 'skip')
     expect(skips).toHaveLength(1)
-    expect(skips[0].reason).toMatch(/3 votes deferred to next cycle/)
-    expect(d.recordVote).not.toHaveBeenCalled()
+    expect(skips[0].reason).toMatch(/2 votes deferred to next cycle/)
+    expect(d.recordVote).toHaveBeenCalledTimes(1)
   })
 })
 
