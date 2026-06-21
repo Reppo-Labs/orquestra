@@ -1,140 +1,148 @@
-# Per-datanet vote share (weighted round-robin)
+# Per-datanet vote share (in-loop slot caps)
 
 **Date:** 2026-06-21
 **Status:** Design — pending implementation
-**Topic:** Let an operator dedicate a share of each cycle's finite voting capacity to each datanet.
+**Topic:** Let an operator dedicate a share of each cycle's finite vote capacity to each datanet.
 
 ## Problem
 
 Voting power is a finite, per-epoch pool (veREPPO-backed): every vote runs
 `reppo vote --votes <conviction>`, spending `conviction` units. The node also caps
-**votes cast per cycle** at `budget.voteRateMaxPerCycle` (global, monotonic,
-enforced by `BudgetLedger.canVote()`).
+**votes cast per cycle** at `budget.voteRateMaxPerCycle` (global, monotonic, enforced by
+`BudgetLedger.canVote()`).
 
-Today the cycle iterates datanets **sequentially** (`cycle.ts`): the first datanet
-scores and votes until the shared budget is spent, so a busy datanet (e.g. EXYLOS /
-datanet 21 with 50+ episodes) drains the cycle's vote slots before datanets 2/4/5/9/11
-get a turn. There is no way to say "dedicate 40% of my voting to datanet 21."
+Today the cycle iterates datanets **sequentially** (`cycle.ts`). The first datanet scores
+and votes until the shared per-cycle budget is spent, so a busy datanet (EXYLOS / datanet
+21, 50+ episodes) drains the cycle's vote slots before datanets 2/4/5/9/11 get a turn.
+There is no way to say "dedicate 40% of my voting to datanet 21."
 
 ## Goal
 
-An operator assigns a **relative weight** per datanet. Each cycle's vote slots (and,
-implicitly, the voting power spent) are distributed across vote-enabled datanets in
-proportion to their weights. A datanet that runs out of eligible pods mid-cycle yields
-its remaining turns to datanets that still have pods (no wasted slots).
+An operator assigns a **relative weight** per datanet. Each cycle's vote slots are
+distributed across vote-enabled datanets in proportion to their weights, so no datanet can
+starve the others. A datanet that doesn't use its full share yields the leftover to
+datanets that still have pods (redistribution).
 
-Out of scope (deliberately): explicit per-epoch power-unit accounting. Power (~3185) is
-abundant; splitting the per-cycle vote count bounds power spend implicitly. Splitting
-mint budget per datanet is also out of scope.
+Out of scope (deliberately): per-epoch power-unit accounting (power ~3185 is abundant;
+splitting the per-cycle vote count bounds power spend implicitly); per-datanet mint budget;
+per-datanet **video** slot allocation (the `videoPodsPerCycle` cap stays global — see
+Non-goals).
 
-## Chosen approach — weighted scheduler over pod scoring (Approach 3)
+## Approach — in-loop execution caps + a redistribution pass (Approach 1)
 
-The naive round-robin trap: scoring is the expensive step (LLM call; for video pods a
-Gemini Files-API upload). Scoring **all** pods across **all** datanets and then executing
-only `voteRateMaxPerCycle` of them would burn LLM/Gemini spend on hundreds of pods that
-never get a slot — violating the existing pre-scoring budget gate (`cycle.ts:278`).
+This was chosen over a cross-datanet round-robin scheduler (Approach 3) after an adversarial
+design review: Approach 3 required splitting the single per-datanet cycle loop into
+setup/vote/mint passes, which breaks the grant→mint gate, the health "idle" signal, and the
+shared `videoBudget`'s consumption model, and its WFQ scheduler split *scoring count* rather
+than *votes cast*. Approach 1 keeps the existing single loop and changes only **how many
+votes each datanet may execute**, so none of those hazards arise.
 
-Therefore the scheduler interleaves at the **scoring level**: it services one pod at a
-time, choosing the next *datanet* by weight, and only while the global vote budget
-remains. Scoring and votes are both spread across datanets by weight; no wasted slots and
-no wasted scoring.
+### Key facts this design relies on (verified against the code)
 
-### Component: `weightedSchedule` (new, pure)
+- `selectVotes` (`src/voter/select.ts`) already does eligibility filtering internally
+  (current-epoch, not-own, not-already-voted, lines 27–32) and scores **all** eligible pods,
+  returning vote intents. We do **not** rebuild a "queue" or move eligibility out — it stays.
+- The expensive scoring path (video → Gemini Files-API upload) is already bounded **per
+  cycle** by the shared `videoBudget` (default 4), decremented in `getPodsAndFilter`
+  enrichment (`wiring.ts`): a video over the cap is skipped, never scored. So total scoring
+  cost is **not** a function of vote slots, and capping execution (not scoring) introduces no
+  scoring-cost regression versus today.
+- The per-cycle vote cap lives in `BudgetLedger.canVote()` and is **left untouched** — the
+  security boundary is unchanged; weights only decide *distribution within* that cap.
 
-`src/voter/schedule.ts` — a pure weighted-fair-queuing (WFQ) chooser, unit-tested in
-isolation.
+### Component: `allocateVoteSlots` (new, pure)
 
-- Input: a set of datanet entries `{ datanetId, weight, remaining: () => boolean }`.
-- Each datanet has a **virtual time** `vt_i`, initialized to 0.
-- `next()` returns the datanet with the smallest `vt_i` among those whose `remaining()`
-  is true (i.e. still has queued pods). On selection it advances `vt_i += 1 / weight_i`.
-- A datanet whose queue drains simply stops being `remaining()` and leaves the candidate
-  set — its turns automatically flow to the others (the redistribution the operator asked
-  for). No explicit rebalancing code.
-- Returns `null` when no datanet is `remaining()`.
+`src/voter/allocate.ts` — `allocateVoteSlots(weights: Map<string, number>, total: number):
+Map<string, number>`.
 
-WFQ gives proportional fairness (a weight-3 datanet is serviced ~3× as often as a
-weight-1 one) and free redistribution. The function is deterministic and pure (ties broken
-by datanet id order), so it tests without any cycle/LLM machinery.
+- Largest-remainder (Hamilton) apportionment: `ideal_i = total · w_i / Σw`; floor each;
+  distribute the remaining `total − Σfloor` slots to the largest fractional remainders, ties
+  broken by datanet id (deterministic).
+- Σ of returned slots == `total` (when `total ≤ Σ pods` is not assumed — it just splits the
+  count). `total = 0` → all zero. Single datanet → all `total`. Empty weights → empty map.
+- Pure and deterministic → unit-tested with zero cycle/LLM machinery.
 
-### Integration into the cycle
+### Cycle integration (single loop preserved)
 
-The cycle splits into phases (today they are interleaved in one loop):
+1. **Before the loop** — compute the slot map. Weight set = config datanets with
+   `policy.vote === true`, **excluding the injected `'*'` wildcard key** (`schema.ts`
+   transform adds it; it is not a real datanet). `weight = policy.voteShare`.
+   `slots = allocateVoteSlots(weights, voteRateMaxPerCycle)`.
 
-1. **Setup pass (per datanet, sequential)** — unchanged: stake top-up, capability check,
-   subnet-access grant. Same code, same per-datanet error isolation.
-2. **Vote pass (cross-datanet, NEW scheduler)** — replaces the per-datanet vote block at
-   `cycle.ts:272–~330`.
-3. **Mint pass (per datanet, sequential)** — unchanged.
+2. **Pass 1 — inside the existing per-datanet loop, unchanged structure.** Setup, grant
+   (with its `continue`-gating), and mint stay exactly as today. The only change is the vote
+   block: after `selectVotes` returns `intents`, execute at most `slots[datanetId]` of them
+   (highest-conviction first — sort intents by conviction desc before slicing). The remaining
+   intents are **stashed** as `leftover[datanetId]` (already scored — no re-scoring later).
+   Dedup-on-executed, `CANNOT_VOTE_FOR_OWN_POD`, refused-budget handling, and the per-pod
+   scoring-skip activity rows are all **unchanged**.
 
-Vote pass detail:
+3. **Pass 2 — redistribution, after the loop.** `remaining = voteRateMaxPerCycle − executed
+   so far`. Compute a second split with `allocateVoteSlots(weights restricted to datanets
+   that still have stashed leftover, remaining)`, then execute that many leftover intents per
+   datanet (highest-conviction first), bounded by `ledger.canVote()`. If a datanet's leftover
+   is smaller than its second-pass allotment, the surplus is re-split among the rest in the
+   same way (iterate until `remaining` is spent or all stashes empty). Stop on the global cap.
 
-- For each vote-enabled datanet with a rubric (`policy.vote && rubric.canVote`), call
-  `getPodsAndFilter(datanetId)` once to build a **queue** of eligible pods, ordered
-  **newest-epoch-first**. A `getPodsAndFilter` throw isolates that datanet (recorded skip,
-  excluded from the schedule) — preserving today's behavior. A datanet whose scorer
-  fails to resolve (`voteScorerFor` returns `{skip}`) is likewise excluded with a recorded
-  skip.
-- Build `weightedSchedule` entries from the surviving datanets (`weight = policy.voteShare`,
-  `remaining = queue not empty`).
-- Loop while `deps.ledger.canVote()` (global vote budget/gas remains):
-  - `dn = schedule.next()`; if `null`, stop (all queues drained).
-  - Dequeue the next pod from `dn`'s queue. Score it (`scorePod`, which honors the global
-    `videoPodsPerCycle` cap — an over-cap video is skipped, not scored, but still consumes
-    the turn). Per-pod scoring skips record a `skip` activity row, exactly as today.
-  - If scoring yields a vote intent, `executeVote` it. Record dedup only on `executed`
-    (and the `CANNOT_VOTE_FOR_OWN_POD` permanent case), identical to current logic. A
-    `refused-budget` result means the global cap was hit between the `canVote()` check and
-    the sign — stop the loop.
-- When the loop ends with pods still queued, record a single per-datanet deferral
-  breadcrumb (those pods retry next cycle), mirroring the current single-deferral-note
-  behavior rather than one refused row per pod.
+4. **Deferral breadcrumb.** After Pass 2, any datanet with still-unexecuted leftover gets a
+   single deferral note ("N votes deferred to next cycle"), mirroring today's single-note
+   behavior. Pods retry next cycle (dedup recorded only on executed).
 
-Per-pod error isolation: a thrown scoring/execute error for one pod records an activity row
-and continues the scheduler (the datanet stays in rotation unless its queue is now empty).
-A failure never aborts the cycle.
-
-The `BudgetLedger` is **unchanged** — the global per-cycle cap stays the security backstop;
-weights only decide *order*, never raise the cap.
+`getPodsAndFilter` is still called once per datanet **inside** the loop at that datanet's
+turn — the existing pre-scoring gate (`cycle.ts:278`, skip scoring when `!canVote()`) stays,
+so no enrichment is front-loaded for datanets the budget can't reach.
 
 ## Config
 
 Add to `DatanetPolicy` (`src/config/schema.ts`):
 
 ```ts
-// Relative weight for this datanet in the per-cycle vote scheduler. Higher = more of the
-// cycle's finite vote slots/power. Normalized across vote-enabled datanets; absolute value
-// is irrelevant (3 vs 1 == 75%/25%). Default 1 = equal share.
-voteShare: z.number().positive().default(1),
+// Relative weight for splitting this cycle's vote slots across vote-enabled datanets.
+// Normalized; absolute value is irrelevant (3 vs 1 == 75%/25%). Default 1 = equal share.
+voteShare: z.number().positive().finite().default(1),
 ```
 
-Default 1 ⇒ equal split across vote-enabled datanets. This changes today's first-come
-behavior to fair-share even when no weight is set — an intentional improvement. Hot-reloaded
-each cycle like the rest of the config.
+`.finite()` rejects `Infinity`/`NaN` (which would collapse the apportionment). Default 1 ⇒
+**equal split** across vote-enabled datanets — chosen deliberately: it fixes the starvation
+in the box. **This changes today's first-come behavior** even for operators who never set a
+weight; called out here and in the dashboard tooltip. Hot-reloaded each cycle like the rest
+of config. Existing persisted configs (DB `config` row) lack the field → the Zod default
+applies on load, no migration needed.
 
 ## Dashboard
 
-Add a per-datanet **"Vote share"** numeric input in the strategy/config UI (next to the
-existing per-datanet controls), with a hover tooltip consistent with the existing tooltip
-set: *"Relative weight for splitting this cycle's vote slots across datanets. 3 vs 1 means
-this datanet gets 3× the votes of a weight-1 one. Default 1 (equal share)."* No new API
-shape — it rides the existing config read/write path.
+Per-datanet **"Vote share"** numeric input in the strategy/config UI, hover tooltip:
+*"Relative weight for splitting this cycle's vote slots across datanets. 3 vs 1 means this
+datanet gets 3× the votes of a weight-1 one. Default 1 = equal share. (Changes how the
+per-cycle vote cap is divided; does not raise it.)"* Rides the existing config read/write
+path — no new API shape.
+
+## Non-goals / known limitations (explicit)
+
+- **Video slots remain global.** `videoPodsPerCycle` (4) is consumed in datanet-iteration
+  order during enrichment, not by `voteShare`. With EXYLOS the only video datanet today this
+  is fine; a future "per-datanet video share" is a separate feature. The spec does NOT claim
+  weighted video scoring.
+- **Scoring volume is unchanged from today** (selectVotes still scores all eligible pods;
+  video bounded by `videoBudget`). Capping scoring at the slot count is a possible future
+  optimization, not in scope.
 
 ## Testing
 
-- `schedule.test.ts` (pure): proportional service counts for given weights; redistribution
-  when a queue drains early; deterministic tie-break; `null` when all drained; single
-  datanet; zero candidates.
-- Cycle wiring tests (extend `cycle.test.ts` / `wiring.test.ts`): two datanets with weights
-  3:1 and ample pods ⇒ ~3:1 executed votes capped at `voteRateMaxPerCycle`; a datanet that
-  runs dry yields turns to the other; the `videoPodsPerCycle` cap still bounds video
-  scoring within the schedule; a `getPodsAndFilter` throw isolates one datanet; the global
-  ledger cap still stops the loop.
-- `schema.test.ts`: `voteShare` defaults to 1; rejects non-positive.
+- `allocate.test.ts` (pure): exact slot sums for given weights/total; largest-remainder
+  rounding; deterministic id tie-break; `total=0`; single datanet; empty weights; one
+  datanet weight ≫ others.
+- `schema.test.ts`: `voteShare` defaults to 1; rejects 0, negatives, `Infinity`, `NaN`.
+- Cycle tests (`cycle.test.ts`): with a **stubbed scorer** (deterministic, no panel/LLM) —
+  (a) two datanets 3:1, both with ample pods ⇒ executed votes 3:1 and Σ == cap; (b) a datanet
+  using fewer than its share leaves slots that Pass 2 redistributes to a busy datanet;
+  (c) the `'*'` wildcard never receives slots; (d) grant-failure still skips BOTH vote and
+  mint (regression guard for the preserved loop); (e) global ledger cap still bounds total
+  executed; (f) deferral note emitted once when leftovers remain after Pass 2.
 
 ## Risk
 
-This rewrites the vote phase of `cycle.ts` — the node's most central, most-tested code.
-Mitigations: the scheduling logic is extracted as a pure function; the ledger (the security
-boundary) is untouched; per-pod isolation and dedup semantics are preserved verbatim; the
-mint and setup phases are unchanged.
+Low relative to Approach 3: the single per-datanet loop, `selectVotes`, `BudgetLedger`, the
+grant gate, the health-idle signal, dedup, and per-pod isolation are all unchanged. New code
+is the pure `allocateVoteSlots`, an execution-count cap + stash in the vote block, and a
+post-loop redistribution pass. The main behavior change is intentional: default equal-split.
