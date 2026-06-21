@@ -447,12 +447,17 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if (pending.length === 0) break
       const remaining = deps.ledger.votesRemaining()
       if (remaining <= 0) break
-      const split = allocateVoteSlots(new Map(pending.map(([id]) => [id, voteWeights.get(id) ?? 1])), remaining)
+      // Every pending id is vote-enabled, so it is always in voteWeights (set at the top) and
+      // voteSinks (set in the loop). A missing entry would be a real bug — skip it rather than
+      // invent a weight-1 phantom or cast into a throwaway array that vanishes from the report.
+      const split = allocateVoteSlots(new Map(pending.map(([id]) => [id, voteWeights.get(id)!])), remaining)
       let progressed = false
       for (const [id, arr] of pending) {
+        const sink = voteSinks.get(id)
+        if (!sink) continue
         let n = split.get(id) ?? 0
         while (n > 0 && arr.length > 0 && deps.ledger.canVote()) {
-          const r = await castVote(id, arr[0], voteSinks.get(id) ?? [])
+          const r = await castVote(id, arr[0], sink)
           if (r.status === 'refused-budget') break
           arr.shift(); n--; progressed = true
         }

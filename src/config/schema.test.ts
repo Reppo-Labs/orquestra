@@ -118,6 +118,9 @@ describe('StrategyConfig datanet voteShare', () => {
   it('rejects a negative voteShare', () => {
     expect(() => StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: -2 } } })).toThrow()
   })
+  it('rejects a fractional voteShare (weights are whole numbers)', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: 1.5 } } })).toThrow()
+  })
   it('rejects a non-finite voteShare (Infinity)', () => {
     expect(() => StrategyConfigSchema.parse({ ...valid, datanets: { '9': { vote: true, strictness: 'balanced', voteShare: Infinity } } })).toThrow()
   })

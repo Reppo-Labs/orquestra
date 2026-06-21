@@ -30,10 +30,11 @@ const DatanetPolicy = z
     model: z.object({ provider: LlmProviderEnum, model: z.string().min(1) }).optional(),
     // Relative weight for splitting this cycle's vote slots across vote-enabled datanets
     // (largest-remainder apportionment of budget.voteRateMaxPerCycle). Only ratios matter
-    // (3 vs 1 == 75%/25%). Default 1 = equal share. .finite() rejects Infinity/NaN, which
+    // (3 vs 1 == 75%/25%). Default 1 = equal share. A positive INTEGER: weights are whole
+    // numbers (the dashboard input is integer too), and .int() also rejects Infinity/NaN that
     // would collapse the apportionment. Decides distribution within the per-cycle cap; never
     // raises it.
-    voteShare: z.number().positive().finite().default(1),
+    voteShare: z.number().int().positive().default(1),
   })
   .strict()
 

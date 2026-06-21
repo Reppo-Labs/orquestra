@@ -31,6 +31,17 @@ describe('BudgetLedger', () => {
     expect(l.votesRemaining()).toBe(0) // never negative
   })
 
+  it('reports 0 votes remaining once the gas cap is hit, even if the rate cap has headroom', () => {
+    // rate cap 99 (ample), but gas cap is the binding constraint.
+    const l = new BudgetLedger(dir, { ...caps, voteGasEthMax: 0.0025, voteRateMaxPerCycle: 99 })
+    l.startCycle('c1'); l.reserveVote(0.001); l.reserveVote(0.001)
+    expect(l.canVote()).toBe(true)
+    expect(l.votesRemaining()).toBe(97) // rate headroom while gas still allows
+    l.reserveVote(0.001) // cumulative 0.003 > 0.0025 → gas exhausted
+    expect(l.canVote()).toBe(false)
+    expect(l.votesRemaining()).toBe(0) // must not overstate: no more votes are castable
+  })
+
   it('resets the per-cycle vote count on a new cycle but keeps cumulative gas', () => {
     const l = new BudgetLedger(dir, caps)
     l.startCycle('c1'); l.reserveVote(0.001); l.reserveVote(0.001); l.reserveVote(0.001)

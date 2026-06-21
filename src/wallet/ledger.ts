@@ -164,9 +164,12 @@ export class BudgetLedger {
       && this._state.voteGasSpentEth < this.caps.voteGasEthMax
   }
 
-  /** Votes left in the per-cycle rate cap (never negative). Read-only — used by the cycle's
-   *  vote-share redistribution pass to size how many leftover votes it may still cast. */
+  /** Votes still castable this cycle (never negative). Read-only — used by the cycle's
+   *  vote-share redistribution pass to size how many leftover votes it may still cast. Honors
+   *  BOTH caps: 0 once the gas cap is hit even if the rate cap has headroom, so it never
+   *  overstates what canVote() will actually allow. */
   votesRemaining(): number {
+    if (!this.canVote()) return 0
     return Math.max(0, this.caps.voteRateMaxPerCycle - this._state.votesCastThisCycle)
   }
 
