@@ -21,7 +21,11 @@ const SEL = {
   hasClaimed: '0x5b778a36', // hasPodOwnerClaimedEmissions(uint256 epoch, uint256 podId)
   claim: '0x6dd6f4c9',      // claimPodOwnerEmissions(uint256 podId, uint256 epoch)
   currentEpoch: '0x76671808', // currentEpoch()  (on veReppo)
+  hasVoterClaimed: '0xec1e3908', // hasUserClaimedEmissions(uint256 epoch, uint256 podId, address user)
+  claimVoter: '0x971a6c50',      // claimVoterEmissions(address voter, uint256 podId, uint256 epoch)
 }
+/** Left-pad an address to a 32-byte ABI word. */
+const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
 /** First-run block lookback when no scan checkpoint exists (~Base 2s blocks → ~3 months). */
 const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
 // eth_getLogs block-range cap. Most public RPCs (incl. mainnet.base.org) reject ranges
@@ -128,6 +132,41 @@ export async function queryClaimableOnchain(rpcUrl: string, wallet: string, cach
       if (isTrue(claimed)) continue
       try {
         await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet) // reverts ⇒ nothing due
+      } catch { continue }
+      out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
+    }
+  }
+  return out
+}
+
+/** Detect claimable VOTER (pod,epoch) on-chain. Unlike the owner path, the pod set is the
+ *  pods the wallet VOTED on (passed in — sourced from the node's executed-vote activity, since
+ *  the wallet does not own them and they're not in the Transfer-log cache). For each, scan the
+ *  recent CLOSED epochs: NOT-yet-claimed (hasUserClaimedEmissions) AND a non-reverting
+ *  claimVoterEmissions eth_call ⇒ claimable. Amount is unknown pre-claim (0); the chain pays
+ *  what's owed. Best-effort: caller tolerates a throw. */
+export async function queryVoterClaimableOnchain(
+  rpcUrl: string, wallet: string, votedPodIds: string[], deps: RpcDeps = {},
+): Promise<ClaimableEmission[]> {
+  const fetchImpl = deps.fetchImpl ?? fetch
+  const pm = deps.podManager ?? POD_MANAGER_MAINNET
+  const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const lookback = BigInt(deps.lookbackEpochs ?? 3)
+  if (votedPodIds.length === 0) return []
+
+  const cur = BigInt(await ethCall(fetchImpl, rpcUrl, ve, SEL.currentEpoch))
+  const w = addrWord(wallet)
+  const out: ClaimableEmission[] = []
+  const start = cur > lookback ? cur - lookback : 1n
+  for (const podStr of [...new Set(votedPodIds)]) {
+    const podId = BigInt(podStr)
+    for (let ep = start; ep < cur; ep++) {
+      // hasUserClaimedEmissions(epoch, podId, user)
+      const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w)
+      if (isTrue(claimed)) continue
+      try {
+        // claimVoterEmissions(voter, podId, epoch) — reverts ⇒ nothing due for this voter
+        await ethCall(fetchImpl, rpcUrl, pm, SEL.claimVoter + w + word(podId) + word(ep), wallet)
       } catch { continue }
       out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
     }

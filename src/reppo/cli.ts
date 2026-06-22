@@ -44,6 +44,9 @@ export interface ReppoCli {
   vote(args: VoteArgs): Promise<ChainResult>
   mintPod(args: MintArgs): Promise<ChainResult>
   claimEmissions(args: ClaimEmissionsArgs): Promise<ChainResult>
+  /** Claim the SIGNER's VOTER emissions for a pod it voted on in an epoch (reppo >=0.10.0).
+   *  Distinct from claimEmissions (pod-owner share) — same (pod,epoch) args. */
+  claimVoterEmissions(args: ClaimEmissionsArgs): Promise<ChainResult>
   /** One-time access grant — prerequisite for voting/minting. Keyed by the integer datanet id.
    *  `opts.token` defaults to 'reppo' (existing path); 'primary' pays the fee in the
    *  datanet's primary token via `grant-access --token primary` (reppo >=0.8.5). */
@@ -147,6 +150,7 @@ export const defaultReppoCli: ReppoCli = {
     ...(a.imageUrl ? ['--image-url', a.imageUrl] : []),
   ]),
   claimEmissions: (a) => run(['claim-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
+  claimVoterEmissions: (a) => run(['claim-voter-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
   // 'reppo' (default) is byte-identical to the pre-0.8.5 call — no --token flag added.
   // 'primary' pays the datanet's primary-token access fee (reppo >=0.8.5; gated upstream
   // on the CLI version so an older CLI never sees the unknown flag).

@@ -25,7 +25,7 @@ import { getDatanetRubric } from '../rubric/load.js'
 import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
 import { queryEmissionsDueJson } from '../reppo/queryEmissionsDue.js'
 import { readTokenBalance } from '../reppo/tokenBalance.js'
-import { queryClaimableOnchain } from '../reppo/emissionsOnchain.js'
+import { queryClaimableOnchain, queryVoterClaimableOnchain } from '../reppo/emissionsOnchain.js'
 import { makeDbPodCache } from '../reppo/podCacheStore.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
@@ -335,6 +335,19 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getEmissionsDue: async () => (w.rpcUrl && w.walletAddress)
       ? queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
       : (await io.emissionsDue()).pods,
+    // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod set comes
+    // from our executed-vote activity (the wallet doesn't own them, so they're absent from the
+    // owner Transfer-log cache); claimable (pod,epoch) is then detected on-chain. RPC-only —
+    // no platform-API fallback exists for voter claims.
+    getVoterEmissionsDue: async () => {
+      if (!w.rpcUrl || !w.walletAddress) return []
+      const votedPodIds = [...new Set(
+        readActivity(w.dataDir, { limit: 100_000 })
+          .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
+          .map((e) => e.podId as string),
+      )]
+      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds)
+    },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
       try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }

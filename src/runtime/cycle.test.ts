@@ -663,6 +663,33 @@ describe('runCycle claim phase', () => {
     })).toBe(true)
   })
 
+  it('claims VOTER emissions via executeVoterClaim with a voter-prefixed dedup key', async () => {
+    const recorded: string[] = []
+    const executeVoterClaim = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xvc', gasEth: 0.0009, reppoClaimed: 7 }))
+    const executor = {
+      executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+      executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+      executeClaim: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xc', gasEth: 0 })),
+      executeVoterClaim,
+    } as unknown as CycleDeps['executor']
+    const d = deps({
+      getEmissionsDue: async () => [],                       // no owner claims
+      getVoterEmissionsDue: async () => [{ podId: '1624', datanetId: '11', epoch: 105, reppo: 0 }],
+      seenClaims: async () => new Set<string>(),
+      executor,
+      recordClaim: vi.fn((key: string) => { recorded.push(key) }),
+    })
+    const report = await runCycle(config, 'c-voter', d)
+    expect(executeVoterClaim).toHaveBeenCalledTimes(1)
+    expect(report.claims).toHaveLength(1)
+    expect(recorded).toEqual(['voter-1624:105'])            // voter-prefixed — no collision with owner key
+    const activity = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => c[0] as { kind: string; podId?: string; reppoClaimed?: number; detail?: string })
+    const row = activity.find((e) => e.kind === 'claim' && e.podId === '1624')
+    expect(row?.reppoClaimed).toBe(7)
+    expect(row?.detail).toContain('voter')
+  })
+
   it('skips the claim phase entirely when claimEmissions is false', async () => {
     let called = 0
     const d = deps({ getEmissionsDue: async () => { called++; return [] } })

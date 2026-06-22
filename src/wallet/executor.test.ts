@@ -18,6 +18,7 @@ const fakeCli = (): ReppoCli => ({
   vote: vi.fn(async () => ({ txHash: '0xvote', gasEth: 0.001 })),
   mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0.01 })),
   claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0.0009 })),
+  claimVoterEmissions: vi.fn(async () => ({ txHash: '0xvclaim', gasEth: 0.0009 })),
   grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0.0005 })),
 })
 const voteIntent = (podId: string): VoteIntent => ({ kind: 'vote', datanetId: '9', podId, direction: 'up', conviction: 9, reason: 'aligned' })
@@ -128,6 +129,7 @@ describe('WalletExecutor', () => {
       }),
       mintPod: vi.fn(async () => ({ txHash: '0xmint', gasEth: 0 })),
       claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0 })),
+      claimVoterEmissions: vi.fn(async () => ({ txHash: '0xvclaim', gasEth: 0 })),
       grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0 })),
     }
 
@@ -150,6 +152,7 @@ describe('WalletExecutor', () => {
         return { txHash: '0xmint', gasEth: 0.01 }
       }),
       claimEmissions: vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0 })),
+      claimVoterEmissions: vi.fn(async () => ({ txHash: '0xvclaim', gasEth: 0 })),
       grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0 })),
     }
 
@@ -266,6 +269,7 @@ const fakeClaimCli = (over: Partial<ReppoCli> = {}): ReppoCli => ({
   vote: async () => ({ txHash: '0xvote', gasEth: 0.001 }),
   mintPod: async () => ({ txHash: '0xmint', gasEth: 0.01 }),
   claimEmissions: async () => ({ txHash: '0xclaim', gasEth: 0.0009 }),
+  claimVoterEmissions: async () => ({ txHash: '0xvclaim', gasEth: 0.0009 }),
   grantAccess: async () => ({ txHash: '0xgrant', gasEth: 0.0005 }),
   ...over,
 })
@@ -294,6 +298,26 @@ describe('WalletExecutor.executeClaim', () => {
     const r = await ex.executeClaim(claimIntent())
     expect(r.status).toBe('error')
     expect(ledger.state.claimGasSpentEth).toBeCloseTo(0)
+  })
+
+  it('executeVoterClaim routes to claimVoterEmissions and reconciles gas', async () => {
+    const ledger = new BudgetLedger(dir, CLAIM_CAPS)
+    const voterCli = vi.fn(async () => ({ txHash: '0xvclaim', gasEth: 0.0009 }))
+    const ownerCli = vi.fn(async () => ({ txHash: '0xclaim', gasEth: 0.0009 }))
+    const ex = new WalletExecutor(fakeClaimCli({ claimVoterEmissions: voterCli, claimEmissions: ownerCli }), ledger)
+    const r = await ex.executeVoterClaim(claimIntent())
+    expect(r.status).toBe('executed')
+    expect(r.txHash).toBe('0xvclaim')
+    expect(voterCli).toHaveBeenCalledTimes(1)   // voter path
+    expect(ownerCli).not.toHaveBeenCalled()     // NOT the owner path
+    expect(ledger.state.claimGasSpentEth).toBeCloseTo(0.0009)
+  })
+
+  it('executeVoterClaim refuses when the claim gas cap is exhausted', async () => {
+    const ledger = new BudgetLedger(dir, { ...CLAIM_CAPS, claimGasEthMax: 0 })
+    const ex = new WalletExecutor(fakeClaimCli(), ledger)
+    const r = await ex.executeVoterClaim(claimIntent())
+    expect(r.status).toBe('refused-budget')
   })
 
   it('surfaces gasEth on vote results too', async () => {
