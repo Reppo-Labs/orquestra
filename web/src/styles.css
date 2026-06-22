@@ -276,8 +276,10 @@ textarea { resize: vertical; font-family: var(--body); }
 }
 .chip-toggle.on.vote { color: var(--pos); border-color: rgba(87, 211, 155, 0.4); background: rgba(87, 211, 155, 0.1); }
 .chip-toggle.on.mint { color: var(--accent-hi); border-color: var(--accent-line); background: var(--accent-soft); }
-.net-row { display: flex; gap: 10px; margin-top: 13px; }
-.net-row .field { flex: 1; }
+.net-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 13px; }
+/* min-width lets a field wrap to the next line instead of overflowing a narrow card
+   (the 3-up net-grid card is ~290px; three selects can't shrink below their text). */
+.net-row .field { flex: 1 1 120px; min-width: 120px; }
 .net-strategy { margin-top: 13px; border-top: 1px dashed var(--border-2); padding-top: 12px; display: grid; gap: 10px; }
 .net-strategy.collapsed { display: none; }
 .net-foot { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; }
