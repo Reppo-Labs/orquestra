@@ -23,6 +23,8 @@ const SEL = {
   currentEpoch: '0x76671808', // currentEpoch()  (on veReppo)
   hasVoterClaimed: '0xec1e3908', // hasUserClaimedEmissions(uint256 epoch, uint256 podId, address user)
   claimVoter: '0x971a6c50',      // claimVoterEmissions(address voter, uint256 podId, uint256 epoch)
+  voterUp: '0x08856f83',         // getVotersUpVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
+  voterDown: '0x8c03a3e7',       // getVotersDownVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
 }
 /** Left-pad an address to a 32-byte ABI word. */
 const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
@@ -139,28 +141,57 @@ export async function queryClaimableOnchain(rpcUrl: string, wallet: string, cach
   return out
 }
 
-/** Detect claimable VOTER (pod,epoch) on-chain. Unlike the owner path, the pod set is the
- *  pods the wallet VOTED on (passed in — sourced from the node's executed-vote activity, since
- *  the wallet does not own them and they're not in the Transfer-log cache). For each, scan the
- *  recent CLOSED epochs: NOT-yet-claimed (hasUserClaimedEmissions) AND a non-reverting
- *  claimVoterEmissions eth_call ⇒ claimable. Amount is unknown pre-claim (0); the chain pays
- *  what's owed. Best-effort: caller tolerates a throw. */
+/** Per-pod watermark: the highest CLOSED epoch already scanned for voter emissions, so the
+ *  first run deep-scans full history and later runs only check new epochs. */
+export interface VoterScanCache {
+  getThrough(podId: string): number
+  setThrough(podId: string, epoch: number): void
+}
+
+/** Read a uint256 view via eth_call → bigint (0 on a revert/empty result). */
+async function readUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
+  try {
+    const r = await ethCall(fetchImpl, url, to, data)
+    return r && r !== '0x' ? BigInt(r) : 0n
+  } catch { return 0n }
+}
+
+/** Detect claimable VOTER (pod,epoch) on-chain. The pod set is the pods the wallet VOTED on
+ *  (from the node's executed-vote activity — the wallet doesn't own them, so they're absent
+ *  from the owner Transfer-log cache). A voter earns ONLY for the epoch(s) in which its votes
+ *  were actually counted, so each (pod,epoch) is gated on
+ *  getVotersUpVotesForPodInEpoch + getVotersDownVotesForPodInEpoch > 0 — without this the
+ *  claim succeeds-with-0 (claimVoterEmissions does NOT revert at 0) and burns gas on a 0-REPPO
+ *  tx. Then: NOT-yet-claimed AND a non-reverting claim eth_call ⇒ claimable.
+ *
+ *  `cache` makes the scan incremental: the first run covers ALL closed epochs (watermark 0 →
+ *  scan from 1), catching arbitrarily-old unclaimed history; later runs scan only epochs past
+ *  the persisted watermark. Amount is unknown pre-claim (0); the chain pays what's owed. */
 export async function queryVoterClaimableOnchain(
-  rpcUrl: string, wallet: string, votedPodIds: string[], deps: RpcDeps = {},
+  rpcUrl: string, wallet: string, votedPodIds: string[], cache?: VoterScanCache, deps: RpcDeps = {},
 ): Promise<ClaimableEmission[]> {
   const fetchImpl = deps.fetchImpl ?? fetch
   const pm = deps.podManager ?? POD_MANAGER_MAINNET
   const ve = deps.veReppo ?? VE_REPPO_MAINNET
-  const lookback = BigInt(deps.lookbackEpochs ?? 3)
   if (votedPodIds.length === 0) return []
 
   const cur = BigInt(await ethCall(fetchImpl, rpcUrl, ve, SEL.currentEpoch))
+  if (cur <= 1n) return [] // no closed epochs yet
   const w = addrWord(wallet)
   const out: ClaimableEmission[] = []
-  const start = cur > lookback ? cur - lookback : 1n
+  const lastClosed = cur - 1n
   for (const podStr of [...new Set(votedPodIds)]) {
     const podId = BigInt(podStr)
-    for (let ep = start; ep < cur; ep++) {
+    // Resume past the watermark (highest closed epoch already scanned); first run → from 1.
+    const through = cache ? BigInt(cache.getThrough(podStr)) : 0n
+    const start = through + 1n > 1n ? through + 1n : 1n
+    let firstClaimable: bigint | null = null
+    for (let ep = start; ep <= lastClosed; ep++) {
+      // GATE: the wallet must have counted votes for this (pod,epoch) — else the voter reward
+      // is 0 and the claim would waste gas on a 0-REPPO tx.
+      const up = await readUint(fetchImpl, rpcUrl, pm, SEL.voterUp + word(ep) + word(podId) + w)
+      const down = await readUint(fetchImpl, rpcUrl, pm, SEL.voterDown + word(ep) + word(podId) + w)
+      if (up === 0n && down === 0n) continue
       // hasUserClaimedEmissions(epoch, podId, user)
       const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w)
       if (isTrue(claimed)) continue
@@ -168,8 +199,15 @@ export async function queryVoterClaimableOnchain(
         // claimVoterEmissions(voter, podId, epoch) — reverts ⇒ nothing due for this voter
         await ethCall(fetchImpl, rpcUrl, pm, SEL.claimVoter + w + word(podId) + word(ep), wallet)
       } catch { continue }
+      if (firstClaimable === null) firstClaimable = ep
       out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
     }
+    // Advance the watermark to JUST BEFORE the oldest still-claimable epoch (or the last closed
+    // epoch when nothing is due). Not past a claimable-but-unclaimed epoch — its claim happens
+    // after detection and may fail transiently, so it must stay re-checkable until on-chain
+    // hasUserClaimedEmissions flips true (then a later run advances past it).
+    const newThrough = firstClaimable !== null ? firstClaimable - 1n : lastClosed
+    if (newThrough > through) cache?.setThrough(podStr, Number(newThrough))
   }
   return out
 }

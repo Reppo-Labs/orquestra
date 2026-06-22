@@ -26,7 +26,7 @@ import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
 import { queryEmissionsDueJson } from '../reppo/queryEmissionsDue.js'
 import { readTokenBalance } from '../reppo/tokenBalance.js'
 import { queryClaimableOnchain, queryVoterClaimableOnchain } from '../reppo/emissionsOnchain.js'
-import { makeDbPodCache } from '../reppo/podCacheStore.js'
+import { makeDbPodCache, makeVoterScanCache } from '../reppo/podCacheStore.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
 import { queryEpochJson } from '../reppo/queryEpoch.js'
@@ -346,7 +346,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
           .map((e) => e.podId as string),
       )]
-      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds)
+      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir))
     },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
