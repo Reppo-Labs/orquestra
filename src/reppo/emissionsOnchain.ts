@@ -23,8 +23,6 @@ const SEL = {
   currentEpoch: '0x76671808', // currentEpoch()  (on veReppo)
   hasVoterClaimed: '0xec1e3908', // hasUserClaimedEmissions(uint256 epoch, uint256 podId, address user)
   claimVoter: '0x971a6c50',      // claimVoterEmissions(address voter, uint256 podId, uint256 epoch)
-  voterUp: '0x08856f83',         // getVotersUpVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
-  voterDown: '0x8c03a3e7',       // getVotersDownVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
 }
 /** Left-pad an address to a 32-byte ABI word. */
 const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
@@ -148,21 +146,15 @@ export interface VoterScanCache {
   setThrough(podId: string, epoch: number): void
 }
 
-/** Read a uint256 view via eth_call → bigint (0 on a revert/empty result). */
-async function readUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
-  try {
-    const r = await ethCall(fetchImpl, url, to, data)
-    return r && r !== '0x' ? BigInt(r) : 0n
-  } catch { return 0n }
-}
-
 /** Detect claimable VOTER (pod,epoch) on-chain. The pod set is the pods the wallet VOTED on
  *  (from the node's executed-vote activity — the wallet doesn't own them, so they're absent
- *  from the owner Transfer-log cache). A voter earns ONLY for the epoch(s) in which its votes
- *  were actually counted, so each (pod,epoch) is gated on
- *  getVotersUpVotesForPodInEpoch + getVotersDownVotesForPodInEpoch > 0 — without this the
- *  claim succeeds-with-0 (claimVoterEmissions does NOT revert at 0) and burns gas on a 0-REPPO
- *  tx. Then: NOT-yet-claimed AND a non-reverting claim eth_call ⇒ claimable.
+ *  from the owner Transfer-log cache). For each (pod,epoch): NOT-yet-claimed
+ *  (hasUserClaimedEmissions) AND a non-reverting claimVoterEmissions eth_call ⇒ claimable.
+ *  The eth_call reverts when nothing is due for this voter at this (pod,epoch) — verified the
+ *  authoritative signal on mainnet (a not-due claim reverts; a closed, earned epoch does not).
+ *  We deliberately do NOT pre-gate on getVotersUpVotesForPodInEpoch: on-chain that view reads 0
+ *  even for the wallet's counted votes, so gating on it would skip legitimate claims — and a
+ *  rare succeed-at-0 claim only wastes negligible Base gas, far cheaper than dropping real REPPO.
  *
  *  `cache` makes the scan incremental: the first run covers ALL closed epochs (watermark 0 →
  *  scan from 1), catching arbitrarily-old unclaimed history; later runs scan only epochs past
@@ -187,11 +179,6 @@ export async function queryVoterClaimableOnchain(
     const start = through + 1n > 1n ? through + 1n : 1n
     let firstClaimable: bigint | null = null
     for (let ep = start; ep <= lastClosed; ep++) {
-      // GATE: the wallet must have counted votes for this (pod,epoch) — else the voter reward
-      // is 0 and the claim would waste gas on a 0-REPPO tx.
-      const up = await readUint(fetchImpl, rpcUrl, pm, SEL.voterUp + word(ep) + word(podId) + w)
-      const down = await readUint(fetchImpl, rpcUrl, pm, SEL.voterDown + word(ep) + word(podId) + w)
-      if (up === 0n && down === 0n) continue
       // hasUserClaimedEmissions(epoch, podId, user)
       const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w)
       if (isTrue(claimed)) continue
