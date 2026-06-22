@@ -90,6 +90,9 @@ export interface CycleDeps {
   recordVote(datanetId: string, podId: string): void
   recordMint(datanetId: string, canonicalKey: string): void
   getEmissionsDue(): Promise<ClaimableEmission[]>
+  /** Claimable VOTER emissions (pods the wallet voted on, not owned). Optional: wirings
+   *  without RPC omit it. Claimed via executor.executeVoterClaim. */
+  getVoterEmissionsDue?(): Promise<ClaimableEmission[]>
   /** Claimed (podId:epoch) keys — global, not datanet-scoped (claims are keyed
    *  on-chain by pod+epoch only). */
   seenClaims(): Promise<Set<string>>
@@ -516,6 +519,34 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // next cycle — unclaimed emissions are money left on the table, and the chain
       // rejects an already-claimed (pod,epoch). Mark in-memory `seen` too so a duplicate
       // (pod,epoch) in the same `due` list isn't re-claimed this cycle.
+      if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
+    }
+
+    // Voter emissions: a separate on-chain pool the wallet earns for curating OTHERS' pods
+    // (claimVoterEmissions). Distinct claim path; dedup keys are prefixed `voter-` so they
+    // never collide with owner-claim keys for the same (pod,epoch).
+    let voterDue: ClaimableEmission[] = []
+    try {
+      voterDue = (await deps.getVoterEmissionsDue?.()) ?? []
+    } catch (e) {
+      console.error(`orquestra: voter emissions-due query failed, voter-claim skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
+    }
+    for (const em of voterDue) {
+      const key = `voter-${em.podId}:${em.epoch}`
+      if (seen.has(key)) continue
+      let r: ExecResult
+      try {
+        r = await deps.executor.executeVoterClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, idempotencyKey: `claim-voter-${em.podId}-${em.epoch}` })
+      } catch (e) {
+        r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
+      }
+      claims.push(r)
+      deps.recordActivity({
+        ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
+        podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
+        status: r.status, txHash: r.txHash, gasEth: r.gasEth,
+        detail: r.detail ? `voter · ${r.detail}` : 'voter emissions',
+      })
       if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
     }
   }

@@ -13,8 +13,10 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.9.0
-# @reppo/cli@0.9.0: lock + grant-access auto-approve the ERC20 allowance (unlimited
+ && npm i -g @reppo/cli@0.10.0
+# @reppo/cli@0.10.0: adds claim-voter-emissions (claimVoterEmissions) so the node can
+# collect the VOTER share earned for curating other operators' pods — previously
+# unclaimable (claim-emissions covers only the pod-owner share). 0.9.0: lock + grant-access auto-approve the ERC20 allowance (unlimited
 # approve() + wait when short) so an operator never has to send approve() by hand —
 # removes the manual-cast onboarding blocker. 0.8.6: grant-access --token primary (pay
 # a datanet's access fee in its primary token, e.g. $EXY) + query datanet surfaces

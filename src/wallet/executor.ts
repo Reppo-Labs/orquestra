@@ -162,4 +162,25 @@ export class WalletExecutor {
       return { ok: false, status: 'error', detail: (e as Error).message }
     }
   }
+
+  /** Claim the wallet's VOTER emissions for a (pod, epoch) it voted on. Identical budget /
+   *  reconcile / receipt-amount handling to executeClaim, but routes to `claim-voter-emissions`
+   *  (claimVoterEmissions on-chain) instead of the pod-owner claim. */
+  async executeVoterClaim(intent: ClaimIntent): Promise<ExecResult> {
+    const res = this.ledger.reserveClaim(CLAIM_GAS_EST_ETH)
+    if (!res) return { ok: false, status: 'refused-budget', detail: 'claim gas budget exhausted' }
+    try {
+      const r = await this.cli.claimVoterEmissions({ podId: intent.podId, epoch: intent.epoch, idempotencyKey: intent.idempotencyKey })
+      if (!r.txHash) {
+        this.ledger.releaseClaim(res)
+        return { ok: false, status: 'error', detail: 'no txHash' }
+      }
+      this.ledger.reconcileClaim(res, r.gasEth)
+      const reppoClaimed = this.claimReppoReader ? await this.claimReppoReader(r.txHash) : undefined
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed }
+    } catch (e) {
+      this.ledger.releaseClaim(res)
+      return { ok: false, status: 'error', detail: (e as Error).message }
+    }
+  }
 }
