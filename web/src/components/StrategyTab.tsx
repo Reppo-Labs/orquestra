@@ -322,6 +322,7 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
         <AddDatanetModal
           existing={rows.map(([id]) => id)}
           netNames={netNames}
+          providers={providers}
           onAdd={(id, entry) => edit((c) => { c.datanets[id] = entry })}
           onClose={() => setAdding(false)}
         />
