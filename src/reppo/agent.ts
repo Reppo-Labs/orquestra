@@ -80,6 +80,17 @@ export function parseRegisterAgentOutput(stdout: string): AgentCreds {
   return { agentId: id, apiKey }
 }
 
+/** Node-unique agent display name so each Orquestra node is distinguishable on the Reppo
+ *  platform (stats, claims) instead of every node bundling under a shared "[AGENT] orquestra".
+ *  REPPO_AGENT_NAME (operator-chosen) wins; else derive from the wallet (orquestra-<8 hex>,
+ *  lowercased — the wallet is per-node unique); else bare "orquestra" when no wallet is known. */
+export function agentDisplayName(envName: string | undefined, walletAddress: string | undefined): string {
+  const chosen = envName?.trim()
+  if (chosen) return chosen
+  const addr = walletAddress?.trim().replace(/^0x/i, '')
+  return addr ? `orquestra-${addr.slice(0, 8).toLowerCase()}` : 'orquestra'
+}
+
 /** Live: register an agent identity on the Reppo platform (signs with the wallet).
  *  One-time per operator — callers gate it behind ensureAgentId's idempotency. */
 export async function registerAgentJson(name: string, description: string): Promise<AgentCreds> {

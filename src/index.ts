@@ -10,7 +10,7 @@ import { listDatanetsJson } from './reppo/listDatanets.js'
 import { checkReppoVersion, getReppoVersionString } from './reppo/version.js'
 import { supportsNonReppoGrants } from './reppo/capabilities.js'
 import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
-import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore } from './reppo/agent.js'
+import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName } from './reppo/agent.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -73,7 +73,7 @@ async function onboard(): Promise<void> {
 }
 
 /** One-time idempotent setup: veREPPO lock + Reppo agent identity for minting. */
-async function setupNode(config: StrategyConfig, executor: WalletExecutor): Promise<void> {
+async function setupNode(config: StrategyConfig, executor: WalletExecutor, agentName: string): Promise<void> {
   if (config.stake.lockReppo > 0) {
     // The lock is a TARGET, not one-time: top up to config.stake.lockReppo by locking
     // the difference as an additional lockup. Skip when already at/above target. A lock
@@ -117,7 +117,7 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
       mintingEnabled,
       envAgentId: process.env.REPPO_AGENT_ID,
       readStored: () => readAgentStore(DATA_DIR),
-      register: () => registerAgentJson('orquestra', 'Reppo Orquestra swarm node — publishes data pods'),
+      register: () => registerAgentJson(agentName, 'Reppo Orquestra swarm node — publishes data pods'),
       writeStored: (c) => writeAgentStore(DATA_DIR, c),
       setEnv: (c) => {
         process.env.REPPO_AGENT_ID = c.agentId
@@ -252,7 +252,9 @@ async function start(): Promise<void> {
     adapters: [createHyperliquidAdapter(), createGdeltAdapter({ model }), createSportsAdapter({ model })],
   }
 
-  await setupNode(config, executor)
+  // Node-unique agent name so each operator is distinguishable on the Reppo platform
+  // (REPPO_AGENT_NAME override, else orquestra-<wallet slice>) instead of all sharing "orquestra".
+  await setupNode(config, executor, agentDisplayName(process.env.REPPO_AGENT_NAME, walletAddress))
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
