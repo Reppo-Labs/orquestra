@@ -732,6 +732,32 @@ describe('runCycle stake top-up', () => {
     expect(lock).not.toHaveBeenCalled()
   })
 
+  it('retries a FAILED lock on the next cycle (latch only on success, never on failure)', async () => {
+    let attempt = 0
+    const lock = vi.fn(async () => {
+      attempt++
+      return attempt === 1
+        ? { ok: false as const, status: 'error' as const, detail: 'INSUFFICIENT_REPPO_BALANCE' }
+        : { ok: true as const, status: 'executed' as const, txHash: '0xlock' }
+    })
+    const d = deps({ getVeReppo: async () => 0, executor: stakeExecutor(lock) })
+    const cfg = cfgStake(1800)
+    await runCycle(cfg, 'c1', d) // attempt 1 fails — must NOT latch
+    await runCycle(cfg, 'c2', d) // attempt 2 retries and succeeds
+    expect(lock).toHaveBeenCalledTimes(2)
+  })
+
+  it('records the lock-failure reason in the stake activity so the operator sees WHY', async () => {
+    const acts: any[] = []
+    const lock = vi.fn(async () => ({ ok: false as const, status: 'error' as const, detail: 'INSUFFICIENT_REPPO_BALANCE' }))
+    const d = deps({ getVeReppo: async () => 0, executor: stakeExecutor(lock), recordActivity: (e: any) => acts.push(e) })
+    await runCycle(cfgStake(1950), 'c-why', d)
+    const stake = acts.find((e) => e.kind === 'stake')
+    expect(stake).toBeDefined()
+    expect(stake.status).toBe('skipped')
+    expect(stake.reason).toContain('INSUFFICIENT_REPPO_BALANCE')
+  })
+
   it('does not re-attempt a target the shared latch already marked (setupNode seed)', async () => {
     const lock = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xlock' }))
     // Simulate setupNode having already attempted this target at startup.

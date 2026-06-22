@@ -34,16 +34,24 @@ async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: Cy
     }
     const plan = planStakeTopUp(current, config.stake)
     if (!plan) return
-    if (wasStakeTargetAttempted(config.stake.lockReppo)) return // already attempted this target
-    markStakeTargetAttempted(config.stake.lockReppo)
+    if (wasStakeTargetAttempted(config.stake.lockReppo)) return // already locked this target
     const r = await deps.executor.lock({
       amountReppo: plan.lockAmount,
       durationSeconds: plan.durationSeconds,
       idempotencyKey: stakeTopUpKey(config.stake),
     })
+    // Latch ONLY on a confirmed lock. A FAILED lock (insufficient REPPO/gas, RPC blip) must stay
+    // retryable — latching it off left the node with zero veREPPO and no on-screen reason until a
+    // manual restart (the operator's "I confirmed the lock but it never locked" report). The
+    // idempotency key is stable per target, so a retry that re-locks the same amount is safe.
+    if (r.status === 'executed') markStakeTargetAttempted(config.stake.lockReppo)
     deps.recordActivity({
       ts: new Date().toISOString(), cycleId, kind: 'stake', datanetId: '',
-      reason: `topped up veREPPO ${current} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`,
+      // On failure carry the CLI detail (e.g. INSUFFICIENT_REPPO_BALANCE) so the dashboard
+      // explains WHY veREPPO is still zero instead of mislabeling the row as "topped up".
+      reason: r.status === 'executed'
+        ? `topped up veREPPO ${current} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`
+        : `veREPPO lock failed (${r.status}) — wanted +${plan.lockAmount} to reach ${config.stake.lockReppo}${r.detail ? ` — ${r.detail}` : ''}`,
       status: r.status === 'executed' ? 'executed' : 'skipped',
       ...(r.txHash ? { txHash: r.txHash } : {}),
     })
