@@ -32,6 +32,8 @@ describe('WalletExecutor', () => {
     expect(r.status).toBe('executed')
     expect(r.txHash).toBe('0xvote')
     expect(cli.vote).toHaveBeenCalledOnce()
+    // conviction 9 → vote weight scaled to 18 decimals (9e18), NOT raw 9 (which votes dust → 0 emissions)
+    expect((cli.vote as ReturnType<typeof vi.fn>).mock.calls[0][0].votes).toBe('9000000000000000000')
     expect(ledger.state.votesCastThisCycle).toBe(1)
   })
 
