@@ -3,7 +3,22 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, type EnsureAgentDeps } from './agent.js'
+import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, type EnsureAgentDeps } from './agent.js'
+
+describe('agentDisplayName (node-unique identity)', () => {
+  it('uses REPPO_AGENT_NAME when set (trimmed)', () => {
+    expect(agentDisplayName('  Ana node  ', '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64')).toBe('Ana node')
+  })
+  it('defaults to orquestra-<8 hex of wallet> so nodes are distinguishable', () => {
+    expect(agentDisplayName(undefined, '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64')).toBe('orquestra-b4ec41c9')
+  })
+  it('lowercases the wallet slice deterministically', () => {
+    expect(agentDisplayName('', '0xB4EC41C93CF2F573F82D8F023B01637EB5DB4C64')).toBe('orquestra-b4ec41c9')
+  })
+  it('falls back to bare orquestra when no name and no wallet', () => {
+    expect(agentDisplayName(undefined, undefined)).toBe('orquestra')
+  })
+})
 
 describe('parseAgentRegistration', () => {
   it('extracts agentId + apiKey from register-agent --json', () => {
