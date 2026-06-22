@@ -88,6 +88,8 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
       const plan = planStakeTopUp(existing.veReppo, config.stake)
       if (!plan) {
         console.error(`orquestra: veREPPO ${existing.veReppo} ≥ target ${config.stake.lockReppo} — no lock needed.`)
+        // Nothing to retry — seed the latch so cycle-1 doesn't re-evaluate the same target.
+        markStakeTargetAttempted(config.stake.lockReppo)
       } else {
         console.error(`orquestra: topping up veREPPO ${existing.veReppo} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`)
         const r = await executor.lock({
@@ -96,11 +98,13 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor): Prom
           idempotencyKey: stakeTopUpKey(config.stake),
         })
         console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
+        // Seed the latch ONLY on a confirmed lock, so cycle-1 doesn't re-attempt the same target
+        // with a slightly different `current` reading (→ IDEMPOTENCY_ARGS_MISMATCH in reppo-cli).
+        // A FAILED startup lock is deliberately LEFT unlatched so the per-cycle top-up retries it
+        // (and records the reason to the dashboard) instead of leaving the node at zero veREPPO
+        // with no explanation until a manual restart.
+        if (r.status === 'executed') markStakeTargetAttempted(config.stake.lockReppo)
       }
-      // Seed the shared latch so cycle-1 doesn't re-attempt the SAME target with a slightly
-      // different `current` reading (which would change the lock diff → IDEMPOTENCY_ARGS_MISMATCH
-      // in reppo-cli → the top-up never lands until restart). Mark on attempt, success OR failure.
-      markStakeTargetAttempted(config.stake.lockReppo)
     }
   }
 
