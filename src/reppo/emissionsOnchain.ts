@@ -23,6 +23,7 @@ const SEL = {
   currentEpoch: '0x76671808', // currentEpoch()  (on veReppo)
   hasVoterClaimed: '0xec1e3908', // hasUserClaimedEmissions(uint256 epoch, uint256 podId, address user)
   claimVoter: '0x971a6c50',      // claimVoterEmissions(address voter, uint256 podId, uint256 epoch)
+  votesCasted: '0x3827cb73',     // votesCastedByVoterForEpoch(address voter, uint256 epoch)
 }
 /** Left-pad an address to a 32-byte ABI word. */
 const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
@@ -48,6 +49,10 @@ interface RpcDeps {
   veReppo?: string
   /** epochs back from current to scan for unclaimed emissions (default 3). */
   lookbackEpochs?: number
+  /** Lowest epoch the voter scan will ever check (default 1). The node never earns voter
+   *  emissions before it existed, so a floor (e.g. the epoch it first voted) bounds the
+   *  first-run deep scan instead of crawling from epoch 1. */
+  floorEpoch?: number
 }
 
 async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<unknown> {
@@ -156,15 +161,23 @@ export interface VoterScanCache {
  *  even for the wallet's counted votes, so gating on it would skip legitimate claims — and a
  *  rare succeed-at-0 claim only wastes negligible Base gas, far cheaper than dropping real REPPO.
  *
- *  `cache` makes the scan incremental: the first run covers ALL closed epochs (watermark 0 →
- *  scan from 1), catching arbitrarily-old unclaimed history; later runs scan only epochs past
- *  the persisted watermark. Amount is unknown pre-claim (0); the chain pays what's owed. */
+ *  COST CONTROL — the (pod × epoch) eth_call grid is bounded two ways so a first run doesn't
+ *  storm the public RPC (which throttled it into a partial scan):
+ *   1. `floorEpoch` — never scan below the epoch the node first existed (default 1).
+ *   2. ACTIVE-epoch gate — a voter only earns at an epoch it voted in, so we compute
+ *      votesCastedByVoterForEpoch(wallet, ep) ONCE per epoch in [floor, lastClosed] and check
+ *      pods only at epochs where it is > 0. This is lossless (a claim at ep ⟹ wallet voted at
+ *      ep ⟹ votesCasted(ep) > 0) and collapses ~(pods × allEpochs) to (pods × activeEpochs).
+ *
+ *  `cache` makes the scan incremental: the watermark resumes past already-scanned epochs.
+ *  Amount is unknown pre-claim (0); the chain pays what's owed. */
 export async function queryVoterClaimableOnchain(
   rpcUrl: string, wallet: string, votedPodIds: string[], cache?: VoterScanCache, deps: RpcDeps = {},
 ): Promise<ClaimableEmission[]> {
   const fetchImpl = deps.fetchImpl ?? fetch
   const pm = deps.podManager ?? POD_MANAGER_MAINNET
   const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const floor = BigInt(deps.floorEpoch ?? 1)
   if (votedPodIds.length === 0) return []
 
   const cur = BigInt(await ethCall(fetchImpl, rpcUrl, ve, SEL.currentEpoch))
@@ -172,13 +185,25 @@ export async function queryVoterClaimableOnchain(
   const w = addrWord(wallet)
   const out: ClaimableEmission[] = []
   const lastClosed = cur - 1n
+  const scanFrom = floor > 1n ? floor : 1n
+
+  // Active closed epochs the wallet voted in (votesCasted > 0) — computed ONCE, shared by all
+  // pods. A pod can only have a voter reward at an epoch the wallet voted, so this prunes the
+  // grid without dropping any real claim.
+  const activeEpochs: bigint[] = []
+  for (let ep = scanFrom; ep <= lastClosed; ep++) {
+    const cast = await ethCall(fetchImpl, rpcUrl, pm, SEL.votesCasted + w + word(ep)).catch(() => '0x')
+    if (isTrue(cast)) activeEpochs.push(ep)
+  }
+  if (activeEpochs.length === 0) return []
+
   for (const podStr of [...new Set(votedPodIds)]) {
     const podId = BigInt(podStr)
-    // Resume past the watermark (highest closed epoch already scanned); first run → from 1.
+    // Resume past the watermark (highest closed epoch already scanned); first run → from floor.
     const through = cache ? BigInt(cache.getThrough(podStr)) : 0n
-    const start = through + 1n > 1n ? through + 1n : 1n
     let firstClaimable: bigint | null = null
-    for (let ep = start; ep <= lastClosed; ep++) {
+    for (const ep of activeEpochs) {
+      if (ep <= through) continue
       // hasUserClaimedEmissions(epoch, podId, user)
       const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w)
       if (isTrue(claimed)) continue
