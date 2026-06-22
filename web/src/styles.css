@@ -389,6 +389,10 @@ textarea { resize: vertical; font-family: var(--body); }
 .modal {
   width: min(440px, 100%); background: var(--panel); border: 1px solid var(--border-2);
   border-radius: var(--r-lg); box-shadow: var(--shadow-lg); padding: 24px; animation: pop 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.1) both;
+  /* Cap height and scroll internally so a tall form (vote share + vote model + slug) never
+     overflows a short viewport and cuts off the footer buttons. The scrim's 24px padding
+     keeps a gutter to the screen edge. */
+  max-height: calc(100vh - 48px); overflow-y: auto;
 }
 .modal h3 { font-size: 19px; margin-bottom: 4px; }
 .modal .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }

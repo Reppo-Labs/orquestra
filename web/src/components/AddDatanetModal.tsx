@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { DatanetEntry } from '../api'
+import type { DatanetEntry, ModelProvider } from '../api'
 import { Tip } from './Tip'
 import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
@@ -8,9 +8,10 @@ const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
 // "Add a datanet" dialog. The datanet is picked BY NAME from the live catalog
 // (/api/datanets id→name map) — ids never surface in the UI. Already-configured
 // datanets are excluded from the list.
-export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
+export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose }: {
   existing: string[]
   netNames: Record<string, string>
+  providers: ModelProvider[]
   onAdd: (id: string, entry: DatanetEntry) => void
   onClose: () => void
 }) {
@@ -19,6 +20,9 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
   const [mint, setMint] = useState(false)
   const [adapter, setAdapter] = useState('')
   const [strictness, setStrictness] = useState('balanced')
+  const [voteShare, setVoteShare] = useState('1')
+  const [modelProvider, setModelProvider] = useState('') // '' = node default
+  const [modelSlug, setModelSlug] = useState('')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -35,10 +39,25 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
   )
 
   const canAdd = selectedId !== '' && (vote || mint)
+  const curModels = providers.find((p) => p.provider === modelProvider)?.models ?? []
+
+  // Provider (re)selection auto-fills a sensible default slug (mirrors the per-datanet card).
+  const selectProvider = (provider: string) => {
+    setModelProvider(provider)
+    setModelSlug(provider ? (providers.find((p) => p.provider === provider)?.models[0] ?? '') : '')
+  }
 
   const submit = () => {
     if (!canAdd) return
-    const entry: DatanetEntry = { vote, mint, strictness, ...(adapter ? { adapter } : {}) }
+    // Only a positive integer is a valid weight (schema is .int().positive()); anything else
+    // ⇒ omit, so the node applies the default of 1.
+    const share = parseInt(voteShare, 10)
+    const entry: DatanetEntry = {
+      vote, mint, strictness,
+      ...(adapter ? { adapter } : {}),
+      ...(Number.isInteger(share) && share >= 1 ? { voteShare: share } : {}),
+      ...(modelProvider && modelSlug ? { model: { provider: modelProvider, model: modelSlug } } : {}),
+    }
     onAdd(selectedId, entry)
     onClose()
   }
@@ -90,6 +109,31 @@ export function AddDatanetModal({ existing, netNames, onAdd, onClose }: {
               {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
             </select>
           </label>
+
+          <label className="field">
+            <span>vote share <Tip label="what vote share means">Relative weight for splitting this cycle's vote slots across datanets. 3 vs 1 means this datanet gets 3× the votes of a weight-1 one. Default 1 (equal share). Whole numbers only; divides the per-cycle vote cap, does not raise it.</Tip></span>
+            <input type="text" inputMode="numeric" value={voteShare} placeholder="1"
+              onChange={(e) => setVoteShare(e.target.value)} />
+          </label>
+
+          <label className="field">
+            <span>vote model <Tip label="what vote model does">Which LLM scores votes for THIS datanet. Blank = the node's default model. Only providers whose API key is set on the node appear here. Pick a Gemini (google) model if this datanet's pods are videos.</Tip></span>
+            <select value={modelProvider} onChange={(e) => selectProvider(e.target.value)}>
+              <option value="">node default</option>
+              {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
+            </select>
+          </label>
+
+          {modelProvider && (
+            <label className="field">
+              <span>model slug <Tip label="what model slug does">The provider's model id (slugs drift, so free text is allowed). Suggestions come from the node; type any valid slug for {modelProvider}.</Tip></span>
+              <input type="text" list="add-models" value={modelSlug} placeholder={curModels[0] ?? 'model id'}
+                onChange={(e) => setModelSlug(e.target.value)} />
+              <datalist id="add-models">
+                {curModels.map((m) => <option key={m} value={m} />)}
+              </datalist>
+            </label>
+          )}
         </div>
         <div className="modal-foot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
