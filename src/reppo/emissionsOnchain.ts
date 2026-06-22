@@ -24,6 +24,12 @@ const SEL = {
   hasVoterClaimed: '0xec1e3908', // hasUserClaimedEmissions(uint256 epoch, uint256 podId, address user)
   claimVoter: '0x971a6c50',      // claimVoterEmissions(address voter, uint256 podId, uint256 epoch)
   votesCasted: '0x3827cb73',     // votesCastedByVoterForEpoch(address voter, uint256 epoch)
+  voterUp: '0x08856f83',         // getVotersUpVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
+  voterDown: '0x8c03a3e7',       // getVotersDownVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
+}
+/** Read a uint256 view via eth_call → bigint (0 on revert/empty). */
+async function readUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
+  try { const r = await ethCall(fetchImpl, url, to, data); return r && r !== '0x' ? BigInt(r) : 0n } catch { return 0n }
 }
 /** Left-pad an address to a 32-byte ABI word. */
 const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
@@ -155,19 +161,19 @@ export interface VoterScanCache {
  *  (from the node's executed-vote activity — the wallet doesn't own them, so they're absent
  *  from the owner Transfer-log cache). For each (pod,epoch): NOT-yet-claimed
  *  (hasUserClaimedEmissions) AND a non-reverting claimVoterEmissions eth_call ⇒ claimable.
- *  The eth_call reverts when nothing is due for this voter at this (pod,epoch) — verified the
- *  authoritative signal on mainnet (a not-due claim reverts; a closed, earned epoch does not).
- *  We deliberately do NOT pre-gate on getVotersUpVotesForPodInEpoch: on-chain that view reads 0
- *  even for the wallet's counted votes, so gating on it would skip legitimate claims — and a
- *  rare succeed-at-0 claim only wastes negligible Base gas, far cheaper than dropping real REPPO.
+ *  The eth_call reverts when nothing is due for this voter at this (pod,epoch); we also gate on
+ *  the wallet's recorded votes for the (pod,epoch) being > 0 (only-claim-if-earning) — see below.
  *
- *  COST CONTROL — the (pod × epoch) eth_call grid is bounded two ways so a first run doesn't
- *  storm the public RPC (which throttled it into a partial scan):
+ *  COST CONTROL + earning gate — the (pod × epoch) eth_call grid is bounded so a first run doesn't
+ *  storm the public RPC, and claims are only attempted where the wallet actually earns:
  *   1. `floorEpoch` — never scan below the epoch the node first existed (default 1).
- *   2. ACTIVE-epoch gate — a voter only earns at an epoch it voted in, so we compute
+ *   2. ACTIVE-epoch gate — a voter only earns at an epoch it voted in, so compute
  *      votesCastedByVoterForEpoch(wallet, ep) ONCE per epoch in [floor, lastClosed] and check
- *      pods only at epochs where it is > 0. This is lossless (a claim at ep ⟹ wallet voted at
- *      ep ⟹ votesCasted(ep) > 0) and collapses ~(pods × allEpochs) to (pods × activeEpochs).
+ *      pods only at epochs where it is > 0. Collapses ~(pods × allEpochs) to (pods × activeEpochs).
+ *   3. PER-POD vote gate — getVotersUp/DownVotesForPodInEpoch(ep, pod, wallet) > 0. The reward is
+ *      the voter's share of the pod's pool, so no recorded votes ⇒ 0 payout. With votes now cast
+ *      at real 18-decimal weight, votes > 0 ⟹ a real share ⟹ > 0 emissions, so this skips
+ *      0-REPPO claim txs (wasted gas) and is lossless (a reward requires votes at that pod,epoch).
  *
  *  `cache` makes the scan incremental: the watermark resumes past already-scanned epochs.
  *  Amount is unknown pre-claim (0); the chain pays what's owed. */
@@ -204,6 +210,14 @@ export async function queryVoterClaimableOnchain(
     let firstClaimable: bigint | null = null
     for (const ep of activeEpochs) {
       if (ep <= through) continue
+      // GATE: the wallet must have CAST votes on THIS pod in THIS epoch to earn voter emissions.
+      // Now that votes carry real 18-decimal weight, votes > 0 ⟹ a real curation share ⟹ > 0
+      // payout — so skipping vote==0 (pod,epoch) avoids 0-REPPO claim txs (wasted gas) without
+      // dropping any real claim (a reward requires the wallet voted there). hasUserClaimed/claim
+      // checks only run for pods the wallet actually voted.
+      const up = await readUint(fetchImpl, rpcUrl, pm, SEL.voterUp + word(ep) + word(podId) + w)
+      const down = await readUint(fetchImpl, rpcUrl, pm, SEL.voterDown + word(ep) + word(podId) + w)
+      if (up === 0n && down === 0n) continue
       // hasUserClaimedEmissions(epoch, podId, user)
       const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w)
       if (isTrue(claimed)) continue

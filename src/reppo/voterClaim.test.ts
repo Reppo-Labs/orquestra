@@ -6,6 +6,8 @@ const SEL = {
   hasVoterClaimed: '0xec1e3908',
   claimVoter: '0x971a6c50',
   votesCasted: '0x3827cb73',
+  voterUp: '0x08856f83',
+  voterDown: '0x8c03a3e7',
 }
 const W = '0x00000000000000000000000000000000000000aa'
 const word = (v: bigint) => v.toString(16).padStart(64, '0')
@@ -14,16 +16,19 @@ const TRUE = '0x' + word(1n)
 const FALSE = '0x' + word(0n)
 
 /** Fake JSON-RPC fetch.
- *  votedEpochs → votesCastedByVoterForEpoch > 0 (the wallet voted that epoch);
+ *  votedEpochs → votesCastedByVoterForEpoch > 0 (epoch-level: the wallet voted that epoch);
+ *  votedPodEpochs (`${epoch}:${pod}`) → getVotersUp/DownVotesForPodInEpoch > 0 (per-pod gate);
  *  claimableEpochs (`${epoch}:${pod}`) → claimVoterEmissions does NOT revert (something due);
- *  claimed (`${epoch}:${pod}`) → hasUserClaimedEmissions true. */
+ *  claimed (`${epoch}:${pod}`) → hasUserClaimedEmissions true.
+ *  Realistic invariant: claimable ⊆ votedPodEpochs (no reward without recorded votes). */
 function fakeFetch(opts: {
   current: bigint
   votedEpochs: Set<number>
+  votedPodEpochs: Set<string>
   claimableEpochs: Set<string>
   claimed?: Set<string>
 }): typeof fetch {
-  const calls = { claim: [] as string[], votesCasted: [] as number[] }
+  const calls = { claim: [] as string[], votesCasted: [] as number[], voterUp: [] as string[] }
   const f = (async (_url: string, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body))
     const { data } = body.params[0] as { to: string; data: string }
@@ -31,10 +36,16 @@ function fakeFetch(opts: {
     if (sel === SEL.currentEpoch) return jsonOk(uint(opts.current))
     const args = data.slice(10)
     if (sel === SEL.votesCasted) {
-      // votesCastedByVoterForEpoch(voter, epoch): voter word, epoch word
-      const epoch = Number(BigInt('0x' + args.slice(64, 128)))
+      const epoch = Number(BigInt('0x' + args.slice(64, 128))) // voter, epoch
       calls.votesCasted.push(epoch)
       return jsonOk(opts.votedEpochs.has(epoch) ? uint(5n) : uint(0n))
+    }
+    if (sel === SEL.voterUp || sel === SEL.voterDown) {
+      const epoch = BigInt('0x' + args.slice(0, 64)), pod = BigInt('0x' + args.slice(64, 128))
+      const key = `${epoch}:${pod}`
+      if (sel === SEL.voterUp) calls.voterUp.push(key)
+      // model all weight on the up side
+      return jsonOk(sel === SEL.voterUp && opts.votedPodEpochs.has(key) ? uint(5000000000000000000n) : uint(0n))
     }
     if (sel === SEL.hasVoterClaimed) {
       const epoch = BigInt('0x' + args.slice(0, 64)), pod = BigInt('0x' + args.slice(64, 128))
@@ -55,33 +66,40 @@ const jsonOk = (result: string) => new Response(JSON.stringify({ jsonrpc: '2.0',
 const jsonErr = (message: string) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message } }), { status: 200 })
 
 describe('queryVoterClaimableOnchain', () => {
-  it('claims an active+due epoch (votesCasted>0, claim does not revert)', async () => {
-    const f = fakeFetch({ current: 107n, votedEpochs: new Set([105]), claimableEpochs: new Set(['105:50']) })
+  it('claims an active epoch where the wallet voted the pod and a reward is due', async () => {
+    const f = fakeFetch({ current: 107n, votedEpochs: new Set([105]), votedPodEpochs: new Set(['105:50']), claimableEpochs: new Set(['105:50']) })
     const out = await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f })
     expect(out).toEqual([{ podId: '50', datanetId: '', epoch: 105, reppo: 0 }])
   })
 
-  it('skips epochs the wallet did NOT vote in (active-epoch gate prunes the claim attempt)', async () => {
-    // "due" at 103 BUT wallet didn't vote at 103 → must NEVER attempt the claim there.
-    const f = fakeFetch({ current: 107n, votedEpochs: new Set([105]), claimableEpochs: new Set(['103:50']) })
+  it('skips (no claim attempt) a pod the wallet did NOT vote in that epoch — only-claim-if-earning gate', async () => {
+    // votesCasted>0 at 105 (wallet voted SOMETHING), but NOT this pod (votedPodEpochs empty).
+    const f = fakeFetch({ current: 107n, votedEpochs: new Set([105]), votedPodEpochs: new Set(), claimableEpochs: new Set(['105:50']) })
     const calls = (f as unknown as { _calls: { claim: string[] } })._calls
     const out = await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f })
-    expect(out).toEqual([])                       // 103 pruned → nothing claimable
-    expect(calls.claim).not.toContain('103:50')   // never attempted the claim at the unvoted epoch
-    expect(calls.claim).toEqual(['105:50'])        // only the active epoch was probed (and it reverted)
+    expect(out).toEqual([])
+    expect(calls.claim).toEqual([]) // never attempted the claim — pod had no recorded votes
+  })
+
+  it('skips epochs the wallet did NOT vote in at all (active-epoch gate, no per-pod probe)', async () => {
+    const f = fakeFetch({ current: 107n, votedEpochs: new Set([105]), votedPodEpochs: new Set(['103:50']), claimableEpochs: new Set(['103:50']) })
+    const calls = (f as unknown as { _calls: { claim: string[]; voterUp: string[] } })._calls
+    const out = await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f })
+    expect(out).toEqual([])                       // 103 not an active epoch → pruned
+    expect(calls.voterUp.some((k) => k.startsWith('103:'))).toBe(false) // never even probed votes at 103
   })
 
   it('respects floorEpoch — never scans below it', async () => {
-    const f = fakeFetch({ current: 107n, votedEpochs: new Set([95, 105]), claimableEpochs: new Set(['95:50', '105:50']) })
+    const f = fakeFetch({ current: 107n, votedEpochs: new Set([95, 105]), votedPodEpochs: new Set(['95:50', '105:50']), claimableEpochs: new Set(['95:50', '105:50']) })
     const calls = (f as unknown as { _calls: { votesCasted: number[] } })._calls
     const out = await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f, floorEpoch: 100 })
-    expect(out.map((e) => e.epoch)).toEqual([105])     // 95 below floor → not claimed
-    expect(Math.min(...calls.votesCasted)).toBe(100)   // never probed below 100
+    expect(out.map((e) => e.epoch)).toEqual([105])
+    expect(Math.min(...calls.votesCasted)).toBe(100)
   })
 
-  it('skips an active+due epoch that is already claimed', async () => {
+  it('skips an earning epoch that is already claimed', async () => {
     const f = fakeFetch({
-      current: 107n, votedEpochs: new Set([105]),
+      current: 107n, votedEpochs: new Set([105]), votedPodEpochs: new Set(['105:50']),
       claimableEpochs: new Set(['105:50']), claimed: new Set(['105:50']),
     })
     expect(await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f })).toEqual([])
@@ -90,10 +108,10 @@ describe('queryVoterClaimableOnchain', () => {
   it('persists a watermark and does not re-scan resolved epochs next run', async () => {
     const store: Record<string, number> = {}
     const cache: VoterScanCache = { getThrough: (p) => store[p] ?? 0, setThrough: (p, e) => { store[p] = e } }
-    const f1 = fakeFetch({ current: 107n, votedEpochs: new Set([104]), claimableEpochs: new Set() }) // active but nothing due
+    const f1 = fakeFetch({ current: 107n, votedEpochs: new Set([104]), votedPodEpochs: new Set(), claimableEpochs: new Set() })
     expect(await queryVoterClaimableOnchain('rpc', W, ['50'], cache, { fetchImpl: f1 })).toEqual([])
     expect(store['50']).toBe(106) // through last closed epoch (nothing due)
-    const f2 = fakeFetch({ current: 107n, votedEpochs: new Set([104]), claimableEpochs: new Set(['104:50']) })
+    const f2 = fakeFetch({ current: 107n, votedEpochs: new Set([104]), votedPodEpochs: new Set(['104:50']), claimableEpochs: new Set(['104:50']) })
     const calls2 = (f2 as unknown as { _calls: { claim: string[] } })._calls
     await queryVoterClaimableOnchain('rpc', W, ['50'], cache, { fetchImpl: f2 })
     expect(calls2.claim).toEqual([]) // below the watermark → not re-scanned
@@ -102,14 +120,14 @@ describe('queryVoterClaimableOnchain', () => {
   it('does NOT advance the watermark past a still-claimable (unclaimed) epoch', async () => {
     const store: Record<string, number> = {}
     const cache: VoterScanCache = { getThrough: (p) => store[p] ?? 0, setThrough: (p, e) => { store[p] = e } }
-    const f = fakeFetch({ current: 107n, votedEpochs: new Set([103]), claimableEpochs: new Set(['103:50']) })
+    const f = fakeFetch({ current: 107n, votedEpochs: new Set([103]), votedPodEpochs: new Set(['103:50']), claimableEpochs: new Set(['103:50']) })
     const out = await queryVoterClaimableOnchain('rpc', W, ['50'], cache, { fetchImpl: f })
     expect(out.map((e) => e.epoch)).toEqual([103])
-    expect(store['50']).toBe(102) // just before the oldest still-claimable epoch
+    expect(store['50']).toBe(102)
   })
 
   it('returns [] when there are no closed epochs yet', async () => {
-    const f = fakeFetch({ current: 1n, votedEpochs: new Set(), claimableEpochs: new Set() })
+    const f = fakeFetch({ current: 1n, votedEpochs: new Set(), votedPodEpochs: new Set(), claimableEpochs: new Set() })
     expect(await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f })).toEqual([])
   })
 })
