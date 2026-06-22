@@ -26,6 +26,7 @@ describe('db (shared SQLite owner)', () => {
     for (const t of [
       'activity', 'earn_status', 'snapshot', 'budget_ledger', 'dedup',
       'config', 'agent', 'outcomes', 'lessons', 'proposals', 'learn_flags',
+      'emit_pods', 'emit_scan', 'voter_scan',
     ]) {
       expect(names).toContain(t)
     }

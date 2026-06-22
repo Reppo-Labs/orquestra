@@ -97,6 +97,11 @@ CREATE TABLE IF NOT EXISTS emit_pods (
 CREATE TABLE IF NOT EXISTS emit_scan (
   id INTEGER PRIMARY KEY CHECK (id = 1), lastBlock TEXT NOT NULL
 );
+-- Per-pod watermark for the VOTER-emissions scan: the highest CLOSED epoch already scanned
+-- for this pod, so steady-state only checks new epochs (the first run deep-scans full history).
+CREATE TABLE IF NOT EXISTS voter_scan (
+  podId TEXT PRIMARY KEY, throughEpoch INTEGER NOT NULL
+);
 `
 
 /** Cached SQLite handle for this dataDir, with all tables ensured on first open. */
