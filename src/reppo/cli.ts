@@ -5,7 +5,11 @@ import { reppoEnv, withRpcUrl } from './exec.js'
 
 const execFileAsync = promisify(execFile)
 
-export interface VoteArgs { podId: string; direction: 'up' | 'down'; votes: number; idempotencyKey: string }
+/** `votes` is the vote WEIGHT as an 18-decimal veREPPO-power integer STRING (e.g. "8000000000000000000"
+ *  for 8). NOT the raw 1-10 conviction: the on-chain vote() tracks weight in 18-decimal veREPPO
+ *  units, so an unscaled conviction (8 wei) is dust → ~0 curation share → 0 voter emissions.
+ *  String (not number) because 8e18 exceeds JS safe-integer precision. */
+export interface VoteArgs { podId: string; direction: 'up' | 'down'; votes: string; idempotencyKey: string }
 export interface LockArgs { amountReppo: number; durationSeconds: number; idempotencyKey: string }
 export interface MintArgs {
   datanetId: string; subnetUuid: string; podName: string; podDescription: string; idempotencyKey: string
@@ -136,9 +140,10 @@ async function run(args: string[]): Promise<ChainResult> {
  *  direction encoding) are confirmed against `reppo --help` at integration. */
 export const defaultReppoCli: ReppoCli = {
   lock: (a) => run(['lock', '--duration', String(a.durationSeconds), '--idempotency-key', a.idempotencyKey, String(a.amountReppo)]),
-  // reppo 0.8.0 vote: `--like`/`--dislike` (not `--direction`) + a required `--votes <n>`
-  // weight. We weight by the scorer's conviction (1-10), bounded well within voting power.
-  vote: (a) => run(['vote', '--pod', a.podId, a.direction === 'up' ? '--like' : '--dislike', '--votes', String(a.votes), '--idempotency-key', a.idempotencyKey]),
+  // reppo vote: `--like`/`--dislike` + a required `--votes <weight>` in 18-decimal veREPPO units.
+  // `a.votes` is the already-scaled integer string (conviction × 1e18, computed by the executor);
+  // passing the raw 1-10 conviction here would vote dust (8 wei) and earn 0 voter emissions.
+  vote: (a) => run(['vote', '--pod', a.podId, a.direction === 'up' ? '--like' : '--dislike', '--votes', a.votes, '--idempotency-key', a.idempotencyKey]),
   // --dataset pins to IPFS (needs PINATA_JWT); omitted for url-only mints, where
   // --url alone is the pod content. mint-pod requires one of them — guarded upstream.
   mintPod: (a) => run([
