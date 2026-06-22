@@ -346,7 +346,12 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
           .map((e) => e.podId as string),
       )]
-      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir))
+      // Floor the voter scan at REPPO_EMISSIONS_FLOOR_EPOCH (the epoch the node first existed)
+      // so a first-run deep scan doesn't crawl from epoch 1 and storm the RPC. The active-epoch
+      // gate inside bounds it further to epochs the wallet actually voted in.
+      const floorRaw = Number(process.env.REPPO_EMISSIONS_FLOOR_EPOCH)
+      const floorEpoch = Number.isFinite(floorRaw) && floorRaw > 0 ? floorRaw : undefined
+      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch })
     },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
