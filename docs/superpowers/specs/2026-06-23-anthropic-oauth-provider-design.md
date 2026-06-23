@@ -1,7 +1,16 @@
 # Anthropic subscription OAuth provider (`anthropic-oauth`)
 
 **Date:** 2026-06-23
-**Status:** approved, in implementation
+**Status:** shipped (PR #89) — but the **token-minting approach below is SUPERSEDED**.
+
+> **Superseded:** the hand-rolled PKCE login described in this doc does NOT work —
+> Anthropic rejects the OAuth authorize flow from third-party clients ("Invalid request
+> format") and is phasing out third-party OAuth. The shipped implementation instead mints
+> the token via the first-party `claude setup-token` CLI (see `src/llm/oauth/anthropic/
+> setupToken.ts`), stores `{ access_token }` (long-lived, no refresh), and injects the
+> required Claude Code system block on every request (`makeOAuthFetch` in `model.ts`).
+> Operator steps: **docs/operator-guide.md §3a-bis**. The provider wiring, registry sentinel,
+> resolver seam, and consumption (Bearer + oauth beta) below are accurate as shipped.
 
 ## Goal
 
