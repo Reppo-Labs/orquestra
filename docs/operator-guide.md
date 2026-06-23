@@ -69,6 +69,40 @@ Fill in `.env` (every variable is documented inline). Minimum to start:
 These are the only things you set by hand. **Your strategy is configured in the
 dashboard, not here.**
 
+### 3a-bis. Use a Claude subscription instead of an API key (optional)
+
+You can drive the node's LLM off a Claude Pro/Max subscription (`anthropic-oauth`
+provider) instead of a metered Anthropic API key. The catch: the OAuth token must be
+minted by the **first-party Claude CLI** — Anthropic rejects a hand-rolled OAuth flow,
+and gates the token to Claude-Code-shaped requests. Orquestra handles the request shape;
+you handle the one-time mint.
+
+> **Terms-of-service caveat.** Programmatic use of a *consumer* Claude subscription may
+> violate Anthropic's terms (seat-ban risk), and Anthropic is phasing out third-party
+> OAuth. Use a plan that permits it, or stick with `LLM_KEY_ANTHROPIC`.
+
+1. **Install the `claude` CLI** on a machine you control (it is NOT in the node image):
+   `npm i -g @anthropic-ai/claude-code` (or your usual install), and sign in once.
+2. **Mint the token**, writing it into the node's data dir (the same `./orquestra-data`
+   the container mounts at `/data`). Run on that host — it opens a browser:
+   ```sh
+   ORQUESTRA_DATA_DIR=./orquestra-data node dist/index.js login-anthropic
+   ```
+   This wraps `claude setup-token`, scrapes the long-lived `sk-ant-oat…` token, and
+   writes `./orquestra-data/anthropic-oauth.json` (0600). (`dist/` exists after
+   `npm run build`; or run the equivalent inside any container that has the `claude` CLI.)
+3. **Select the provider** in `.env` and restart:
+   ```sh
+   LLM_PROVIDER=anthropic-oauth
+   ```
+   `docker compose up -d` (or recreate the container). There is **no** env key for this
+   provider — availability comes from the stored token, not a key. The dashboard model
+   picker also lists `anthropic-oauth` once the token is present.
+
+The token is long-lived; if it is ever revoked or expires, re-run step 2 and restart.
+A node set to `anthropic-oauth` with no token logs a startup WARNING and every LLM call
+fails until you log in — it does not fall back to an API key.
+
 ### 3b. Start the node
 
 ```sh
