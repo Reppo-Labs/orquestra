@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import {
   generatePkce,
@@ -69,11 +69,33 @@ describe('exchangeCode', () => {
     expect(tokens).toEqual({ access_token: 'sk-ant-oat01-A', refresh_token: 'sk-ant-ort01-R', expires_at: 1_000_000 + 3600_000 })
   })
 
+  it('rejects a state that does not match expectedState (CSRF guard) before any network call', async () => {
+    const fetchImpl = vi.fn()
+    await expect(
+      exchangeCode({ codeAndState: 'code#ATTACKER', verifier: 'v', expectedState: 'MINE' }, { fetch: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow(/state mismatch/)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
   it('throws when the token endpoint returns a non-ok response', async () => {
     const fetchImpl = async () => ({ ok: false, status: 400, text: async () => 'bad_verifier' } as Response)
     await expect(
       exchangeCode({ codeAndState: 'c#s', verifier: 'v' }, { fetch: fetchImpl as typeof fetch }),
     ).rejects.toThrow(/400/)
+  })
+
+  it('throws when the token response omits expires_in (avoids a NaN expiry → refresh hot-loop)', async () => {
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ access_token: 'A', refresh_token: 'R' }) } as Response)
+    await expect(
+      exchangeCode({ codeAndState: 'c#s', verifier: 'v' }, { fetch: fetchImpl as typeof fetch }),
+    ).rejects.toThrow(/expires_in/)
+  })
+
+  it('throws when the token response omits access_token', async () => {
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ refresh_token: 'R', expires_in: 10 }) } as Response)
+    await expect(
+      exchangeCode({ codeAndState: 'c#s', verifier: 'v' }, { fetch: fetchImpl as typeof fetch }),
+    ).rejects.toThrow(/access_token/)
   })
 })
 

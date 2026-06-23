@@ -13,7 +13,7 @@ export interface LoginDeps {
   // Overridable for tests; default to the real PKCE implementations.
   generatePkce?: () => Pkce
   buildAuthorizeUrl?: (a: { challenge: string; state: string }) => string
-  exchangeCode?: (a: { codeAndState: string; verifier: string }) => Promise<TokenSet>
+  exchangeCode?: (a: { codeAndState: string; verifier: string; expectedState?: string }) => Promise<TokenSet>
 }
 
 /** Drive the login: generate PKCE, show the URL, exchange the pasted code, persist. */
@@ -27,7 +27,8 @@ export async function loginAnthropic(deps: LoginDeps): Promise<void> {
   const pasted = (await deps.prompt(url)).trim()
   if (!pasted) throw new Error('login aborted: no authorization code provided')
 
-  const tokens = await exchangeCode({ codeAndState: pasted, verifier })
+  // expectedState binds the exchange to THIS login's state (CSRF guard).
+  const tokens = await exchangeCode({ codeAndState: pasted, verifier, expectedState: state })
   deps.save(tokens)
-  deps.info?.('Anthropic subscription linked — provider `anthropic-oauth` is now available.')
+  deps.info?.('Anthropic subscription linked. If the node is already running, restart it to pick up `anthropic-oauth`.')
 }

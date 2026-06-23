@@ -75,7 +75,16 @@ async function postToken(body: Record<string, string>, deps: NetDeps): Promise<T
     const detail = await res.text().catch(() => '')
     throw new Error(`anthropic oauth token endpoint ${res.status}: ${detail.slice(0, 200)}`)
   }
-  const j = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number }
+  const j = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number }
+  // Validate the fields we depend on. A missing access_token is unusable; a missing/non-finite
+  // expires_in would make expires_at NaN → fresh() always false → a refresh on EVERY request
+  // (token-endpoint hot loop). Fail the exchange/refresh loudly instead.
+  if (typeof j.access_token !== 'string' || j.access_token === '') {
+    throw new Error('anthropic oauth: token response missing access_token')
+  }
+  if (typeof j.expires_in !== 'number' || !Number.isFinite(j.expires_in)) {
+    throw new Error('anthropic oauth: token response missing a numeric expires_in')
+  }
   return {
     access_token: j.access_token,
     // a refresh may return no new refresh_token — keep the one we sent.
@@ -84,12 +93,17 @@ async function postToken(body: Record<string, string>, deps: NetDeps): Promise<T
   }
 }
 
-/** Exchange the pasted `code#state` for a token set (one-time, at login). */
-export function exchangeCode(
-  { codeAndState, verifier }: { codeAndState: string; verifier: string },
+/** Exchange the pasted `code#state` for a token set (one-time, at login). When
+ *  `expectedState` is given, the state echoed back in the paste must equal it — a CSRF
+ *  guard so a code from an attacker-initiated authorize flow is rejected before exchange. */
+export async function exchangeCode(
+  { codeAndState, verifier, expectedState }: { codeAndState: string; verifier: string; expectedState?: string },
   deps: NetDeps = {},
 ): Promise<TokenSet> {
   const [code, state = ''] = codeAndState.trim().split('#')
+  if (expectedState !== undefined && state !== expectedState) {
+    throw new Error('anthropic oauth: state mismatch — the pasted code is not from this login (possible CSRF); aborting')
+  }
   return postToken(
     {
       grant_type: 'authorization_code',

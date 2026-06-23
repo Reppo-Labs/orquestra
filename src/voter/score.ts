@@ -6,7 +6,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 import type { LlmProvider } from '../llm/model.js'
 import { INJECTION_GUARD, buildRubricBlock } from '../llm/prompt.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
-import { resolveScoringModel } from '../llm/resolveScoringModel.js'
+import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
 import { ingestVideo } from '../llm/videoIngest.js'
 
 const ScoreSchema = z.object({
@@ -58,6 +58,9 @@ export interface ScorerModelCtx {
   defaultModel: string
   /** the datanet's optional { provider, model } override (config.datanets[id].model). */
   policyModel?: { provider: LlmProvider; model: string }
+  /** Model resolver seam — defaults to the plain resolveModel. Threaded so the video
+   *  re-resolution honors the same oauth-aware resolver as the text path. */
+  resolveModel?: ModelResolver
 }
 
 /** LLM-backed scorer. `opts.brief` personalizes scoring with the operator's stance;
@@ -97,7 +100,7 @@ export function createLlmScorer(
         registry: ctx.registry,
         defaultProvider: ctx.defaultProvider,
         defaultModel: ctx.defaultModel,
-      })
+      }, ctx.resolveModel) // undefined ⇒ resolveScoringModel's default (plain resolveModel)
       if ('skip' in resolved) throw new Error(resolved.skip)
       // Ingest (size-branched) → FilePart, build messages, score. A skip reason THROWS so
       // selectVotes' per-pod try/catch records it (fail-closed, never aborts the cycle).

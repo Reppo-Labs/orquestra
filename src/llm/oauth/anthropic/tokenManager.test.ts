@@ -71,6 +71,22 @@ describe('createTokenManager', () => {
     expect(refresh).toHaveBeenCalledOnce()
   })
 
+  it('drops the cache on a failed refresh so the next call re-reads disk (picks up a re-login)', async () => {
+    const refresh = vi.fn()
+      .mockRejectedValueOnce(new Error('invalid_grant')) // revoked refresh_token
+    // disk returns the stale (expired) set first, then a freshly re-logged-in valid set.
+    const load = vi.fn()
+      .mockReturnValueOnce(set({ expires_at: 1_000_000, refresh_token: 'sk-ant-ort01-OLD' }))
+      .mockReturnValueOnce(set({ access_token: 'sk-ant-oat01-RELOGIN', expires_at: 9_000_000 }))
+    const tm = createTokenManager({ load, save: vi.fn(), refresh, now: () => 2_000_000 })
+
+    await expect(tm.getAccessToken()).rejects.toThrow(/invalid_grant/)
+    // cache was cleared on failure → second call re-loads disk and uses the fresh token
+    expect(await tm.getAccessToken()).toBe('sk-ant-oat01-RELOGIN')
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(refresh).toHaveBeenCalledOnce() // the fresh token is valid, no second refresh
+  })
+
   it('reuses the refreshed token on the next call without refreshing again', async () => {
     const refresh = vi.fn(async () => set({ access_token: 'sk-ant-oat01-NEW', expires_at: 9_000_000 }))
     let nowMs = 2_000_000

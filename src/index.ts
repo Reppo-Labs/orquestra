@@ -176,6 +176,13 @@ async function start(): Promise<void> {
   // Non-chat default model (mint/panel/learn/adapters): env default at startup.
   const envDefaultKey = providerKeyRegistry.get(envProvider) ?? ''
   const model = resolve(envProvider, envDefaultKey, envModel)
+  // Fail-fast guidance: anthropic-oauth resolves a model even with no credential (the token is
+  // fetched per request), so without this the node boots clean and fails deep inside the first
+  // cycle. Warn at startup instead. (config.defaultModel can also pick oauth; the env default is
+  // the common case and the one that silently breaks onboarding.)
+  if (envProvider === 'anthropic-oauth' && !hasOAuthCredential(DATA_DIR)) {
+    console.error('orquestra: WARNING — LLM_PROVIDER=anthropic-oauth but no subscription is linked. Run `orquestra login-anthropic` then restart; until then every LLM call fails.')
+  }
   // Per-request node-default CHAT model: re-resolve from the CURRENT config.defaultModel
   // (hot — a dashboard change takes effect with no restart) + the env-only key registry.
   // null when even the effective default has no key (handlers 503). loadConfig is tolerant:

@@ -214,6 +214,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
       const modelCtx: ScorerModelCtx = {
         registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model, policyModel,
+        resolveModel: w.resolveModel ?? resolveModel,
       }
       const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
       scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })

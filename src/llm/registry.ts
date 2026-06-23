@@ -34,7 +34,10 @@ export function buildProviderKeyRegistry(env: Env): Map<LlmProvider, string> {
   const defKey = env.LLM_API_KEY?.trim()
   const defProviderRaw = env.LLM_PROVIDER?.trim() || 'anthropic'
   const defProvider = LlmProviderEnum.safeParse(defProviderRaw)
-  if (defKey && defProvider.success && !reg.has(defProvider.data)) {
+  // Only env-keyed providers are eligible for the back-compat default. anthropic-oauth has
+  // no env key (ENV_BY_PROVIDER lacks it), so LLM_PROVIDER=anthropic-oauth + LLM_API_KEY must
+  // NOT register it here — its availability is decided solely by hasOAuthCredential.
+  if (defKey && defProvider.success && ENV_BY_PROVIDER[defProvider.data] && !reg.has(defProvider.data)) {
     reg.set(defProvider.data, defKey)
   }
   return reg

@@ -17,7 +17,7 @@ describe('loginAnthropic', () => {
 
     expect(buildAuthorizeUrl).toHaveBeenCalledWith({ challenge: 'CHAL', state: 'STATE' })
     expect(prompt).toHaveBeenCalledWith('https://auth?c=CHAL&s=STATE')
-    expect(exchangeCode).toHaveBeenCalledWith({ codeAndState: 'THE_CODE#THE_STATE', verifier: 'VER' })
+    expect(exchangeCode).toHaveBeenCalledWith({ codeAndState: 'THE_CODE#THE_STATE', verifier: 'VER', expectedState: 'STATE' })
     expect(save).toHaveBeenCalledWith(TOKENS)
     expect(info).toHaveBeenCalledOnce()
   })

@@ -3,7 +3,7 @@
 // DATA_DIR, protected by 0600 perms (the wallet key already lives in .env). The
 // token strings (`sk-ant-…`) are redacted by src/util/redact.ts if they ever reach
 // a log line, so this module never logs them itself.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type { TokenSet } from './pkce.js'
 
@@ -34,9 +34,15 @@ export function loadTokenSet(dataDir: string): TokenSet | null {
   }
 }
 
-/** Persist the token set with owner-only (0600) perms. */
+/** Persist the token set with owner-only (0600) perms. Atomic: write a temp file then
+ *  rename over the target, so a crash / kill / ENOSPC mid-write can't leave a torn JSON
+ *  (which loadTokenSet would read as "no credential", silently dropping the subscription).
+ *  Matches the crash-safety the rest of the repo's persisters use (ledger UPSERT, tmp+rename). */
 export function saveTokenSet(dataDir: string, tokens: TokenSet): void {
-  writeFileSync(oauthStorePath(dataDir), JSON.stringify(tokens, null, 2), { mode: 0o600 })
+  const path = oauthStorePath(dataDir)
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, JSON.stringify(tokens, null, 2), { mode: 0o600 })
+  renameSync(tmp, path)
 }
 
 /** True when a usable (non-corrupt) credential exists — drives provider availability. */

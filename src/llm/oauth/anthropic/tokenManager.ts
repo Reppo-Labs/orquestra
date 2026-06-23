@@ -47,6 +47,11 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
         deps.save(next)
         current = next
         return next
+      }).catch((e) => {
+        // Drop the cached set on failure so the NEXT call re-reads disk — picks up an operator
+        // re-login (fresh file) and stops looping a revoked refresh_token held only in memory.
+        current = null
+        throw e
       }).finally(() => { inflight = null })
     }
     const refreshed = await inflight
