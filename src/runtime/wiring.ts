@@ -10,7 +10,7 @@ import type { VoterPod, PodScorer } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
 import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
-import { resolveScoringModel } from '../llm/resolveScoringModel.js'
+import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
 import { effectiveDefault } from '../llm/effectiveDefault.js'
 import { resolveModel } from '../llm/model.js'
 import { detectContentType, isVideoType, isGenericBinaryType } from '../llm/contentType.js'
@@ -108,6 +108,10 @@ export interface CycleWiring {
    *  per-datanet scorer resolves a model from this; an absent key for a datanet's
    *  chosen provider → that datanet's vote is skipped with a recorded reason. */
   providerKeyRegistry: Map<LlmProvider, string>
+  /** Model resolver seam. Defaults to the plain resolveModel; index.ts injects an
+   *  oauth-aware resolver so `anthropic-oauth` (subscription) resolves with a fresh
+   *  Bearer token instead of an env key. */
+  resolveModel?: ModelResolver
   /** Node default provider/model — used when a datanet has no `model` override. */
   defaultProvider: LlmProvider
   defaultModel: string
@@ -148,7 +152,7 @@ function effectiveDefaultModel(w: CycleWiring): LanguageModel | null {
     envProvider: w.defaultProvider,
     envModel: w.defaultModel,
   })
-  return eff.key ? resolveModel(eff.provider, eff.key, eff.model) : null
+  return eff.key ? (w.resolveModel ?? resolveModel)(eff.provider, eff.key, eff.model) : null
 }
 
 /** Build the CycleDeps that runCycle consumes. Everything stateful (dedup, ledger)
@@ -197,7 +201,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     const resolved = resolveScoringModel({
       policyModel, isVideo: false,
       registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model,
-    })
+    }, w.resolveModel ?? resolveModel)
     if ('skip' in resolved) return { skip: resolved.skip }
     // Key by the effective provider:model (isVideo always false in Phase A): identical
     // resolutions yield an identical scorer, so one build serves every such datanet.
@@ -210,6 +214,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
       const modelCtx: ScorerModelCtx = {
         registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model, policyModel,
+        resolveModel: w.resolveModel ?? resolveModel,
       }
       const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
       scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })

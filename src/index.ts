@@ -25,6 +25,11 @@ import { createSportsAdapter } from './adapter/sports/index.js'
 import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
 import { effectiveDefault } from './llm/effectiveDefault.js'
 import { buildProviderKeyRegistry } from './llm/registry.js'
+import { spawn } from 'node:child_process'
+import { loadCredential, saveCredential, hasOAuthCredential } from './llm/oauth/anthropic/store.js'
+import { createTokenManager } from './llm/oauth/anthropic/tokenManager.js'
+import { oauthAwareResolver, OAUTH_KEY_SENTINEL } from './llm/oauth/anthropic/resolver.js'
+import { loginAnthropic } from './llm/oauth/anthropic/login.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
@@ -154,11 +159,26 @@ async function start(): Promise<void> {
   // for the default model (onboarding/strategy chat, mint scorer, panel, learn, adapters).
   // buildProviderKeyRegistry folds the back-compat LLM_PROVIDER/LLM_API_KEY default in.
   const providerKeyRegistry = buildProviderKeyRegistry(process.env)
+  // Subscription OAuth (anthropic-oauth): a stored token set makes the provider AVAILABLE
+  // (a SENTINEL key in the registry — the real credential is a refreshed Bearer token, not an
+  // env key) and resolves its models through a token-manager-backed resolver. `resolve` wraps
+  // resolveModel so every model use (default, chat, vote scorer, mint, learn) can speak oauth;
+  // it is also threaded into the cycle wiring below.
+  const oauthTokens = createTokenManager({ load: () => loadCredential(DATA_DIR) })
+  if (hasOAuthCredential(DATA_DIR)) providerKeyRegistry.set('anthropic-oauth', OAUTH_KEY_SENTINEL)
+  const resolve = oauthAwareResolver(() => oauthTokens.getAccessToken())
   const envProvider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const envModel = DEFAULT_MODEL[envProvider]
   // Non-chat default model (mint/panel/learn/adapters): env default at startup.
   const envDefaultKey = providerKeyRegistry.get(envProvider) ?? ''
-  const model = resolveModel(envProvider, envDefaultKey, envModel)
+  const model = resolve(envProvider, envDefaultKey, envModel)
+  // Fail-fast guidance: anthropic-oauth resolves a model even with no credential (the token is
+  // fetched per request), so without this the node boots clean and fails deep inside the first
+  // cycle. Warn at startup instead. (config.defaultModel can also pick oauth; the env default is
+  // the common case and the one that silently breaks onboarding.)
+  if (envProvider === 'anthropic-oauth' && !hasOAuthCredential(DATA_DIR)) {
+    console.error('orquestra: WARNING — LLM_PROVIDER=anthropic-oauth but no subscription is linked. Run `orquestra login-anthropic` then restart; until then every LLM call fails.')
+  }
   // Per-request node-default CHAT model: re-resolve from the CURRENT config.defaultModel
   // (hot — a dashboard change takes effect with no restart) + the env-only key registry.
   // null when even the effective default has no key (handlers 503). loadConfig is tolerant:
@@ -176,7 +196,7 @@ async function start(): Promise<void> {
       lastFallbackWarned = eff.usedFallback
       console.error(`orquestra: ${eff.usedFallback}`)
     }
-    return eff.key ? resolveModel(eff.provider, eff.key, eff.model) : null
+    return eff.key ? resolve(eff.provider, eff.key, eff.model) : null
   }
 
   // Dashboard FIRST: on a fresh node it hosts the conversational onboarding;
@@ -234,6 +254,7 @@ async function start(): Promise<void> {
     dataDir: DATA_DIR, config,
     model,
     providerKeyRegistry,
+    resolveModel: resolve,
     defaultProvider: envProvider,
     defaultModel: envModel,
     // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
@@ -284,8 +305,38 @@ async function start(): Promise<void> {
   process.once('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
+/** `orquestra login-anthropic` — one-time login that links the operator's Claude subscription
+ *  by minting a token with the first-party `claude setup-token` CLI (a hand-rolled OAuth flow is
+ *  rejected by Anthropic for third-party clients). Persists the token to DATA_DIR for the
+ *  `anthropic-oauth` provider. Requires the `claude` CLI on PATH where this runs. */
+async function loginAnthropicCmd(): Promise<void> {
+  mkdirSync(DATA_DIR, { recursive: true })
+  // `claude setup-token` is interactive (prints a URL, polls the browser auth, then prints the
+  // token). Tee its stdout to the terminal so the operator sees the URL + progress, while we
+  // capture stdout to scrape the token; stdin/stderr are inherited for its own prompts.
+  const execClaude = (cmd: string, args: string[]): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(cmd, args, { stdio: ['inherit', 'pipe', 'inherit'] })
+      let out = ''
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString(); process.stdout.write(d) })
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`claude setup-token exited ${code}`))))
+    })
+  try {
+    await loginAnthropic({
+      exec: execClaude,
+      save: (c) => saveCredential(DATA_DIR, c),
+      info: (m) => console.error(`\n${m}`),
+    })
+    console.error(`orquestra: saved subscription token to ${DATA_DIR}/anthropic-oauth.json — set LLM_PROVIDER=anthropic-oauth (or pick it in the dashboard) to use it.`)
+  } catch (e) {
+    console.error(`orquestra: login-anthropic failed — ${(e as Error).message}`)
+    process.exitCode = 1
+  }
+}
+
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : start
+const run = cmd === 'configure' ? onboard : cmd === 'login-anthropic' ? loginAnthropicCmd : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)

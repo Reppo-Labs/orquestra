@@ -46,4 +46,12 @@ describe('buildProviderKeyRegistry', () => {
   it('empty env → empty registry', () => {
     expect(buildProviderKeyRegistry({}).size).toBe(0)
   })
+
+  it('never registers anthropic-oauth via the back-compat path (availability is hasOAuthCredential, not env)', () => {
+    // anthropic-oauth has no env key; setting it via LLM_PROVIDER/LLM_API_KEY must NOT
+    // back-door it into the registry (else the dashboard advertises it with no token on disk).
+    const r = buildProviderKeyRegistry({ LLM_PROVIDER: 'anthropic-oauth', LLM_API_KEY: 'whatever' })
+    expect(r.has('anthropic-oauth')).toBe(false)
+    expect(r.size).toBe(0)
+  })
 })

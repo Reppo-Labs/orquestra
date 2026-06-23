@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, isTemperatureUnsupportedError, withTemperatureFallback, usepodBaseURL, type LlmProvider } from './model.js'
+import { resolveModel, LlmProviderEnum, DEFAULT_MODEL, KNOWN_MODELS, isTemperatureUnsupportedError, withTemperatureFallback, usepodBaseURL, makeOAuthFetch, OAUTH_BETA, type LlmProvider } from './model.js'
 import type { LanguageModelV1 } from 'ai'
 
-const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals', 'usepod']
+const ALL: LlmProvider[] = ['anthropic', 'openai', 'google', 'surplus', 'virtuals', 'usepod', 'anthropic-oauth']
 
 describe('LlmProviderEnum', () => {
   it('matches the LlmProvider union exactly', () => {
@@ -54,6 +54,79 @@ describe('resolveModel', () => {
 
   it('throws on an unknown provider', () => {
     expect(() => resolveModel('bogus' as LlmProvider, 'k')).toThrow(/unknown LLM provider/)
+  })
+
+  it('resolves anthropic-oauth when a tokenProvider is supplied (apiKey ignored)', () => {
+    const tokenProvider = async () => 'sk-ant-oat01-A'
+    expect(resolveModel('anthropic-oauth', '', undefined, { tokenProvider })).toBeTruthy()
+    expect(resolveModel('anthropic-oauth', '', 'claude-opus-4-7', { tokenProvider })).toBeTruthy()
+  })
+
+  it('throws for anthropic-oauth without a tokenProvider (no static key path)', () => {
+    expect(() => resolveModel('anthropic-oauth', '')).toThrow(/tokenProvider/)
+  })
+})
+
+describe('makeOAuthFetch', () => {
+  it('strips x-api-key and injects a fresh Bearer + oauth beta on every call', async () => {
+    let token = 'sk-ant-oat01-FIRST'
+    const seen: Array<Record<string, string>> = []
+    const base = (async (_url: string | URL, init?: RequestInit) => {
+      const h = new Headers(init?.headers)
+      seen.push(Object.fromEntries(h.entries()))
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const f = makeOAuthFetch(async () => token, base)
+
+    await f('https://api.anthropic.com/v1/messages', { headers: { 'x-api-key': 'LEAK', 'content-type': 'application/json' } })
+    token = 'sk-ant-oat01-SECOND'
+    await f('https://api.anthropic.com/v1/messages', { headers: { 'x-api-key': 'LEAK' } })
+
+    expect(seen[0]['x-api-key']).toBeUndefined()
+    expect(seen[0]['authorization']).toBe('Bearer sk-ant-oat01-FIRST')
+    expect(seen[0]['anthropic-beta']).toContain(OAUTH_BETA)
+    expect(seen[0]['content-type']).toBe('application/json') // unrelated headers preserved
+    expect(seen[1]['authorization']).toBe('Bearer sk-ant-oat01-SECOND') // token re-fetched per call
+  })
+
+  it('injects the Claude Code system preamble as the first system block (token requires it)', async () => {
+    let sentBody: Record<string, unknown> | undefined
+    const base = (async (_url: string | URL, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body))
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const f = makeOAuthFetch(async () => 'tok', base)
+
+    await f('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-opus-4-7', system: 'score per rubric', messages: [{ role: 'user', content: 'go' }] }),
+    })
+
+    const system = sentBody?.system as Array<{ type: string; text: string }>
+    expect(Array.isArray(system)).toBe(true)
+    expect(system[0]).toEqual({ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." })
+    expect(system[1]).toEqual({ type: 'text', text: 'score per rubric' })
+  })
+
+  it('does not rewrite a non-Messages body (no messages array)', async () => {
+    let sentBody: string | undefined
+    const base = (async (_url: string | URL, init?: RequestInit) => { sentBody = String(init?.body); return new Response('{}', { status: 200 }) }) as typeof fetch
+    const f = makeOAuthFetch(async () => 'tok', base)
+    await f('https://api.anthropic.com/v1/other', { method: 'POST', body: JSON.stringify({ foo: 1 }) })
+    expect(JSON.parse(sentBody!)).toEqual({ foo: 1 })
+  })
+
+  it('appends the oauth beta to an existing anthropic-beta rather than clobbering it', async () => {
+    let captured: Headers | undefined
+    const base = (async (_url: string | URL, init?: RequestInit) => {
+      captured = new Headers(init?.headers)
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const f = makeOAuthFetch(async () => 'tok', base)
+    await f('https://api.anthropic.com/v1/messages', { headers: { 'anthropic-beta': 'prompt-caching-2024-07-31' } })
+    expect(captured?.get('anthropic-beta')).toContain('prompt-caching-2024-07-31')
+    expect(captured?.get('anthropic-beta')).toContain(OAUTH_BETA)
   })
 })
 

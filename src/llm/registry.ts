@@ -6,7 +6,9 @@
 // just those keeps working).
 import { LlmProviderEnum, type LlmProvider } from './model.js'
 
-const ENV_BY_PROVIDER: Record<LlmProvider, string> = {
+// Partial: `anthropic-oauth` has NO env key — its credential is a stored token set in
+// DATA_DIR, and its availability is decided by hasOAuthCredential, not this registry.
+const ENV_BY_PROVIDER: Partial<Record<LlmProvider, string>> = {
   anthropic: 'LLM_KEY_ANTHROPIC',
   openai: 'LLM_KEY_OPENAI',
   google: 'LLM_KEY_GOOGLE',
@@ -22,7 +24,9 @@ export function buildProviderKeyRegistry(env: Env): Map<LlmProvider, string> {
   const reg = new Map<LlmProvider, string>()
   // 1) per-provider explicit keys (authoritative).
   for (const provider of LlmProviderEnum.options) {
-    const v = env[ENV_BY_PROVIDER[provider]]?.trim()
+    const envName = ENV_BY_PROVIDER[provider]
+    if (!envName) continue // e.g. anthropic-oauth: not env-keyed
+    const v = env[envName]?.trim()
     if (v) reg.set(provider, v)
   }
   // 2) back-compat default: LLM_PROVIDER + LLM_API_KEY → that provider, only if it has
@@ -30,7 +34,10 @@ export function buildProviderKeyRegistry(env: Env): Map<LlmProvider, string> {
   const defKey = env.LLM_API_KEY?.trim()
   const defProviderRaw = env.LLM_PROVIDER?.trim() || 'anthropic'
   const defProvider = LlmProviderEnum.safeParse(defProviderRaw)
-  if (defKey && defProvider.success && !reg.has(defProvider.data)) {
+  // Only env-keyed providers are eligible for the back-compat default. anthropic-oauth has
+  // no env key (ENV_BY_PROVIDER lacks it), so LLM_PROVIDER=anthropic-oauth + LLM_API_KEY must
+  // NOT register it here — its availability is decided solely by hasOAuthCredential.
+  if (defKey && defProvider.success && ENV_BY_PROVIDER[defProvider.data] && !reg.has(defProvider.data)) {
     reg.set(defProvider.data, defKey)
   }
   return reg
