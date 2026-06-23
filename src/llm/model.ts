@@ -147,7 +147,7 @@ export function withTemperatureFallback(model: LanguageModel): LanguageModel {
 export const DEFAULT_MODEL: Record<LlmProvider, string> = {
   anthropic: 'claude-opus-4-7',
   openai: 'gpt-5.2',
-  google: 'gemini-3-pro',
+  google: 'gemini-3.1-pro-preview',
   surplus: 'claude-opus-4.8',
   virtuals: 'claude-opus-4-8',
   usepod: 'deepseek-v3.2',
@@ -166,7 +166,7 @@ export const LlmProviderEnum = z.enum(['anthropic', 'openai', 'google', 'surplus
 export const KNOWN_MODELS: Record<LlmProvider, string[]> = {
   anthropic: ['claude-opus-4-7', 'claude-sonnet-4-5'],
   openai: ['gpt-5.2', 'gpt-5.2-mini'],
-  google: ['gemini-3-pro', 'gemini-3-flash'],
+  google: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
   surplus: ['claude-opus-4.8'],
   virtuals: ['claude-opus-4-8', 'gemini-3-flash-preview'],
   usepod: ['deepseek-v3.2', 'qwen-3.5', 'llama-4', 'mistral', 'glm-5.1'],

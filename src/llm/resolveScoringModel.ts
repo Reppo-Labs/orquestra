@@ -8,7 +8,7 @@ import { resolveModel, type LlmProvider } from './model.js'
 
 /** Native video (motion + audio) only works via @ai-sdk/google. See spec §"Model-capability finding". */
 export const VIDEO_DEFAULT_PROVIDER: LlmProvider = 'google'
-export const VIDEO_DEFAULT_MODEL = 'gemini-3-pro'
+export const VIDEO_DEFAULT_MODEL = 'gemini-3.1-pro-preview'
 
 export interface ResolveScoringInput {
   /** The datanet's explicit override (config.datanets[id].model), if any. */

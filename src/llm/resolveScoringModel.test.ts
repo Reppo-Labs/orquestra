@@ -37,7 +37,7 @@ describe('resolveScoringModel', () => {
     const r = resolveScoringModel({ policyModel: undefined, isVideo: true, registry: reg(['google', 'g'], ['virtuals', 'v']), ...base })
     expect('model' in r).toBe(true)
     expect(VIDEO_DEFAULT_PROVIDER).toBe('google')
-    expect(VIDEO_DEFAULT_MODEL).toBe('gemini-3-pro')
+    expect(VIDEO_DEFAULT_MODEL).toBe('gemini-3.1-pro-preview')
   })
 
   it('2) no policy + video + NO google key → skip', () => {
