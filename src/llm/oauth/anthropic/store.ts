@@ -1,11 +1,16 @@
-// src/llm/oauth/anthropic/store.ts — persist the Anthropic OAuth token set to the
-// data volume. Same trust boundary as the budget ledger: a plaintext file in
-// DATA_DIR, protected by 0600 perms (the wallet key already lives in .env). The
-// token strings (`sk-ant-…`) are redacted by src/util/redact.ts if they ever reach
-// a log line, so this module never logs them itself.
+// src/llm/oauth/anthropic/store.ts — persist the Anthropic subscription OAuth token to the
+// data volume. The token is minted by the first-party `claude setup-token` CLI (see
+// setupToken.ts) and is long-lived, so we store just the token — no refresh_token/expiry.
+// Same trust boundary as the budget ledger: a plaintext file in DATA_DIR, 0600 perms (the
+// wallet key already lives in .env). The token (`sk-ant-oat…`) is redacted by
+// src/util/redact.ts if it ever reaches a log line, so this module never logs it.
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import type { TokenSet } from './pkce.js'
+
+/** The persisted credential: a long-lived `sk-ant-oat…` subscription token. */
+export interface OAuthCredential {
+  access_token: string
+}
 
 const FILE = 'anthropic-oauth.json'
 
@@ -14,38 +19,34 @@ export function oauthStorePath(dataDir: string): string {
   return join(dataDir, FILE)
 }
 
-function isTokenSet(v: unknown): v is TokenSet {
+function isCredential(v: unknown): v is OAuthCredential {
   const o = v as Record<string, unknown> | null
-  return !!o &&
-    typeof o.access_token === 'string' && o.access_token !== '' &&
-    typeof o.refresh_token === 'string' && o.refresh_token !== '' &&
-    typeof o.expires_at === 'number'
+  return !!o && typeof o.access_token === 'string' && o.access_token !== ''
 }
 
-/** Load the persisted token set; null if absent, corrupt, or incomplete. */
-export function loadTokenSet(dataDir: string): TokenSet | null {
+/** Load the persisted credential; null if absent, corrupt, or incomplete. */
+export function loadCredential(dataDir: string): OAuthCredential | null {
   const path = oauthStorePath(dataDir)
   if (!existsSync(path)) return null
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8'))
-    return isTokenSet(parsed) ? parsed : null
+    return isCredential(parsed) ? { access_token: parsed.access_token } : null
   } catch {
     return null
   }
 }
 
-/** Persist the token set with owner-only (0600) perms. Atomic: write a temp file then
+/** Persist the credential with owner-only (0600) perms. Atomic: write a temp file then
  *  rename over the target, so a crash / kill / ENOSPC mid-write can't leave a torn JSON
- *  (which loadTokenSet would read as "no credential", silently dropping the subscription).
- *  Matches the crash-safety the rest of the repo's persisters use (ledger UPSERT, tmp+rename). */
-export function saveTokenSet(dataDir: string, tokens: TokenSet): void {
+ *  (which loadCredential would read as "no credential", silently dropping the subscription). */
+export function saveCredential(dataDir: string, cred: OAuthCredential): void {
   const path = oauthStorePath(dataDir)
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(tokens, null, 2), { mode: 0o600 })
+  writeFileSync(tmp, JSON.stringify(cred, null, 2), { mode: 0o600 })
   renameSync(tmp, path)
 }
 
 /** True when a usable (non-corrupt) credential exists — drives provider availability. */
 export function hasOAuthCredential(dataDir: string): boolean {
-  return loadTokenSet(dataDir) !== null
+  return loadCredential(dataDir) !== null
 }

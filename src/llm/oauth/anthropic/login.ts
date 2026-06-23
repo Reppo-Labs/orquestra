@@ -1,34 +1,22 @@
-// src/llm/oauth/anthropic/login.ts — one-time interactive PKCE login orchestration.
-// Pure control flow over injected steps so it is unit-tested without a browser, the
-// network, or the filesystem. index.ts wires the real pkce/store/prompter deps.
-import { generatePkce as realGeneratePkce, buildAuthorizeUrl as realBuildAuthorizeUrl, exchangeCode as realExchangeCode, type TokenSet, type Pkce } from './pkce.js'
+// src/llm/oauth/anthropic/login.ts — one-time interactive login that links the operator's
+// Claude subscription by minting a token via the first-party `claude setup-token` CLI (see
+// setupToken.ts — a hand-rolled OAuth flow is rejected by Anthropic for third-party clients).
+// Pure control flow over injected steps so it is unit-tested without the CLI or the filesystem.
+import { runSetupToken, type Exec } from './setupToken.js'
+import type { OAuthCredential } from './store.js'
 
 export interface LoginDeps {
-  /** Persist the resulting token set (store.saveTokenSet bound to the data dir). */
-  save: (tokens: TokenSet) => void
-  /** Show the authorize URL + paste instructions; resolve to the pasted `code#state`. */
-  prompt: (authorizeUrl: string) => Promise<string>
-  /** Optional success line. */
+  /** Run a command and resolve its stdout (index.ts wires `claude setup-token` via spawn). */
+  exec: Exec
+  /** Persist the minted credential (store.saveCredential bound to the data dir). */
+  save: (cred: OAuthCredential) => void
+  /** Optional progress/success line. */
   info?: (message: string) => void
-  // Overridable for tests; default to the real PKCE implementations.
-  generatePkce?: () => Pkce
-  buildAuthorizeUrl?: (a: { challenge: string; state: string }) => string
-  exchangeCode?: (a: { codeAndState: string; verifier: string; expectedState?: string }) => Promise<TokenSet>
 }
 
-/** Drive the login: generate PKCE, show the URL, exchange the pasted code, persist. */
+/** Mint a subscription token with `claude setup-token` and persist it. */
 export async function loginAnthropic(deps: LoginDeps): Promise<void> {
-  const generatePkce = deps.generatePkce ?? realGeneratePkce
-  const buildAuthorizeUrl = deps.buildAuthorizeUrl ?? realBuildAuthorizeUrl
-  const exchangeCode = deps.exchangeCode ?? realExchangeCode
-
-  const { verifier, challenge, state } = generatePkce()
-  const url = buildAuthorizeUrl({ challenge, state })
-  const pasted = (await deps.prompt(url)).trim()
-  if (!pasted) throw new Error('login aborted: no authorization code provided')
-
-  // expectedState binds the exchange to THIS login's state (CSRF guard).
-  const tokens = await exchangeCode({ codeAndState: pasted, verifier, expectedState: state })
-  deps.save(tokens)
+  const token = await runSetupToken(deps.exec)
+  deps.save({ access_token: token })
   deps.info?.('Anthropic subscription linked. If the node is already running, restart it to pick up `anthropic-oauth`.')
 }

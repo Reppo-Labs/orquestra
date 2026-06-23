@@ -25,8 +25,8 @@ import { createSportsAdapter } from './adapter/sports/index.js'
 import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
 import { effectiveDefault } from './llm/effectiveDefault.js'
 import { buildProviderKeyRegistry } from './llm/registry.js'
-import { loadTokenSet, saveTokenSet, hasOAuthCredential } from './llm/oauth/anthropic/store.js'
-import { refresh as refreshOAuth } from './llm/oauth/anthropic/pkce.js'
+import { spawn } from 'node:child_process'
+import { loadCredential, saveCredential, hasOAuthCredential } from './llm/oauth/anthropic/store.js'
 import { createTokenManager } from './llm/oauth/anthropic/tokenManager.js'
 import { oauthAwareResolver, OAUTH_KEY_SENTINEL } from './llm/oauth/anthropic/resolver.js'
 import { loginAnthropic } from './llm/oauth/anthropic/login.js'
@@ -164,11 +164,7 @@ async function start(): Promise<void> {
   // env key) and resolves its models through a token-manager-backed resolver. `resolve` wraps
   // resolveModel so every model use (default, chat, vote scorer, mint, learn) can speak oauth;
   // it is also threaded into the cycle wiring below.
-  const oauthTokens = createTokenManager({
-    load: () => loadTokenSet(DATA_DIR),
-    save: (t) => saveTokenSet(DATA_DIR, t),
-    refresh: (rt) => refreshOAuth(rt),
-  })
+  const oauthTokens = createTokenManager({ load: () => loadCredential(DATA_DIR) })
   if (hasOAuthCredential(DATA_DIR)) providerKeyRegistry.set('anthropic-oauth', OAUTH_KEY_SENTINEL)
   const resolve = oauthAwareResolver(() => oauthTokens.getAccessToken())
   const envProvider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
@@ -309,25 +305,33 @@ async function start(): Promise<void> {
   process.once('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
-/** `orquestra login-anthropic` — one-time interactive PKCE login that links the operator's
- *  Claude subscription, persisting the token set to DATA_DIR for the `anthropic-oauth` provider. */
+/** `orquestra login-anthropic` — one-time login that links the operator's Claude subscription
+ *  by minting a token with the first-party `claude setup-token` CLI (a hand-rolled OAuth flow is
+ *  rejected by Anthropic for third-party clients). Persists the token to DATA_DIR for the
+ *  `anthropic-oauth` provider. Requires the `claude` CLI on PATH where this runs. */
 async function loginAnthropicCmd(): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true })
-  const p = terminalPrompter()
+  // `claude setup-token` is interactive (prints a URL, polls the browser auth, then prints the
+  // token). Tee its stdout to the terminal so the operator sees the URL + progress, while we
+  // capture stdout to scrape the token; stdin/stderr are inherited for its own prompts.
+  const execClaude = (cmd: string, args: string[]): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(cmd, args, { stdio: ['inherit', 'pipe', 'inherit'] })
+      let out = ''
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString(); process.stdout.write(d) })
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`claude setup-token exited ${code}`))))
+    })
   try {
     await loginAnthropic({
-      save: (t) => saveTokenSet(DATA_DIR, t),
-      prompt: async (url) => {
-        p.info('\nLink your Claude subscription to this node:')
-        p.info(`\n  1. Open this URL and approve access:\n     ${url}`)
-        p.info('  2. Copy the authorization code shown after approving (it looks like `<code>#<state>`).')
-        return p.ask('\n  3. Paste the code here:')
-      },
-      info: (m) => p.info(`\n${m}`),
+      exec: execClaude,
+      save: (c) => saveCredential(DATA_DIR, c),
+      info: (m) => console.error(`\n${m}`),
     })
-    p.info(`Saved to ${DATA_DIR}/anthropic-oauth.json — set LLM_PROVIDER=anthropic-oauth (or pick it in the dashboard) to use it.`)
-  } finally {
-    p.close()
+    console.error(`orquestra: saved subscription token to ${DATA_DIR}/anthropic-oauth.json — set LLM_PROVIDER=anthropic-oauth (or pick it in the dashboard) to use it.`)
+  } catch (e) {
+    console.error(`orquestra: login-anthropic failed — ${(e as Error).message}`)
+    process.exitCode = 1
   }
 }
 

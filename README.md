@@ -86,11 +86,13 @@ Headless/CI with no dashboard? Run the terminal onboarding fallback:
 It produces a strategy like
 [docs/examples/strategy.config.example.json](docs/examples/strategy.config.example.json).
 
-Want to use a Claude Pro/Max subscription instead of a metered Anthropic API key? Run the
-one-time login (interactive PKCE — opens a URL, you paste back the code):
-`docker run -it --rm --env-file .env -v "$PWD/orquestra-data:/data" orquestra:latest login-anthropic`,
-then set `LLM_PROVIDER=anthropic-oauth`. Note: programmatic use of a consumer subscription may
-violate Anthropic's terms (seat-ban risk) — see `.env.example`.
+Want to use a Claude Pro/Max subscription instead of a metered Anthropic API key? The token
+must be minted by the first-party Claude CLI (Anthropic rejects a hand-rolled OAuth flow). On a
+host that has the `claude` CLI, run the one-time login pointed at the same data dir:
+`ORQUESTRA_DATA_DIR=./orquestra-data orquestra login-anthropic` (wraps `claude setup-token` —
+opens a browser, stores the token in `./orquestra-data/anthropic-oauth.json`). Then set
+`LLM_PROVIDER=anthropic-oauth` and restart the node. Note: programmatic use of a consumer
+subscription may violate Anthropic's terms (seat-ban risk) — see `.env.example`.
 
 ## Develop
 
