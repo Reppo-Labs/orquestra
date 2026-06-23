@@ -39,7 +39,7 @@ export interface LessonRow {
   active: 0 | 1
 }
 
-export type ProposalField = 'strictness'
+export type ProposalField = 'strictness' | 'vote_enable'
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'stale'
 export interface ProposalRow {
   id: number
