@@ -25,6 +25,11 @@ import { createSportsAdapter } from './adapter/sports/index.js'
 import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
 import { effectiveDefault } from './llm/effectiveDefault.js'
 import { buildProviderKeyRegistry } from './llm/registry.js'
+import { loadTokenSet, saveTokenSet, hasOAuthCredential } from './llm/oauth/anthropic/store.js'
+import { refresh as refreshOAuth } from './llm/oauth/anthropic/pkce.js'
+import { createTokenManager } from './llm/oauth/anthropic/tokenManager.js'
+import { oauthAwareResolver, OAUTH_KEY_SENTINEL } from './llm/oauth/anthropic/resolver.js'
+import { loginAnthropic } from './llm/oauth/anthropic/login.js'
 import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
@@ -154,11 +159,23 @@ async function start(): Promise<void> {
   // for the default model (onboarding/strategy chat, mint scorer, panel, learn, adapters).
   // buildProviderKeyRegistry folds the back-compat LLM_PROVIDER/LLM_API_KEY default in.
   const providerKeyRegistry = buildProviderKeyRegistry(process.env)
+  // Subscription OAuth (anthropic-oauth): a stored token set makes the provider AVAILABLE
+  // (a SENTINEL key in the registry — the real credential is a refreshed Bearer token, not an
+  // env key) and resolves its models through a token-manager-backed resolver. `resolve` wraps
+  // resolveModel so every model use (default, chat, vote scorer, mint, learn) can speak oauth;
+  // it is also threaded into the cycle wiring below.
+  const oauthTokens = createTokenManager({
+    load: () => loadTokenSet(DATA_DIR),
+    save: (t) => saveTokenSet(DATA_DIR, t),
+    refresh: (rt) => refreshOAuth(rt),
+  })
+  if (hasOAuthCredential(DATA_DIR)) providerKeyRegistry.set('anthropic-oauth', OAUTH_KEY_SENTINEL)
+  const resolve = oauthAwareResolver(() => oauthTokens.getAccessToken())
   const envProvider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const envModel = DEFAULT_MODEL[envProvider]
   // Non-chat default model (mint/panel/learn/adapters): env default at startup.
   const envDefaultKey = providerKeyRegistry.get(envProvider) ?? ''
-  const model = resolveModel(envProvider, envDefaultKey, envModel)
+  const model = resolve(envProvider, envDefaultKey, envModel)
   // Per-request node-default CHAT model: re-resolve from the CURRENT config.defaultModel
   // (hot — a dashboard change takes effect with no restart) + the env-only key registry.
   // null when even the effective default has no key (handlers 503). loadConfig is tolerant:
@@ -176,7 +193,7 @@ async function start(): Promise<void> {
       lastFallbackWarned = eff.usedFallback
       console.error(`orquestra: ${eff.usedFallback}`)
     }
-    return eff.key ? resolveModel(eff.provider, eff.key, eff.model) : null
+    return eff.key ? resolve(eff.provider, eff.key, eff.model) : null
   }
 
   // Dashboard FIRST: on a fresh node it hosts the conversational onboarding;
@@ -234,6 +251,7 @@ async function start(): Promise<void> {
     dataDir: DATA_DIR, config,
     model,
     providerKeyRegistry,
+    resolveModel: resolve,
     defaultProvider: envProvider,
     defaultModel: envModel,
     // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
@@ -284,8 +302,30 @@ async function start(): Promise<void> {
   process.once('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
+/** `orquestra login-anthropic` — one-time interactive PKCE login that links the operator's
+ *  Claude subscription, persisting the token set to DATA_DIR for the `anthropic-oauth` provider. */
+async function loginAnthropicCmd(): Promise<void> {
+  mkdirSync(DATA_DIR, { recursive: true })
+  const p = terminalPrompter()
+  try {
+    await loginAnthropic({
+      save: (t) => saveTokenSet(DATA_DIR, t),
+      prompt: async (url) => {
+        p.info('\nLink your Claude subscription to this node:')
+        p.info(`\n  1. Open this URL and approve access:\n     ${url}`)
+        p.info('  2. Copy the authorization code shown after approving (it looks like `<code>#<state>`).')
+        return p.ask('\n  3. Paste the code here:')
+      },
+      info: (m) => p.info(`\n${m}`),
+    })
+    p.info(`Saved to ${DATA_DIR}/anthropic-oauth.json — set LLM_PROVIDER=anthropic-oauth (or pick it in the dashboard) to use it.`)
+  } finally {
+    p.close()
+  }
+}
+
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : start
+const run = cmd === 'configure' ? onboard : cmd === 'login-anthropic' ? loginAnthropicCmd : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)

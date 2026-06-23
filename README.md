@@ -86,6 +86,12 @@ Headless/CI with no dashboard? Run the terminal onboarding fallback:
 It produces a strategy like
 [docs/examples/strategy.config.example.json](docs/examples/strategy.config.example.json).
 
+Want to use a Claude Pro/Max subscription instead of a metered Anthropic API key? Run the
+one-time login (interactive PKCE — opens a URL, you paste back the code):
+`docker run -it --rm --env-file .env -v "$PWD/orquestra-data:/data" orquestra:latest login-anthropic`,
+then set `LLM_PROVIDER=anthropic-oauth`. Note: programmatic use of a consumer subscription may
+violate Anthropic's terms (seat-ban risk) — see `.env.example`.
+
 ## Develop
 
 - `npm install`
