@@ -53,6 +53,37 @@ function importLegacyConfig(d: SqliteDb, dataDir: string): void {
   renameSync(path, path + '.imported')
 }
 
+/** File-canonical reconcile (declarative deploy, `CONFIG_SOURCE=file`). Unlike the one-time
+ *  legacy import (which renames the file after first read), this re-applies `strategy.config.json`
+ *  into the `config` row on EVERY call, leaving the file in place — so a redeployed K8s ConfigMap
+ *  takes effect on the next pod boot. Validates BEFORE writing: a malformed file throws
+ *  ConfigInvalidError (fail fast at boot) and persists nothing. No file → no-op (`reconciled:false`),
+ *  preserving any existing row. Returns whether a file was applied. */
+export function reconcileConfigFile(dataDir: string): { reconciled: boolean } {
+  // File-canonical mode OWNS strategy.config.json — suppress the one-time legacy importer
+  // (which would rename the file away and break re-apply on the next boot) for this dir.
+  configImported.add(dataDir)
+  const path = join(dataDir, CONFIG_FILENAME)
+  if (!existsSync(path)) return { reconciled: false }
+  const raw = readFileSync(path, 'utf-8')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (e) {
+    throw new ConfigInvalidError(`strategy config is not valid JSON: ${(e as Error).message}`)
+  }
+  warnIfRetiredGrantCap(parsed)
+  const result = StrategyConfigSchema.safeParse(parsed)
+  if (!result.success) {
+    throw new ConfigInvalidError(`strategy config failed validation:\n${result.error.toString()}`)
+  }
+  // Store the raw text (parity with the import path — validation happens on read too).
+  getDb(dataDir)
+    .prepare('INSERT INTO config (id, data, updatedTs) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedTs = excluded.updatedTs')
+    .run(raw, new Date().toISOString())
+  return { reconciled: true }
+}
+
 /** Raw config JSON text from the `config` row, or null when unset (first run). */
 export function readConfigText(dataDir: string): string | null {
   const row = conn(dataDir).prepare('SELECT data FROM config WHERE id = 1').get() as { data: string } | undefined

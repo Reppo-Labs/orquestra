@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadConfig, ConfigNotFoundError, ConfigInvalidError, resetWarnedGrantReppoMax } from './load.js'
+import { loadConfig, reconcileConfigFile, readConfigText, writeConfig, ConfigNotFoundError, ConfigInvalidError, resetWarnedGrantReppoMax } from './load.js'
+import { existsSync } from 'node:fs'
 
 let dir: string
 const writeCfg = (obj: unknown) => writeFileSync(join(dir, 'strategy.config.json'), JSON.stringify(obj))
@@ -58,5 +59,39 @@ describe('loadConfig', () => {
     loadConfig(dir)
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
+  })
+})
+
+describe('reconcileConfigFile (file-canonical mode)', () => {
+  it('upserts the config row from strategy.config.json WITHOUT renaming the file', () => {
+    writeCfg(goodCfg({ horizonDays: 30 }))
+    const r = reconcileConfigFile(dir)
+    expect(r.reconciled).toBe(true)
+    expect(existsSync(join(dir, 'strategy.config.json'))).toBe(true) // not renamed → re-applies next boot
+    expect(loadConfig(dir).horizonDays).toBe(30)
+  })
+
+  it('re-applies an updated file on a subsequent boot (overwrites the existing row)', () => {
+    writeCfg(goodCfg({ horizonDays: 30 }))
+    reconcileConfigFile(dir)
+    // operator edits the mounted file + the pod restarts:
+    writeCfg(goodCfg({ horizonDays: 90 }))
+    const r = reconcileConfigFile(dir)
+    expect(r.reconciled).toBe(true)
+    expect(loadConfig(dir).horizonDays).toBe(90)
+  })
+
+  it('throws ConfigInvalidError on a malformed file (fail fast at boot, no partial write)', () => {
+    writeCfg({ horizonDays: -1 })
+    expect(() => reconcileConfigFile(dir)).toThrow(ConfigInvalidError)
+    expect(readConfigText(dir)).toBeNull() // nothing persisted
+  })
+
+  it('is a no-op (reconciled:false) when no file is present', () => {
+    // a row may already exist from a prior import; reconcile must not wipe it.
+    writeConfig(dir, goodCfg({ horizonDays: 45 }) as never)
+    const r = reconcileConfigFile(dir)
+    expect(r.reconciled).toBe(false)
+    expect(loadConfig(dir).horizonDays).toBe(45)
   })
 })

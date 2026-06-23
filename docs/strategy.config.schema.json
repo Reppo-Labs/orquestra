@@ -1,0 +1,202 @@
+{
+  "$ref": "#/definitions/StrategyConfig",
+  "definitions": {
+    "StrategyConfig": {
+      "type": "object",
+      "properties": {
+        "horizonDays": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "cadenceHours": {
+          "type": "number",
+          "minimum": 0.1
+        },
+        "stake": {
+          "type": "object",
+          "properties": {
+            "lockReppo": {
+              "type": "number",
+              "minimum": 0
+            },
+            "lockDurationDays": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            }
+          },
+          "required": [
+            "lockReppo",
+            "lockDurationDays"
+          ],
+          "additionalProperties": false
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "voteRateMaxPerCycle": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "mintReppoMax": {
+              "type": "number",
+              "minimum": 0
+            },
+            "voteGasEthMax": {
+              "type": "number",
+              "minimum": 0,
+              "default": 1
+            },
+            "mintGasEthMax": {
+              "type": "number",
+              "minimum": 0,
+              "default": 1
+            },
+            "claimGasEthMax": {
+              "type": "number",
+              "minimum": 0,
+              "default": 1
+            }
+          },
+          "required": [
+            "voteRateMaxPerCycle",
+            "mintReppoMax"
+          ],
+          "additionalProperties": false
+        },
+        "claimEmissions": {
+          "type": "boolean",
+          "default": true
+        },
+        "deliberation": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "votePanel": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "enabled": true,
+            "votePanel": true
+          }
+        },
+        "datanets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "vote": {
+                "type": "boolean",
+                "default": false
+              },
+              "mint": {
+                "type": "boolean",
+                "default": false
+              },
+              "strictness": {
+                "type": "string",
+                "enum": [
+                  "conservative",
+                  "balanced",
+                  "aggressive"
+                ],
+                "default": "balanced"
+              },
+              "adapter": {
+                "type": "string"
+              },
+              "adapterParams": {
+                "type": "object",
+                "additionalProperties": {}
+              },
+              "mintMode": {
+                "type": "string",
+                "enum": [
+                  "pin",
+                  "url-only"
+                ],
+                "default": "pin"
+              },
+              "model": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "anthropic",
+                      "openai",
+                      "google",
+                      "surplus",
+                      "virtuals",
+                      "usepod",
+                      "anthropic-oauth"
+                    ]
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "provider",
+                  "model"
+                ],
+                "additionalProperties": false
+              },
+              "voteShare": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "default": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "defaultModel": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "anthropic",
+                "openai",
+                "google",
+                "surplus",
+                "virtuals",
+                "usepod",
+                "anthropic-oauth"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "provider",
+            "model"
+          ],
+          "additionalProperties": false
+        },
+        "notes": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "horizonDays",
+        "cadenceHours",
+        "stake",
+        "budget",
+        "datanets"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
