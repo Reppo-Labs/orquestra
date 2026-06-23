@@ -89,6 +89,34 @@ describe('makeOAuthFetch', () => {
     expect(seen[1]['authorization']).toBe('Bearer sk-ant-oat01-SECOND') // token re-fetched per call
   })
 
+  it('injects the Claude Code system preamble as the first system block (token requires it)', async () => {
+    let sentBody: Record<string, unknown> | undefined
+    const base = (async (_url: string | URL, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body))
+      return new Response('{}', { status: 200 })
+    }) as typeof fetch
+    const f = makeOAuthFetch(async () => 'tok', base)
+
+    await f('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-opus-4-7', system: 'score per rubric', messages: [{ role: 'user', content: 'go' }] }),
+    })
+
+    const system = sentBody?.system as Array<{ type: string; text: string }>
+    expect(Array.isArray(system)).toBe(true)
+    expect(system[0]).toEqual({ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." })
+    expect(system[1]).toEqual({ type: 'text', text: 'score per rubric' })
+  })
+
+  it('does not rewrite a non-Messages body (no messages array)', async () => {
+    let sentBody: string | undefined
+    const base = (async (_url: string | URL, init?: RequestInit) => { sentBody = String(init?.body); return new Response('{}', { status: 200 }) }) as typeof fetch
+    const f = makeOAuthFetch(async () => 'tok', base)
+    await f('https://api.anthropic.com/v1/other', { method: 'POST', body: JSON.stringify({ foo: 1 }) })
+    expect(JSON.parse(sentBody!)).toEqual({ foo: 1 })
+  })
+
   it('appends the oauth beta to an existing anthropic-beta rather than clobbering it', async () => {
     let captured: Headers | undefined
     const base = (async (_url: string | URL, init?: RequestInit) => {

@@ -11,10 +11,32 @@ export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtu
  *  Messages API. Sent on every anthropic-oauth request alongside `Authorization: Bearer`. */
 export const OAUTH_BETA = 'oauth-2025-04-20'
 
+/** REQUIRED first system block for subscription OAuth tokens. Anthropic gates these tokens to
+ *  Claude-Code-shaped requests: without this exact preamble as the first system block the API
+ *  returns 429 "Error". (The official CLI sends it; we hit the API directly so we inject it.) */
+export const CLAUDE_CODE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude."
+
+type SystemBlock = { type: 'text'; text: string }
+
+/** Prepend the Claude Code preamble as the first system block, preserving the caller's own
+ *  system prompt as a following block. Idempotent (won't double-prepend). */
+function withClaudeCodeSystem(system: unknown): SystemBlock[] {
+  const cc: SystemBlock = { type: 'text', text: CLAUDE_CODE_SYSTEM }
+  if (system == null || system === '') return [cc]
+  if (typeof system === 'string') return [cc, { type: 'text', text: system }]
+  if (Array.isArray(system)) {
+    const first = system[0] as SystemBlock | undefined
+    if (first && first.text === CLAUDE_CODE_SYSTEM) return system as SystemBlock[]
+    return [cc, ...(system as SystemBlock[])]
+  }
+  return [cc]
+}
+
 /** Wrap a fetch so each request authenticates with a FRESH subscription OAuth token
- *  instead of an API key: drop `x-api-key`, set `Authorization: Bearer <token>`, and
- *  add the oauth beta (merged with any beta the SDK already set). The token is fetched
- *  per call so an expired access token never produces a stale resolved model. */
+ *  instead of an API key: drop `x-api-key`, set `Authorization: Bearer <token>`, add the
+ *  oauth beta (merged with any beta the SDK set), and inject the Claude Code system preamble
+ *  the token requires. The token is fetched per call so an expired token never produces a
+ *  stale resolved model. */
 export function makeOAuthFetch(tokenProvider: () => Promise<string>, baseFetch: typeof fetch = fetch): typeof fetch {
   return async (input, init) => {
     const token = await tokenProvider()
@@ -25,7 +47,20 @@ export function makeOAuthFetch(tokenProvider: () => Promise<string>, baseFetch: 
     const betas = existingBeta ? existingBeta.split(',').map((s) => s.trim()).filter(Boolean) : []
     if (!betas.includes(OAUTH_BETA)) betas.push(OAUTH_BETA)
     headers.set('anthropic-beta', betas.join(','))
-    return baseFetch(input, { ...init, headers })
+    // Inject the required Claude Code system preamble into the Messages request body.
+    let body = init?.body
+    if (typeof body === 'string') {
+      try {
+        const parsed = JSON.parse(body)
+        if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { messages?: unknown }).messages)) {
+          ;(parsed as { system?: unknown }).system = withClaudeCodeSystem((parsed as { system?: unknown }).system)
+          body = JSON.stringify(parsed)
+        }
+      } catch {
+        // not a JSON body — leave untouched
+      }
+    }
+    return baseFetch(input, { ...init, headers, body })
   }
 }
 
