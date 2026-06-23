@@ -138,6 +138,36 @@ ssh -L 7070:localhost:7070 <your-host>
 then open **<http://localhost:7070>**. Running the node locally? Skip the tunnel —
 it's already at that URL.
 
+### 3d. Headless / declarative deploy (Kubernetes, GitOps)
+
+For a fully declarative deploy with no dashboard interview, pre-seed the strategy and
+make the config file the source of truth:
+
+1. **Set `CONFIG_SOURCE=file`** in the environment. On every boot the node re-applies
+   `strategy.config.json` from `ORQUESTRA_DATA_DIR` into its config row and skips
+   onboarding. A redeployed ConfigMap therefore takes effect on the next pod restart
+   (add a config checksum annotation to your Deployment so a config change rolls pods).
+   You'll typically also set `DASHBOARD_ENABLED=false`.
+2. **Mount `strategy.config.json`** into the data dir (e.g. a ConfigMap volume at `/data`,
+   or an initContainer that writes it there). Start from
+   [docs/examples/strategy.config.example.json](examples/strategy.config.example.json).
+3. **Validate in CI before deploy** so a malformed config never reaches a pod (where it
+   fails at boot — fail-fast, exit non-zero, not a silent default):
+   ```sh
+   orquestra validate-config path/to/strategy.config.json   # exit 0 = valid, 1 = invalid
+   ```
+   The trackable JSON Schema is [docs/strategy.config.schema.json](strategy.config.schema.json)
+   (generated from the code via `npm run gen:schema`) — wire it into your editor or a CI
+   schema-lint for early feedback.
+
+Notes:
+- Without `CONFIG_SOURCE=file`, a `strategy.config.json` present on first boot is still
+  imported **once** (then renamed `.imported`) and the SQLite config row becomes canonical
+  — fine for a one-shot seed, but a later file change is ignored. Use `CONFIG_SOURCE=file`
+  when you want the file to stay authoritative.
+- Strategy edits in this mode = change the file + redeploy. The dashboard Save path still
+  works if enabled, but the next file reconcile on boot overrides it.
+
 ---
 
 ## 4. First run — onboarding

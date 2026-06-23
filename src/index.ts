@@ -1,8 +1,9 @@
 // src/index.ts — thin shell: env, service construction, argv dispatch, signals.
 // All cycle wiring lives in src/runtime/wiring.ts (unit-tested there).
 import { resolve } from 'node:path'
-import { mkdirSync } from 'node:fs'
-import { loadConfig } from './config/load.js'
+import { mkdirSync, readFileSync } from 'node:fs'
+import { loadConfig, reconcileConfigFile, CONFIG_FILENAME } from './config/load.js'
+import { validateConfigText } from './config/validate.js'
 import { needsOnboarding, persistOnboarding } from './onboarding/persist.js'
 import { buildStrategyConfig } from './onboarding/build.js'
 import { runConversationalOnboarding } from './onboarding/agent.js'
@@ -206,6 +207,16 @@ async function start(): Promise<void> {
   const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { resolveChatModel, availableProviders: [...providerKeyRegistry.keys()] }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
+  // Declarative deploy (CONFIG_SOURCE=file): treat strategy.config.json in DATA_DIR as the
+  // source of truth — re-apply it to the config row on every boot (a redeployed K8s ConfigMap
+  // takes effect on pod restart) and skip onboarding. A malformed file throws ConfigInvalidError
+  // here → the top-level catch exits non-zero (fail fast, no crash-looping on a started node).
+  if ((process.env.CONFIG_SOURCE ?? '').trim() === 'file') {
+    const { reconciled } = reconcileConfigFile(DATA_DIR)
+    if (reconciled) console.error(`orquestra: applied ${CONFIG_FILENAME} (CONFIG_SOURCE=file) — config row reconciled from the mounted file`)
+    else if (needsOnboarding(DATA_DIR)) throw new Error(`CONFIG_SOURCE=file but no ${CONFIG_FILENAME} in ${DATA_DIR} and no existing config — seed the file before boot`)
+  }
+
   if (needsOnboarding(DATA_DIR)) {
     if (process.stdin.isTTY) {
       await onboard()
@@ -335,8 +346,39 @@ async function loginAnthropicCmd(): Promise<void> {
   }
 }
 
+/** `orquestra validate-config <path>` — validate a strategy.config.json against the schema and
+ *  exit 0/1. For CI / pre-deploy gating so a malformed config is caught before it reaches a pod
+ *  (where it would fail at boot). Reads the file argument, never the data dir. */
+function validateConfigCmd(): void {
+  const path = process.argv[3]
+  if (!path) {
+    console.error('usage: orquestra validate-config <path-to-strategy.config.json>')
+    process.exitCode = 2
+    return
+  }
+  let text: string
+  try {
+    text = readFileSync(path, 'utf-8')
+  } catch (e) {
+    console.error(`orquestra: cannot read ${path}: ${(e as Error).message}`)
+    process.exitCode = 2
+    return
+  }
+  const result = validateConfigText(text)
+  if (result.ok) {
+    console.error(`orquestra: ${path} is a valid strategy config ✓`)
+  } else {
+    console.error(`orquestra: ${path} is INVALID:\n${result.error}`)
+    process.exitCode = 1
+  }
+}
+
 const cmd = process.argv[2]
-const run = cmd === 'configure' ? onboard : cmd === 'login-anthropic' ? loginAnthropicCmd : start
+const run =
+  cmd === 'configure' ? onboard
+  : cmd === 'login-anthropic' ? loginAnthropicCmd
+  : cmd === 'validate-config' ? async () => validateConfigCmd()
+  : start
 run().catch((e) => {
   const err = e as Error
   console.error('orquestra: fatal:', err.message)
