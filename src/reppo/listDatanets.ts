@@ -28,8 +28,11 @@ export function parseDatanetList(raw: unknown): DatanetSummary[] {
     const d = r as Record<string, unknown>
     const nt = d.nativeToken as Record<string, unknown> | undefined
     const ntSymbol = String(nt?.symbol ?? '').trim()
-    const nativeToken: NativeToken | undefined = (nt && ntSymbol && ntSymbol.toUpperCase() !== 'REPPO')
-      ? { symbol: ntSymbol, address: String(nt.address ?? ''), decimals: num(nt.decimals) }
+    const ntAddress = String(nt?.address ?? '').trim()
+    // Gate on address (strong identity) not symbol (display label that can be blank).
+    // Blank symbol gets '?' so the datanet still surfaces for discovery.
+    const nativeToken: NativeToken | undefined = (nt && ntAddress && ntSymbol.toUpperCase() !== 'REPPO')
+      ? { symbol: ntSymbol || '?', address: ntAddress, decimals: num(nt.decimals) }
       : undefined
     return {
       id: String(d.id ?? d.tokenId ?? ''),

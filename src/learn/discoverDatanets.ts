@@ -21,7 +21,9 @@ export function discoverDatanets(
     if (hasPendingProposal(dataDir, dn.id, 'vote_enable', 'true')) continue
     const emissionDesc = dn.emissionsPerEpochReppo > 0
       ? `${dn.emissionsPerEpochReppo.toFixed(2)} REPPO/epoch`
-      : `${dn.nativeToken!.symbol}/epoch`
+      : dn.nativeToken
+        ? `${dn.nativeToken.symbol}/epoch`
+        : 'native token/epoch'
     insertProposal(dataDir, {
       datanetId: dn.id,
       field: 'vote_enable',
