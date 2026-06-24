@@ -14,16 +14,20 @@ export function discoverDatanets(
 ): void {
   const now = new Date().toISOString()
   for (const dn of datanets) {
-    if (dn.emissionsPerEpochReppo <= 0) continue
+    const hasEmissions = dn.emissionsPerEpochReppo > 0 || Boolean(dn.nativeToken)
+    if (!hasEmissions) continue
     const policy = config.datanets[dn.id]
     if (policy?.vote) continue // already vote-enabled
     if (hasPendingProposal(dataDir, dn.id, 'vote_enable', 'true')) continue
+    const emissionDesc = dn.emissionsPerEpochReppo > 0
+      ? `${dn.emissionsPerEpochReppo.toFixed(2)} REPPO/epoch`
+      : `${dn.nativeToken!.symbol}/epoch`
     insertProposal(dataDir, {
       datanetId: dn.id,
       field: 'vote_enable',
       fromValue: 'false',
       toValue: 'true',
-      rationale: `${dn.name} is distributing ${dn.emissionsPerEpochReppo.toFixed(2)} REPPO/epoch in emissions and is not yet enabled for voting.`,
+      rationale: `${dn.name} is distributing ${emissionDesc} in emissions and is not yet enabled for voting.`,
       basisConfigMtime: now,
       createdEpoch: currentEpoch,
       createdTs: now,
