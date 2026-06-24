@@ -16,6 +16,7 @@ import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError } from '..
 import { buildLearnView } from '../learn/view.js'
 import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from '../learn/store.js'
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
+import { queryLockConstraints, type LockConstraints } from '../reppo/queryLockConstraints.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
 import { buildStrategyConfig } from '../onboarding/build.js'
@@ -80,6 +81,18 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
     return {}
   }
+}
+
+// veREPPO protocol constants — contract constants, fetch once and keep.
+let lockConstraintsCache: LockConstraints | null = null
+async function getLockConstraints(): Promise<LockConstraints | undefined> {
+  if (lockConstraintsCache) return lockConstraintsCache
+  const rpcUrl = process.env.RPC_URL
+  if (!rpcUrl) return undefined
+  try {
+    lockConstraintsCache = await queryLockConstraints(rpcUrl)
+    return lockConstraintsCache
+  } catch { return undefined }
 }
 
 // Datanet id→name map, cached: names change rarely and the CLI call is slow.
@@ -239,7 +252,8 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
             : 'strategy config is invalid — fix or re-onboard before using the assistant'
           json(res, 409, { error: msg }); return
         }
-        const result = await runStrategyChat({ messages, currentConfig: current, model: chatModel })
+        const lockConstraints = await getLockConstraints()
+        const result = await runStrategyChat({ messages, currentConfig: current, lockConstraints, model: chatModel })
         json(res, 200, result)
         return
       }
