@@ -35,10 +35,10 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
           veREPPO
           <Tip label="veREPPO explained">
             <b>veREPPO ≠ locked REPPO</b>
-            <p style={{ margin: '6px 0 4px' }}>Voting power is time-weighted:</p>
-            <p style={{ margin: '4px 0', fontFamily: 'var(--mono)', fontSize: 11 }}>veREPPO = locked × (duration / max_lock)</p>
-            <p style={{ margin: '4px 0 0' }}>
-              Longer locks earn more voting power per token. Max-lock = 1:1; shorter = less.
+            <p style={{ margin: '6px 0 0' }}>
+              The protocol applies a duration-based multiplier — longer locks earn
+              proportionally more voting power. The result can exceed the amount
+              of REPPO you locked.
               {lockupCount !== undefined && <> Active lockup{lockupCount !== 1 ? 's' : ''}: <b>{lockupCount}</b>.</>}
             </p>
           </Tip>
