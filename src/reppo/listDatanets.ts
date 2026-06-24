@@ -2,6 +2,8 @@
 import { runReppoStdout } from './exec.js'
 
 
+export interface NativeToken { symbol: string; address: string; decimals: number }
+
 export interface DatanetSummary {
   id: string
   name: string
@@ -9,6 +11,9 @@ export interface DatanetSummary {
   description: string
   accessFeeReppo: number
   emissionsPerEpochReppo: number
+  /** Present when the datanet emits a non-REPPO token (e.g. LBM for Litebeam).
+   *  emissionsPerEpochReppo will be 0 in this case. */
+  nativeToken?: NativeToken
   upVoteVolume: number
   downVoteVolume: number
 }
@@ -21,6 +26,11 @@ export function parseDatanetList(raw: unknown): DatanetSummary[] {
   if (!Array.isArray(rows)) return []
   return rows.map((r) => {
     const d = r as Record<string, unknown>
+    const nt = d.nativeToken as Record<string, unknown> | undefined
+    const ntSymbol = String(nt?.symbol ?? '').trim()
+    const nativeToken: NativeToken | undefined = (nt && ntSymbol && ntSymbol.toUpperCase() !== 'REPPO')
+      ? { symbol: ntSymbol, address: String(nt.address ?? ''), decimals: num(nt.decimals) }
+      : undefined
     return {
       id: String(d.id ?? d.tokenId ?? ''),
       name: String(d.name ?? d.subnetName ?? `datanet ${String(d.id ?? '')}`),
@@ -28,6 +38,7 @@ export function parseDatanetList(raw: unknown): DatanetSummary[] {
       description: String(d.subnetDescription ?? d.description ?? '').trim(),
       accessFeeReppo: num(d.accessFeeREPPO),
       emissionsPerEpochReppo: num(d.emissionsPerEpochREPPO),
+      nativeToken,
       upVoteVolume: num(d.upVoteVolume),
       downVoteVolume: num(d.downVoteVolume),
     }
