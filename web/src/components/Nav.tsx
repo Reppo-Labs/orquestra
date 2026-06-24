@@ -23,7 +23,6 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
   const snap = data?.snapshot
   const pnl = data?.pnl
   const cfg = data?.config
-  const lockupCount = snap?.votingPower?.lockupCount
   const ticks: { k: ReactNode; id: string; v: ReactNode }[] = [
     { id: 'Epoch', k: 'Epoch', v: snap ? epochLabel(snap.epoch) : '—' },
     { id: 'Net REPPO', k: 'Net REPPO', v: pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—' },
@@ -39,7 +38,6 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
               The protocol applies a duration-based multiplier — longer locks earn
               proportionally more voting power. The result can exceed the amount
               of REPPO you locked.
-              {lockupCount !== undefined && <> Active lockup{lockupCount !== 1 ? 's' : ''}: <b>{lockupCount}</b>.</>}
             </p>
           </Tip>
         </span>
