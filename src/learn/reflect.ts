@@ -12,7 +12,7 @@ import { INJECTION_GUARD } from '../llm/prompt.js'
 import type { StrategyConfig } from '../config/schema.js'
 import { getDb } from '../dashboard/db.js'
 import { computeStats, type LearnStats } from './stats.js'
-import { readOutcomes, insertLesson, clearLessons, insertProposal } from './store.js'
+import { readOutcomes, insertLesson, clearLessons, insertProposal, hasPendingProposal } from './store.js'
 
 /** Below this many matured outcomes, abstain entirely (cold start → no overfit lessons). */
 export const MIN_SAMPLE = 5
@@ -108,6 +108,7 @@ export async function runReflection(
     // all-or-none switch, not something to gradually tune).
     if (p.field !== 'strictness') continue
     if (!(STRICTNESS as readonly string[]).includes(p.toValue) || p.toValue === current.strictness) continue
+    if (hasPendingProposal(dataDir, datanetId, 'strictness', p.toValue)) continue
     insertProposal(dataDir, { datanetId, field: 'strictness', fromValue: current.strictness, toValue: p.toValue, rationale: p.rationale, basisConfigMtime: now, createdEpoch: currentEpoch, createdTs: now })
   }
 }

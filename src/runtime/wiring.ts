@@ -39,6 +39,8 @@ import { collectOutcomes } from '../learn/collect.js'
 import { runReflection } from '../learn/reflect.js'
 import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
+import { discoverDatanets } from '../learn/discoverDatanets.js'
+import { listDatanetsJson } from '../reppo/listDatanets.js'
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
@@ -475,18 +477,27 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       // startup model. If the live default has no key, skip this epoch's reflection (same as
       // having no learnModel) rather than reflect on a stale/unkeyed model.
       const learnModel = w.learnModel ? effectiveDefaultModel(w) : null
-      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch && learnModel) {
-        const model = learnModel
-        for (const id of learnDatanets) {
-          if (!getLearnEnabled(w.dataDir, id)) continue        // operator veto: no LLM spend
-          if (reflecting.has(id)) continue                     // prior run still in flight — don't race the supersede
-          reflecting.add(id)
-          // .finally clears the guard when the REAL promise settles (not when withTimeout
-          // gives up); the timeout only bounds how long we WAIT, so a slow reflection can't
-          // stall the next cycle but also can't start a second concurrent run for this datanet.
-          const run = runReflection(w.dataDir, model, id, config, currentEpoch).finally(() => reflecting.delete(id))
-          try { await withTimeout(run, 60_000) }
-          catch (e) { console.error(`orquestra: reflection failed for ${id} (non-fatal): ${(e as Error).message}`) }
+      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch) {
+        // Datanet discovery: propose vote_enable for any active datanet with emissions
+        // that isn't yet vote-enabled. No LLM needed — runs regardless of learnModel.
+        try {
+          const allDatanets = await listDatanetsJson()
+          discoverDatanets(w.dataDir, allDatanets, config, currentEpoch)
+        } catch (e) { console.error(`orquestra: datanet discovery failed (non-fatal): ${(e as Error).message}`) }
+
+        if (learnModel) {
+          const model = learnModel
+          for (const id of learnDatanets) {
+            if (!getLearnEnabled(w.dataDir, id)) continue        // operator veto: no LLM spend
+            if (reflecting.has(id)) continue                     // prior run still in flight — don't race the supersede
+            reflecting.add(id)
+            // .finally clears the guard when the REAL promise settles (not when withTimeout
+            // gives up); the timeout only bounds how long we WAIT, so a slow reflection can't
+            // stall the next cycle but also can't start a second concurrent run for this datanet.
+            const run = runReflection(w.dataDir, model, id, config, currentEpoch).finally(() => reflecting.delete(id))
+            try { await withTimeout(run, 60_000) }
+            catch (e) { console.error(`orquestra: reflection failed for ${id} (non-fatal): ${(e as Error).message}`) }
+          }
         }
         lastReflectedEpoch = currentEpoch
       }
