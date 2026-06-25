@@ -503,7 +503,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Per-claim isolation: one failing claim never aborts the rest of the phase.
       let r: ExecResult
       try {
-        r = await deps.executor.executeClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, idempotencyKey: `claim-${em.podId}-${em.epoch}` })
+        r = await deps.executor.executeClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, token: em.token, idempotencyKey: `claim-${em.podId}-${em.epoch}` })
       } catch (e) {
         r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
       }
@@ -513,6 +513,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // Prefer the actual claimed REPPO read from the tx receipt (em.reppo is 0 under
         // on-chain detection — PodManager V2 has no pre-claim amount view).
         podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
+        claimedTokenSymbol: r.tokenClaimed?.symbol, claimedTokenAmount: r.tokenClaimed?.amount,
         status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
       })
       // Record dedup ONLY on confirmed execution: a transiently-failed claim SHOULD retry
@@ -536,7 +537,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       if (seen.has(key)) continue
       let r: ExecResult
       try {
-        r = await deps.executor.executeVoterClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, idempotencyKey: `claim-voter-${em.podId}-${em.epoch}` })
+        r = await deps.executor.executeVoterClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, token: em.token, idempotencyKey: `claim-voter-${em.podId}-${em.epoch}` })
       } catch (e) {
         r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
       }
@@ -544,6 +545,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       deps.recordActivity({
         ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
         podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
+        claimedTokenSymbol: r.tokenClaimed?.symbol, claimedTokenAmount: r.tokenClaimed?.amount,
         status: r.status, txHash: r.txHash, gasEth: r.gasEth,
         detail: r.detail ? `voter · ${r.detail}` : 'voter emissions',
       })

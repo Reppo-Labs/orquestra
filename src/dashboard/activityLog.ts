@@ -27,6 +27,10 @@ export interface ActivityEntry {
   podName?: string
   epoch?: number
   reppoClaimed?: number
+  /** non-REPPO emission token claimed (e.g. 'LBM') + amount in human units, when a claim
+   *  paid a datanet's native token. Absent for plain REPPO claims. */
+  claimedTokenSymbol?: string
+  claimedTokenAmount?: number
   status: 'executed' | 'refused-budget' | 'error' | 'skipped'
   txHash?: string
   gasEth?: number
@@ -60,6 +64,7 @@ function redactEntry(entry: ActivityEntry): ActivityEntry {
 const COLUMNS = [
   'ts', 'cycleId', 'kind', 'datanetId', 'podId', 'direction', 'conviction', 'reason',
   'canonicalKey', 'podName', 'epoch', 'reppoClaimed', 'status', 'txHash', 'gasEth', 'detail', 'panel',
+  'claimedTokenSymbol', 'claimedTokenAmount',
 ] as const
 
 // The `activity` table is owned by db.ts. We run the one-time JSONL import on first
@@ -115,6 +120,7 @@ function insert(d: SqliteDb, entry: ActivityEntry): void {
     e.direction ?? null, e.conviction ?? null, e.reason ?? null, e.canonicalKey ?? null, e.podName ?? null,
     e.epoch ?? null, e.reppoClaimed ?? null, e.status ?? null, e.txHash ?? null, e.gasEth ?? null,
     e.detail ?? null, e.panel ? JSON.stringify(e.panel) : null,
+    e.claimedTokenSymbol ?? null, e.claimedTokenAmount ?? null,
   ]
   d.prepare(`INSERT INTO activity (${COLUMNS.join(', ')}) VALUES (${PLACEHOLDERS})`).run(...vals)
 }

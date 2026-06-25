@@ -322,6 +322,28 @@ describe('WalletExecutor.executeClaim', () => {
     expect(r.status).toBe('refused-budget')
   })
 
+  it('reads the NON-REPPO token amount from the claim receipt when the intent carries a token', async () => {
+    const ledger = new BudgetLedger(dir, CLAIM_CAPS)
+    const reppoReader = vi.fn(async () => 0)            // zero REPPO for a native-only datanet
+    const tokenReader = vi.fn(async () => 40000)        // 40,000 LBM landed
+    const ex = new WalletExecutor(fakeClaimCli(), ledger, undefined, reppoReader, tokenReader)
+    const token = { address: '0x15B15FA54b629C634958E8BD639b2fc8af654974', symbol: 'LBM', decimals: 18 }
+    const r = await ex.executeVoterClaim(claimIntent({ token }))
+    expect(r.status).toBe('executed')
+    expect(r.tokenClaimed).toEqual({ symbol: 'LBM', amount: 40000 })
+    expect(tokenReader).toHaveBeenCalledWith('0xvclaim', token.address, 18)
+  })
+
+  it('leaves tokenClaimed undefined for a plain REPPO claim (no intent.token)', async () => {
+    const ledger = new BudgetLedger(dir, CLAIM_CAPS)
+    const tokenReader = vi.fn(async () => 40000)
+    const ex = new WalletExecutor(fakeClaimCli(), ledger, undefined, vi.fn(async () => 12.5), tokenReader)
+    const r = await ex.executeClaim(claimIntent())
+    expect(r.status).toBe('executed')
+    expect(r.tokenClaimed).toBeUndefined()
+    expect(tokenReader).not.toHaveBeenCalled()
+  })
+
   it('surfaces gasEth on vote results too', async () => {
     const ledger = new BudgetLedger(dir, CLAIM_CAPS)
     ledger.startCycle('c1')
