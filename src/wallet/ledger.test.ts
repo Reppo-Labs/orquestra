@@ -76,6 +76,40 @@ describe('BudgetLedger', () => {
     expect(l.canMint(1)).toBe(false)
   })
 
+  it('allows mints until the per-cycle rate cap, then refuses', () => {
+    const l = new BudgetLedger(dir, { ...caps, mintRateMaxPerCycle: 2 })
+    l.startCycle('c1')
+    expect(l.canMint(1)).toBe(true)
+    l.reserveMint(1, 0.001); l.reserveMint(1, 0.001) // 2 = cap
+    expect(l.canMint(1)).toBe(false)
+  })
+
+  it('resets the per-cycle mint count on a new cycle', () => {
+    const l = new BudgetLedger(dir, { ...caps, mintRateMaxPerCycle: 1 })
+    l.startCycle('c1'); l.reserveMint(1, 0.001)
+    expect(l.canMint(1)).toBe(false)
+    l.startCycle('c2')
+    expect(l.canMint(1)).toBe(true)
+    expect(l.state.mintsCastThisCycle).toBe(0)
+  })
+
+  it('does not enforce a per-cycle mint rate when mintRateMaxPerCycle is absent', () => {
+    const l = new BudgetLedger(dir, caps) // no mintRateMaxPerCycle
+    l.startCycle('c1')
+    for (let i = 0; i < 10; i++) l.reserveMint(1, 0.001)
+    expect(l.canMint(1)).toBe(true) // only REPPO cap bites (100 total, 10 used)
+  })
+
+  it('releaseMint decrements mintsCastThisCycle', () => {
+    const l = new BudgetLedger(dir, { ...caps, mintRateMaxPerCycle: 1 })
+    l.startCycle('c1')
+    const res = l.reserveMint(1, 0.001)!
+    expect(l.canMint(1)).toBe(false)
+    l.releaseMint(res)
+    expect(l.canMint(1)).toBe(true)
+    expect(l.state.mintsCastThisCycle).toBe(0)
+  })
+
   it('persists across reload (caps survive a restart)', () => {
     const a = new BudgetLedger(dir, caps)
     a.startCycle('c1'); a.reserveMint(70, 0.01)
