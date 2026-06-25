@@ -3,6 +3,7 @@ import type { LanguageModel } from 'ai'
 import { DEFAULT_FEEDS, fetchFeed as liveFetchFeed, freshItems, type FeedItem } from './feeds.js'
 import { synthesizeSignals, type SportsStrategy } from './signal.js'
 import { filterNovel } from '../dedup.js'
+import { filterNovelSemantic } from '../semanticDedup.js'
 import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
 
 export interface SportsDeps {
@@ -68,7 +69,8 @@ export function createSportsAdapter(deps: SportsDeps = {}): DatanetAdapter {
         model: deps.model,
         generate: deps.generate as never,
       })
-      return filterNovel(cands, ctx.existingPodNames ?? [])
+      const novel = filterNovel(cands, ctx.existingPodNames ?? [])
+      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model: deps.model })
     },
   }
 }
