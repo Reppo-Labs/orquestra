@@ -7,6 +7,7 @@ import { getDb, type SqliteDb } from '../dashboard/db.js'
 export interface BudgetCaps {
   voteGasEthMax: number
   voteRateMaxPerCycle: number
+  mintRateMaxPerCycle?: number
   mintReppoMax: number
   mintGasEthMax: number
   claimGasEthMax: number
@@ -15,6 +16,7 @@ export interface BudgetCaps {
 export interface LedgerState {
   cycleId: string
   votesCastThisCycle: number
+  mintsCastThisCycle: number
   voteGasSpentEth: number // cumulative within the current horizon window
   mintReppoSpent: number // cumulative within the current horizon window
   mintGasSpentEth: number // cumulative within the current horizon window
@@ -56,6 +58,7 @@ const nonNegativeFinite = z.number().finite().nonnegative()
 const LedgerSchema = z.object({
   cycleId: z.string(),
   votesCastThisCycle: nonNegativeFinite,
+  mintsCastThisCycle: nonNegativeFinite.default(0),
   voteGasSpentEth: nonNegativeFinite,
   mintReppoSpent: nonNegativeFinite,
   mintGasSpentEth: nonNegativeFinite,
@@ -64,7 +67,7 @@ const LedgerSchema = z.object({
 })
 
 const fresh = (): LedgerState => ({
-  cycleId: '', votesCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, horizonStart: '',
+  cycleId: '', votesCastThisCycle: 0, mintsCastThisCycle: 0, voteGasSpentEth: 0, mintReppoSpent: 0, mintGasSpentEth: 0, claimGasSpentEth: 0, horizonStart: '',
 })
 
 /** Persisted per-pool budget enforcement. The ONLY authority on whether an
@@ -133,6 +136,7 @@ export class BudgetLedger {
     if (cycleId !== this._state.cycleId) {
       this._state.cycleId = cycleId
       this._state.votesCastThisCycle = 0
+      this._state.mintsCastThisCycle = 0
       this.save()
     }
   }
@@ -176,6 +180,7 @@ export class BudgetLedger {
   canMint(estReppoCost: number): boolean {
     return this._state.mintReppoSpent + estReppoCost <= this.caps.mintReppoMax
       && this._state.mintGasSpentEth < this.caps.mintGasEthMax
+      && (this.caps.mintRateMaxPerCycle === undefined || this._state.mintsCastThisCycle < this.caps.mintRateMaxPerCycle)
   }
 
   /** Debit and persist BEFORE signing. Returns null if over budget (no debit). */
@@ -206,6 +211,7 @@ export class BudgetLedger {
     if (!this.canMint(estReppo)) return null
     this._state.mintReppoSpent += estReppo
     this._state.mintGasSpentEth += estGasEth
+    this._state.mintsCastThisCycle += 1
     this.save()
     return { kind: 'mint', estReppo, estGasEth }
   }
@@ -228,6 +234,7 @@ export class BudgetLedger {
   releaseMint(res: MintReservation): void {
     this._state.mintReppoSpent = Math.max(0, this._state.mintReppoSpent - res.estReppo)
     this._state.mintGasSpentEth = Math.max(0, this._state.mintGasSpentEth - res.estGasEth)
+    this._state.mintsCastThisCycle = Math.max(0, this._state.mintsCastThisCycle - 1)
     this.save()
   }
 

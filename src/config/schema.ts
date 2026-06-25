@@ -50,6 +50,7 @@ export const StrategyConfigSchema = z
     }),
     budget: z.object({
       voteRateMaxPerCycle: z.number().int().nonnegative(),
+      mintRateMaxPerCycle: z.number().int().nonnegative().optional(),
       mintReppoMax: z.number().nonnegative(),
       // Gas caps are no longer operator-configured — gas on Base is negligible. They
       // default to a high value that never bites in practice but still bounds a
