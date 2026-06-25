@@ -19,7 +19,7 @@ import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
-import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
+import type { ClaimableEmission, ClaimToken } from '../reppo/queryEmissionsDue.js'
 import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
@@ -39,6 +39,9 @@ import { collectOutcomes } from '../learn/collect.js'
 import { runReflection } from '../learn/reflect.js'
 import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
+import { discoverDatanets } from '../learn/discoverDatanets.js'
+import { listDatanetsJson } from '../reppo/listDatanets.js'
+import { getSubnetEmissionInfo, formatTokenAmount } from '../reppo/subnetManager.js'
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
@@ -253,6 +256,27 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // datanets in the cycle.
   const videoCap = w.videoPodsPerCycle ?? 4
   let videoBudget = videoCap
+
+  // Attach the NON-REPPO emission token to claimable (pod,epoch)s so the executor can read the
+  // claimed native amount from the tx receipt. The on-chain claim scanners return datanetId='' and
+  // no token; we resolve pod→datanet from our own vote/mint activity and datanet→token from the
+  // catalog. Best-effort + only when there ARE claims (avoids a per-cycle CLI call when idle).
+  const enrichTokens = async (due: ClaimableEmission[]): Promise<ClaimableEmission[]> => {
+    if (due.length === 0) return due
+    const podDatanet = new Map<string, string>()
+    for (const e of readActivity(w.dataDir, { limit: 100_000 })) {
+      if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) podDatanet.set(e.podId, e.datanetId)
+    }
+    const tokenByDatanet = new Map<string, ClaimToken>()
+    try {
+      for (const d of await listDatanetsJson()) if (d.nativeToken) tokenByDatanet.set(d.id, d.nativeToken)
+    } catch { /* best-effort: skip token enrichment this cycle (claims still record REPPO) */ }
+    return due.map((em) => {
+      const datanetId = em.datanetId || podDatanet.get(em.podId) || ''
+      return { ...em, datanetId, token: tokenByDatanet.get(datanetId) }
+    })
+  }
+
   return {
     dataDir: w.dataDir,
     topN: 12,
@@ -337,9 +361,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
     // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
     // cycle's claim phase (it skips claiming that cycle).
-    getEmissionsDue: async () => (w.rpcUrl && w.walletAddress)
-      ? queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
-      : (await io.emissionsDue()).pods,
+    getEmissionsDue: async () => enrichTokens((w.rpcUrl && w.walletAddress)
+      ? await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
+      : (await io.emissionsDue()).pods),
     // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod set comes
     // from our executed-vote activity (the wallet doesn't own them, so they're absent from the
     // owner Transfer-log cache); claimable (pod,epoch) is then detected on-chain. RPC-only —
@@ -356,7 +380,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // gate inside bounds it further to epochs the wallet actually voted in.
       const floorRaw = Number(process.env.REPPO_EMISSIONS_FLOOR_EPOCH)
       const floorEpoch = Number.isFinite(floorRaw) && floorRaw > 0 ? floorRaw : undefined
-      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch })
+      return enrichTokens(await queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch }))
     },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
@@ -475,18 +499,39 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       // startup model. If the live default has no key, skip this epoch's reflection (same as
       // having no learnModel) rather than reflect on a stale/unkeyed model.
       const learnModel = w.learnModel ? effectiveDefaultModel(w) : null
-      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch && learnModel) {
-        const model = learnModel
-        for (const id of learnDatanets) {
-          if (!getLearnEnabled(w.dataDir, id)) continue        // operator veto: no LLM spend
-          if (reflecting.has(id)) continue                     // prior run still in flight — don't race the supersede
-          reflecting.add(id)
-          // .finally clears the guard when the REAL promise settles (not when withTimeout
-          // gives up); the timeout only bounds how long we WAIT, so a slow reflection can't
-          // stall the next cycle but also can't start a second concurrent run for this datanet.
-          const run = runReflection(w.dataDir, model, id, config, currentEpoch).finally(() => reflecting.delete(id))
-          try { await withTimeout(run, 60_000) }
-          catch (e) { console.error(`orquestra: reflection failed for ${id} (non-fatal): ${(e as Error).message}`) }
+      if (currentEpoch > 0 && currentEpoch > lastReflectedEpoch) {
+        // Datanet discovery: propose vote_enable for any active datanet with emissions
+        // that isn't yet vote-enabled. No LLM needed — runs regardless of learnModel.
+        try {
+          const allDatanets = await listDatanetsJson()
+          // When RPC is wired, resolve each non-REPPO datanet's per-epoch native emission
+          // amount from the SubnetManager so the proposal rationale shows magnitude (e.g.
+          // "40,000 LBM/epoch"). Best-effort: a failed read falls back to a quantity-less desc.
+          const rpcUrl = w.rpcUrl
+          const resolveNativeEmissions = rpcUrl
+            ? async (subnetId: string): Promise<number | null> => {
+                const info = await getSubnetEmissionInfo(rpcUrl, subnetId)
+                if (info.primaryEmissionsPerEpoch <= 0n) return null
+                const dn = allDatanets.find((d) => d.id === subnetId)
+                return formatTokenAmount(info.primaryEmissionsPerEpoch, dn?.nativeToken?.decimals ?? 18)
+              }
+            : undefined
+          await discoverDatanets(w.dataDir, allDatanets, config, currentEpoch, resolveNativeEmissions)
+        } catch (e) { console.error(`orquestra: datanet discovery failed (non-fatal): ${(e as Error).message}`) }
+
+        if (learnModel) {
+          const model = learnModel
+          for (const id of learnDatanets) {
+            if (!getLearnEnabled(w.dataDir, id)) continue        // operator veto: no LLM spend
+            if (reflecting.has(id)) continue                     // prior run still in flight — don't race the supersede
+            reflecting.add(id)
+            // .finally clears the guard when the REAL promise settles (not when withTimeout
+            // gives up); the timeout only bounds how long we WAIT, so a slow reflection can't
+            // stall the next cycle but also can't start a second concurrent run for this datanet.
+            const run = runReflection(w.dataDir, model, id, config, currentEpoch).finally(() => reflecting.delete(id))
+            try { await withTimeout(run, 60_000) }
+            catch (e) { console.error(`orquestra: reflection failed for ${id} (non-fatal): ${(e as Error).message}`) }
+          }
         }
         lastReflectedEpoch = currentEpoch
       }

@@ -25,15 +25,19 @@ export async function generateObjectWithRetry<T>(
   // open-weight models (deepseek/qwen/llama via OpenAI-compatible proxies like usepod) that
   // don't emit the forced tool call ("No object generated: the tool was not called"). The
   // mode switch also doubles as the schema-mismatch retry for tool-capable models.
+  //
+  // Preserve the first error: @ai-sdk/google always throws UnsupportedFunctionalityError on
+  // json mode (Gemini uses responseSchema, not JSON mode) — without this, that secondary
+  // "not supported" error would overwrite the real tool-mode failure and mislead operators.
   const MODES = ['tool', 'json'] as const
-  let lastErr: unknown
+  let firstErr: unknown
   for (const mode of MODES) {
     try {
       const { object } = await generateObject({ model, schema, mode, system, ...payload })
       return object
     } catch (e) {
-      lastErr = e
+      if (firstErr === undefined) firstErr = e
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+  throw firstErr instanceof Error ? firstErr : new Error(String(firstErr))
 }

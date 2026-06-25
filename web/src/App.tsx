@@ -73,7 +73,7 @@ export function App() {
                 : 'earn-test pending first cycle'}
             </div>
             <SecHead title="Emissions" />
-            <EmissionsSummary pnl={data?.pnl ?? null} />
+            <EmissionsSummary pnl={data?.pnl ?? null} earn={earn} />
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />

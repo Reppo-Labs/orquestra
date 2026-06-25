@@ -34,6 +34,17 @@ describe('earnSummary', () => {
   it('earning is false when nothing claimed or claimable', () => {
     expect(earnSummary([mint()], due(0), [pod({ upVotes: 3 })]).earning).toBe(false)
   })
+
+  it('aggregates NON-REPPO claimed tokens per symbol, kept separate from claimedReppo', () => {
+    const tokenClaim = (symbol: string, amount: number): ActivityEntry => ({
+      ts: 't', cycleId: 'c', kind: 'claim', datanetId: '22', podId: '1', epoch: 99,
+      reppoClaimed: 0, claimedTokenSymbol: symbol, claimedTokenAmount: amount, status: 'executed',
+    })
+    const s = earnSummary([tokenClaim('LBM', 40000), tokenClaim('LBM', 10000), tokenClaim('ROBA', 5)], due(0), [])
+    expect(s.claimedReppo).toBe(0)
+    expect(s.claimedTokens).toEqual([{ symbol: 'LBM', amount: 50000 }, { symbol: 'ROBA', amount: 5 }])
+    expect(s.earning).toBe(true) // native-token claims count as earning even with 0 REPPO
+  })
 })
 
 describe('formatEarnStatus', () => {

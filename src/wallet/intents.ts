@@ -1,5 +1,6 @@
 // src/wallet/intents.ts
 import type { PanelTranscript } from '../panel/types.js'
+import type { ClaimToken } from '../reppo/queryEmissionsDue.js'
 
 export interface VoteIntent {
   kind: 'vote'
@@ -50,6 +51,9 @@ export interface ClaimIntent {
   epoch: number
   /** unclaimed REPPO this (pod, epoch) is worth at claim time; recorded for PnL. */
   reppoDue: number
+  /** the datanet's NON-REPPO emission token, when this claim pays one (e.g. LBM). When set,
+   *  the executor reads the token's actual claimed amount from the tx receipt. Absent ⇒ REPPO. */
+  token?: ClaimToken
   idempotencyKey: string
 }
 
@@ -62,6 +66,9 @@ export interface ExecResult {
   gasEth?: number
   /** actual REPPO claimed (read from the claim tx receipt; CLI/contract omit it). */
   reppoClaimed?: number
+  /** actual NON-REPPO token claimed (read from the claim tx receipt), when the claim paid a
+   *  datanet's native emission token. amount is in human units (scaled by token decimals). */
+  tokenClaimed?: { symbol: string; amount: number }
   /** on-chain fee QUOTE (human units, STRING), from a grant-access result (reppo >=0.8.5).
    *  Present on a NON-REPPO grant so the cycle can show "paid 50 EXY" in the activity log. */
   feeAmount?: string

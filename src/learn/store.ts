@@ -39,7 +39,7 @@ export interface LessonRow {
   active: 0 | 1
 }
 
-export type ProposalField = 'strictness'
+export type ProposalField = 'strictness' | 'vote_enable'
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'stale'
 export interface ProposalRow {
   id: number
@@ -110,6 +110,13 @@ export function clearLessons(dataDir: string, datanetId: string): void {
 }
 
 // ── proposals ─────────────────────────────────────────────────────────────────
+/** True when a pending proposal for the same (datanetId, field, toValue) already exists. */
+export function hasPendingProposal(dataDir: string, datanetId: string, field: ProposalField, toValue: string): boolean {
+  return !!getDb(dataDir).prepare(
+    'SELECT 1 FROM proposals WHERE datanetId = ? AND field = ? AND toValue = ? AND status = ?',
+  ).get(datanetId, field, toValue, 'pending')
+}
+
 export function insertProposal(dataDir: string, p: Omit<ProposalRow, 'id' | 'status' | 'decidedTs'>): number {
   const info = getDb(dataDir).prepare(
     `INSERT INTO proposals (datanetId, field, fromValue, toValue, rationale, basisConfigMtime, createdEpoch, createdTs)

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
-import { readActivity, readActivitySince } from './activityLog.js'
+import { readActivity, readActivitySince, sumClaimedReppo } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
@@ -165,17 +165,28 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
 
   let cfg: StrategyConfig
   try { cfg = loadConfig(dataDir) } catch (e) { return { ok: false, error: `config unavailable: ${(e as Error).message}` } }
-  // strictness is the only proposable field (see src/learn). Optimistic-concurrency:
-  // reject if the live value drifted since the proposal was made.
-  const liveValue = cfg.datanets[prop.datanetId]?.strictness ?? 'balanced'
-  if (liveValue !== prop.fromValue) {
-    setProposalStatus(dataDir, id, 'stale')
-    return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
-  }
   const updated = structuredClone(cfg) as StrategyConfig
-  const dn = updated.datanets[prop.datanetId]
-  if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
-  dn.strictness = prop.toValue as typeof dn.strictness
+
+  if (prop.field === 'vote_enable') {
+    // Optimistic-concurrency: if already vote-enabled, mark stale rather than no-op.
+    if (updated.datanets[prop.datanetId]?.vote) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'datanet is already vote-enabled — dismissed' }
+    }
+    const existing = updated.datanets[prop.datanetId]
+    updated.datanets[prop.datanetId] = { ...existing, vote: true, mint: existing?.mint ?? false, strictness: existing?.strictness ?? 'balanced', mintMode: existing?.mintMode ?? 'pin', voteShare: existing?.voteShare ?? 1 }
+  } else {
+    // strictness: optimistic-concurrency check — reject if live value drifted.
+    const liveValue = cfg.datanets[prop.datanetId]?.strictness ?? 'balanced'
+    if (liveValue !== prop.fromValue) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+    }
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.strictness = prop.toValue as typeof dn.strictness
+  }
+
   const parsed = StrategyConfigSchema.safeParse(updated)
   if (!parsed.success) return { ok: false, error: 'resulting config failed validation' }
   writeConfig(dataDir, parsed.data)
@@ -324,8 +335,10 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
-      const activity = readActivity(dataDir, { limit: 5000 })
-      const pnl = snapshot ? derivePnl(snapshot, activity) : null
+      // claimed total must be the unbounded SQL sum, NOT a readActivity({ limit })
+      // slice — a capped window drops old claims while mint spend is cumulative,
+      // making net REPPO read falsely negative as the log grows.
+      const pnl = snapshot ? derivePnl(snapshot, sumClaimedReppo(dataDir)) : null
       json(res, 200, { pnl, snapshot }); return
     }
     // Static SPA: exact asset first, then index.html fallback so client-side

@@ -82,6 +82,8 @@ export interface Earn {
   mintedPods: number
   claimableReppo: number
   claimedReppo: number
+  /** claimed NON-REPPO emission tokens (e.g. LBM), per symbol. Absent on older nodes. */
+  claimedTokens?: { symbol: string; amount: number }[]
   totalUpVotes: number
   totalDownVotes: number
 }

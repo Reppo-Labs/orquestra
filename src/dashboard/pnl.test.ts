@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { derivePnl } from './pnl.js'
 import type { Snapshot } from './snapshot.js'
-import type { ActivityEntry } from './activityLog.js'
 
 const snapshot: Snapshot = {
   ts: 't', cycleId: 'c1',
@@ -11,13 +10,11 @@ const snapshot: Snapshot = {
   budget: { mintReppoSpent: 100, mintGasSpentEth: 0.003, voteGasSpentEth: 0.001, claimGasSpentEth: 0.0007,
     caps: { voteGasEthMax: 0.05, voteRateMaxPerCycle: 30, mintReppoMax: 500, mintGasEthMax: 0.05, claimGasEthMax: 0.05 } },
 }
-const a = (over: Partial<ActivityEntry>): ActivityEntry => ({ ts: 't', cycleId: 'c1', kind: 'claim', datanetId: '9', status: 'executed', ...over })
 
 describe('derivePnl', () => {
-  it('sums executed claims for claimedReppo and adds claimable for earned', () => {
-    const activity = [a({ reppoClaimed: 100 }), a({ reppoClaimed: 63 }), a({ reppoClaimed: 50, status: 'error' })]
-    const p = derivePnl(snapshot, activity)
-    expect(p.claimedReppo).toBe(163)      // only executed claims
+  it('uses the passed claimed total and adds claimable for earned', () => {
+    const p = derivePnl(snapshot, 163) // caller passes the unbounded executed-claim sum
+    expect(p.claimedReppo).toBe(163)
     expect(p.claimableReppo).toBe(5)      // snapshot.emissionsDue.totalReppo
     expect(p.earnedReppo).toBe(168)       // 163 + 5
     expect(p.spentReppo).toBe(100)        // mintReppoSpent
@@ -25,9 +22,17 @@ describe('derivePnl', () => {
     expect(p.gasSpentEth).toBeCloseTo(0.0047) // 0.003 + 0.001 + 0.0007
   })
 
-  it('handles empty activity', () => {
-    const p = derivePnl(snapshot, [])
+  it('handles zero claimed', () => {
+    const p = derivePnl(snapshot, 0)
     expect(p.claimedReppo).toBe(0)
     expect(p.earnedReppo).toBe(5)
+  })
+
+  it('net stays positive when claimed exceeds spend (the truncation-bug scenario)', () => {
+    // Real data: lifetime claimed 5309 vs mint spend 4935 → +374, not the
+    // −2166 a windowed claim sum produced.
+    const big: Snapshot = { ...snapshot, budget: { ...snapshot.budget, mintReppoSpent: 4935 }, emissionsDue: { totalReppo: 0, pods: [] } }
+    const p = derivePnl(big, 5309)
+    expect(p.netReppo).toBeCloseTo(374)
   })
 })
