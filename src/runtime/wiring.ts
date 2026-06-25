@@ -41,6 +41,7 @@ import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
+import { getSubnetEmissionInfo, formatTokenAmount } from '../reppo/subnetManager.js'
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
@@ -482,7 +483,19 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         // that isn't yet vote-enabled. No LLM needed — runs regardless of learnModel.
         try {
           const allDatanets = await listDatanetsJson()
-          discoverDatanets(w.dataDir, allDatanets, config, currentEpoch)
+          // When RPC is wired, resolve each non-REPPO datanet's per-epoch native emission
+          // amount from the SubnetManager so the proposal rationale shows magnitude (e.g.
+          // "40,000 LBM/epoch"). Best-effort: a failed read falls back to a quantity-less desc.
+          const rpcUrl = w.rpcUrl
+          const resolveNativeEmissions = rpcUrl
+            ? async (subnetId: string): Promise<number | null> => {
+                const info = await getSubnetEmissionInfo(rpcUrl, subnetId)
+                if (info.primaryEmissionsPerEpoch <= 0n) return null
+                const dn = allDatanets.find((d) => d.id === subnetId)
+                return formatTokenAmount(info.primaryEmissionsPerEpoch, dn?.nativeToken?.decimals ?? 18)
+              }
+            : undefined
+          await discoverDatanets(w.dataDir, allDatanets, config, currentEpoch, resolveNativeEmissions)
         } catch (e) { console.error(`orquestra: datanet discovery failed (non-fatal): ${(e as Error).message}`) }
 
         if (learnModel) {

@@ -18,3 +18,45 @@ describe('parseDatanetList', () => {
     expect(parseDatanetList(null)).toEqual([])
   })
 })
+
+describe('parseDatanetList — nativeToken', () => {
+  const REPPO = '0xFf8104251E7761163faC3211eF5583FB3F8583d6'
+  const base = { id: '22', name: 'Litebeam', status: 'ACTIVE', accessFeeREPPO: '0', emissionsPerEpochREPPO: '0', upVoteVolume: '0', downVoteVolume: '0' }
+  const wrap = (extra: Record<string, unknown>) => ({ datanets: [{ ...base, ...extra }] })
+
+  it('parses a non-REPPO nativeToken', () => {
+    const list = parseDatanetList(wrap({ nativeToken: { symbol: 'LBM', address: '0x15B15FA54b629C634958E8BD639b2fc8af654974', decimals: 18 } }))
+    expect(list[0].nativeToken).toEqual({ symbol: 'LBM', address: '0x15B15FA54b629C634958E8BD639b2fc8af654974', decimals: 18 })
+  })
+
+  it('suppresses nativeToken when address IS the REPPO token (case-insensitive), regardless of symbol', () => {
+    // detection keys off ADDRESS: a REPPO-address token mislabeled 'LBM' must still be suppressed
+    const list = parseDatanetList(wrap({ nativeToken: { symbol: 'LBM', address: REPPO.toLowerCase(), decimals: 18 } }))
+    expect(list[0].nativeToken).toBeUndefined()
+  })
+
+  it('detects a non-REPPO token even when its symbol is reported as REPPO (address wins)', () => {
+    const list = parseDatanetList(wrap({ nativeToken: { symbol: 'REPPO', address: '0xdeadbeef', decimals: 18 } }))
+    expect(list[0].nativeToken).toEqual({ symbol: 'REPPO', address: '0xdeadbeef', decimals: 18 })
+  })
+
+  it('suppresses nativeToken when address is empty', () => {
+    const list = parseDatanetList(wrap({ nativeToken: { symbol: 'LBM', address: '', decimals: 18 } }))
+    expect(list[0].nativeToken).toBeUndefined()
+  })
+
+  it('suppresses nativeToken when address is absent', () => {
+    const list = parseDatanetList(wrap({ nativeToken: { symbol: 'LBM', decimals: 18 } }))
+    expect(list[0].nativeToken).toBeUndefined()
+  })
+
+  it('uses "?" symbol when symbol is blank but address is present', () => {
+    const list = parseDatanetList(wrap({ nativeToken: { symbol: '', address: '0xabc', decimals: 18 } }))
+    expect(list[0].nativeToken).toEqual({ symbol: '?', address: '0xabc', decimals: 18 })
+  })
+
+  it('nativeToken is undefined when nativeToken field absent', () => {
+    const list = parseDatanetList(wrap({}))
+    expect(list[0].nativeToken).toBeUndefined()
+  })
+})
