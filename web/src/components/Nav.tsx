@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { DashData } from '../api'
 import { fmt, epochLabel, sign } from '../lib/format'
+import { Tip } from './Tip'
 
 export type TabId = 'overview' | 'strategy' | 'chat' | 'activity' | 'learning'
 
@@ -22,13 +23,29 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
   const snap = data?.snapshot
   const pnl = data?.pnl
   const cfg = data?.config
-  const ticks: { k: string; v: ReactNode }[] = [
-    { k: 'Epoch', v: snap ? epochLabel(snap.epoch) : '—' },
-    { k: 'Net REPPO', v: pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—' },
-    { k: 'REPPO', v: snap ? fmt(snap.balance.reppo) : '—' },
-    { k: 'veREPPO', v: snap ? fmt(snap.balance.veReppo) : '—' },
-    { k: 'Claimable', v: pnl ? <span className={pnl.claimableReppo > 0 ? 'pos' : ''}>{fmt(pnl.claimableReppo)}</span> : '—' },
-    { k: 'Cadence', v: cfg ? `${cfg.cadenceHours}h` : '—' },
+  const ticks: { k: ReactNode; id: string; v: ReactNode }[] = [
+    { id: 'Epoch', k: 'Epoch', v: snap ? epochLabel(snap.epoch) : '—' },
+    { id: 'Net REPPO', k: 'Net REPPO', v: pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—' },
+    { id: 'REPPO', k: 'REPPO', v: snap ? fmt(snap.balance.reppo) : '—' },
+    {
+      id: 'veREPPO',
+      k: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+          veREPPO
+          <Tip label="veREPPO explained">
+            <b>veREPPO ≠ locked REPPO</b>
+            <p style={{ margin: '6px 0 0' }}>
+              The protocol applies a duration-based multiplier — longer locks earn
+              proportionally more voting power. The result can exceed the amount
+              of REPPO you locked.
+            </p>
+          </Tip>
+        </span>
+      ),
+      v: snap ? fmt(snap.balance.veReppo) : '—',
+    },
+    { id: 'Claimable', k: 'Claimable', v: pnl ? <span className={pnl.claimableReppo > 0 ? 'pos' : ''}>{fmt(pnl.claimableReppo)}</span> : '—' },
+    { id: 'Cadence', k: 'Cadence', v: cfg ? `${cfg.cadenceHours}h` : '—' },
   ]
   return (
     <>
@@ -45,7 +62,7 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
       <div className="ticker">
         <div className="ticker-inner">
           {ticks.map((t) => (
-            <span className="tick" key={t.k}>
+            <span className="tick" key={t.id}>
               <span className="k">{t.k}</span>
               <span className="v tnum">{t.v}</span>
             </span>

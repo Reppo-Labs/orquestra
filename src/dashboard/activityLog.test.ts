@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendActivity, readActivity, readActivitySince, type ActivityEntry } from './activityLog.js'
+import { appendActivity, readActivity, readActivitySince, sumClaimedReppo, type ActivityEntry } from './activityLog.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-act-')) })
@@ -73,6 +73,23 @@ describe('activityLog (sqlite)', () => {
     appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '9', epoch: 104, reppoClaimed: 12.5, status: 'executed', txHash: '0xc' })
     const [row] = readActivity(dir, { limit: 1 })
     expect(row).toMatchObject({ kind: 'claim', epoch: 104, reppoClaimed: 12.5 })
+  })
+
+  it('sumClaimedReppo sums ALL executed claims, unbounded by any read window', () => {
+    // More claims than any dashboard read limit would surface — the sum must not
+    // depend on a recent-rows window (the PnL truncation bug).
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '9', reppoClaimed: 1800, status: 'executed' })
+    for (let i = 0; i < 50; i++) {
+      appendActivity(dir, entry({ podId: String(i) })) // 50 non-claim vote rows pushing the big claim "old"
+    }
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '9', reppoClaimed: 10, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '9', reppoClaimed: 5, status: 'error' }) // excluded
+    expect(sumClaimedReppo(dir)).toBe(1810) // 1800 + 10, error claim ignored
+  })
+
+  it('sumClaimedReppo returns 0 when there are no claims', () => {
+    appendActivity(dir, entry())
+    expect(sumClaimedReppo(dir)).toBe(0)
   })
 
   it('imports a pre-existing activity-log.jsonl once, preserving history, then renames it', () => {

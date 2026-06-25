@@ -6,6 +6,7 @@ import { type LanguageModel } from 'ai'
 import { z } from 'zod'
 import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
+import type { LockConstraints } from '../reppo/queryLockConstraints.js'
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
@@ -20,6 +21,7 @@ type ChatOut = z.infer<typeof ChatOutSchema>
 export interface StrategyChatDeps {
   messages: ChatMessage[]
   currentConfig: StrategyConfig
+  lockConstraints?: LockConstraints
   generate?: (args: { system: string; prompt: string }) => Promise<ChatOut>
   model?: LanguageModel
 }
@@ -39,7 +41,7 @@ const defaultGenerate = (model: LanguageModel) => ({ system, prompt }: { system:
 
 /** One chat turn: reply + optional validated config proposal. Never throws; never writes. */
 export async function runStrategyChat(deps: StrategyChatDeps): Promise<StrategyChatResult> {
-  const { system, prompt } = buildStrategyChatPrompt(deps.messages, deps.currentConfig)
+  const { system, prompt } = buildStrategyChatPrompt(deps.messages, deps.currentConfig, deps.lockConstraints)
   const generate = deps.generate ?? (deps.model ? defaultGenerate(deps.model) : null)
   if (!generate) throw new Error('runStrategyChat: provide deps.generate or deps.model')
 
@@ -59,7 +61,10 @@ export async function runStrategyChat(deps: StrategyChatDeps): Promise<StrategyC
 }
 
 /** Pure: build the (system, prompt) for one chat turn. Exposed for testing. */
-export function buildStrategyChatPrompt(messages: ChatMessage[], current: StrategyConfig): { system: string; prompt: string } {
+export function buildStrategyChatPrompt(messages: ChatMessage[], current: StrategyConfig, lockConstraints?: LockConstraints): { system: string; prompt: string } {
+  const lockFacts = lockConstraints
+    ? `\n\n# veREPPO protocol constants (live from contract)\nmax lock duration: ${lockConstraints.maxLockDays} days\nepoch length: ${lockConstraints.epochDays} days\nWhen discussing lock duration, use ONLY these on-chain values — never guess or use other numbers.`
+    : ''
   const system =
     'You are the strategy assistant for an orquestra node (a Reppo datanet curation/minting agent). ' +
     'You PROPOSE changes to the strategy config — you can never write or apply anything yourself; the ' +
@@ -68,7 +73,8 @@ export function buildStrategyChatPrompt(messages: ChatMessage[], current: Strate
     'not ask to change — especially budget caps: never raise budget or stake values unless explicitly asked. ' +
     'Carry every per-datanet field through unchanged unless asked (vote, mint, strictness, adapter, ' +
     'adapterParams, mintMode, model, voteShare) — omitting a field silently resets it to its default. ' +
-    'Keep replies short and concrete: say exactly what you changed and why. For pure questions, reply without a proposal.'
+    'Keep replies short and concrete: say exactly what you changed and why. For pure questions, reply without a proposal.' +
+    lockFacts
   const transcript = messages.map((m) => `${m.role}: ${m.content}`).join('\n')
   const prompt =
     `# Current strategy config\n${JSON.stringify(current, null, 2)}\n\n` +

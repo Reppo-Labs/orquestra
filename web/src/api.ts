@@ -34,6 +34,7 @@ export interface Snapshot {
   ts: string | number
   epoch?: EpochInfo | null
   balance: { reppo: number; veReppo: number }
+  votingPower?: { power: number; lockupCount: number }
   budget?: SnapshotBudget
   emissionsDue: { pods: EmissionPod[] }
 }

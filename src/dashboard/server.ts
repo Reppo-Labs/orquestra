@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
-import { readActivity, readActivitySince } from './activityLog.js'
+import { readActivity, readActivitySince, sumClaimedReppo } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
@@ -16,6 +16,7 @@ import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError } from '..
 import { buildLearnView } from '../learn/view.js'
 import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from '../learn/store.js'
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
+import { queryLockConstraints, type LockConstraints } from '../reppo/queryLockConstraints.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
 import { buildStrategyConfig } from '../onboarding/build.js'
@@ -80,6 +81,18 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
     return {}
   }
+}
+
+// veREPPO protocol constants — contract constants, fetch once and keep.
+let lockConstraintsCache: LockConstraints | null = null
+async function getLockConstraints(): Promise<LockConstraints | undefined> {
+  if (lockConstraintsCache) return lockConstraintsCache
+  const rpcUrl = process.env.RPC_URL
+  if (!rpcUrl) return undefined
+  try {
+    lockConstraintsCache = await queryLockConstraints(rpcUrl)
+    return lockConstraintsCache
+  } catch { return undefined }
 }
 
 // Datanet id→name map, cached: names change rarely and the CLI call is slow.
@@ -250,7 +263,8 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
             : 'strategy config is invalid — fix or re-onboard before using the assistant'
           json(res, 409, { error: msg }); return
         }
-        const result = await runStrategyChat({ messages, currentConfig: current, model: chatModel })
+        const lockConstraints = await getLockConstraints()
+        const result = await runStrategyChat({ messages, currentConfig: current, lockConstraints, model: chatModel })
         json(res, 200, result)
         return
       }
@@ -321,8 +335,10 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
-      const activity = readActivity(dataDir, { limit: 5000 })
-      const pnl = snapshot ? derivePnl(snapshot, activity) : null
+      // claimed total must be the unbounded SQL sum, NOT a readActivity({ limit })
+      // slice — a capped window drops old claims while mint spend is cumulative,
+      // making net REPPO read falsely negative as the log grows.
+      const pnl = snapshot ? derivePnl(snapshot, sumClaimedReppo(dataDir)) : null
       json(res, 200, { pnl, snapshot }); return
     }
     // Static SPA: exact asset first, then index.html fallback so client-side

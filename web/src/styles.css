@@ -136,7 +136,7 @@ button { font-family: var(--body); }
 .card {
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   border: 1px solid var(--border); border-radius: var(--r-md); padding: 15px 16px;
-  position: relative; overflow: hidden;
+  position: relative;
 }
 .card .k { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; }
 .card .v { font-family: var(--mono); font-size: 21px; font-weight: 500; margin-top: 7px; letter-spacing: -0.01em; }
