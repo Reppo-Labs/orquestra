@@ -128,6 +128,12 @@ describe('makeOAuthFetch', () => {
     expect(captured?.get('anthropic-beta')).toContain('prompt-caching-2024-07-31')
     expect(captured?.get('anthropic-beta')).toContain(OAUTH_BETA)
   })
+
+  it('throws a clear recovery message on 401 instead of returning the raw auth error', async () => {
+    const base = (async () => new Response('{"error":"invalid_token"}', { status: 401 })) as typeof fetch
+    const f = makeOAuthFetch(async () => 'expired-tok', base)
+    await expect(f('https://api.anthropic.com/v1/messages', {})).rejects.toThrow('orquestra login-anthropic')
+  })
 })
 
 describe('isTemperatureUnsupportedError', () => {
