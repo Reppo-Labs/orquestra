@@ -71,16 +71,21 @@ export async function rpcCall(fetchImpl: typeof fetch, url: string, method: stri
   return json.result
 }
 
-const ONE_REPPO = 10n ** 18n
-const FRAC_SCALE = 10n ** 9n // 9-decimal precision for the fractional REPPO part
-/** Convert wei (18-decimal) to REPPO with fractional precision. Integer REPPO comes
- *  from exact bigint division; the fractional part is scaled DOWN in bigint to 9
- *  decimals before the Number conversion, so the operand stays < 2^53 (a bare
- *  `Number(wei % ONE)` could be ~1e18, past the safe-integer limit, and lose
- *  precision — the very error this avoids). 9 decimals far exceeds REPPO fee needs. */
-function weiToReppo(wei: bigint): number {
-  return Number(wei / ONE_REPPO) + Number((wei % ONE_REPPO) / FRAC_SCALE) / 1e9
+/** Convert a raw token amount (base units) to a fractional number using `decimals`.
+ *  Integer part comes from exact bigint division; the fractional part is scaled DOWN in
+ *  bigint to at most 9 decimals before the Number conversion, so the operand stays < 2^53
+ *  (a bare `Number(raw % base)` could be ~1e18, past the safe-integer limit, and lose
+ *  precision). 9 decimals of display precision far exceeds any human-readable need. */
+export function rawToNumber(raw: bigint, decimals: number): number {
+  if (!Number.isFinite(decimals) || decimals <= 0) return Number(raw)
+  const base = 10n ** BigInt(decimals)
+  const fracDigits = decimals > 9 ? 9 : decimals
+  const fracScale = 10n ** BigInt(decimals - fracDigits)
+  return Number(raw / base) + Number((raw % base) / fracScale) / 10 ** fracDigits
 }
+
+/** REPPO (and other fee assets) are 18-decimal. */
+const weiToReppo = (wei: bigint): number => rawToNumber(wei, 18)
 
 /** Read the actual REPPO mint fee from a landed mint tx by summing the REPPO that
  *  left the signer's wallet, in REPPO (fractional precision; fee assets have 18
@@ -120,6 +125,28 @@ export async function readClaimedReppo(rpcUrl: string, txHash: string, opts: Rea
     return weiToReppo(wei)
   } catch (e) {
     console.warn(`orquestra: claim-amount RPC read failed for ${txHash} — ${(e as Error).message}`)
+    return undefined
+  }
+}
+
+/** Read the amount of an ARBITRARY ERC20 `token` (e.g. a datanet's native emission token
+ *  like LBM) that arrived at the signer in a landed claim tx, scaled to a human number by
+ *  `decimals`. The generalization of readClaimedReppo for non-REPPO emissions — PodManagerV2
+ *  pays the subnet's primary token on claim but exposes no claimed-amount, so we read the
+ *  receipt. Returns undefined on any failure so the caller can fall back. */
+export async function readClaimedToken(
+  rpcUrl: string, txHash: string, token: string, decimals: number, opts: Pick<ReadOpts, 'fetchImpl'> = {},
+): Promise<number | undefined> {
+  const fetchImpl = opts.fetchImpl ?? fetch
+  try {
+    const tx = await rpcCall(fetchImpl, rpcUrl, 'eth_getTransactionByHash', [txHash])
+    if (!tx?.from) return undefined
+    const receipt = await rpcCall(fetchImpl, rpcUrl, 'eth_getTransactionReceipt', [txHash])
+    if (!receipt?.logs || receipt.status !== '0x1') return undefined
+    const raw = sumReppoInflow(receipt.logs, tx.from, token)
+    return rawToNumber(raw, decimals)
+  } catch (e) {
+    console.warn(`orquestra: claim-token RPC read failed for ${txHash} — ${(e as Error).message}`)
     return undefined
   }
 }

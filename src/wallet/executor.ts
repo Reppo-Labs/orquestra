@@ -16,6 +16,10 @@ export const MINT_REPPO_FALLBACK = 200
  *  it from the tx receipt to reconcile the ledger to real spend. */
 export type ReppoFeeReader = (txHash: string) => Promise<number | undefined>
 
+/** Reads the actual amount of a NON-REPPO token (e.g. LBM) a landed claim tx paid the
+ *  signer, scaled to human units by `decimals`, or undefined if it can't be read. */
+export type ClaimTokenReader = (txHash: string, token: string, decimals: number) => Promise<number | undefined>
+
 /** The only component that signs. Each public method reserves budget BEFORE
  *  signing (fail-closed), then reconciles to actual gas on success or
  *  releases the reservation on failure. */
@@ -28,7 +32,18 @@ export class WalletExecutor {
     /** When set, the REPPO a claim actually paid is read from the tx receipt (CLI omits it),
      *  so the activity log / dashboard show real claimed amounts instead of 0. */
     private readonly claimReppoReader?: ReppoFeeReader,
+    /** When set, the NON-REPPO token a claim paid is read from the tx receipt — used for
+     *  claims on datanets that emit a native token (ClaimIntent.token present). */
+    private readonly claimTokenReader?: ClaimTokenReader,
   ) {}
+
+  /** Read the native-token amount a claim tx paid, when the intent carries a non-REPPO token
+   *  and a reader is wired. Best-effort; returns undefined to leave tokenClaimed unset. */
+  private async readTokenClaimed(intent: ClaimIntent, txHash: string): Promise<{ symbol: string; amount: number } | undefined> {
+    if (!intent.token || !this.claimTokenReader) return undefined
+    const amount = await this.claimTokenReader(txHash, intent.token.address, intent.token.decimals)
+    return amount === undefined ? undefined : { symbol: intent.token.symbol, amount }
+  }
 
   /** One-time veREPPO lock for voting power. Not budget-gated. */
   async lock(args: LockArgs): Promise<ExecResult> {
@@ -161,7 +176,8 @@ export class WalletExecutor {
       // Read the actual REPPO claimed from the tx receipt (CLI/contract omit it) so the
       // activity log + dashboard show real amounts. Best-effort — undefined on read failure.
       const reppoClaimed = this.claimReppoReader ? await this.claimReppoReader(r.txHash) : undefined
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed }
+      const tokenClaimed = await this.readTokenClaimed(intent, r.txHash)
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed, tokenClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)
       return { ok: false, status: 'error', detail: (e as Error).message }
@@ -182,7 +198,8 @@ export class WalletExecutor {
       }
       this.ledger.reconcileClaim(res, r.gasEth)
       const reppoClaimed = this.claimReppoReader ? await this.claimReppoReader(r.txHash) : undefined
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed }
+      const tokenClaimed = await this.readTokenClaimed(intent, r.txHash)
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed, tokenClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)
       return { ok: false, status: 'error', detail: (e as Error).message }

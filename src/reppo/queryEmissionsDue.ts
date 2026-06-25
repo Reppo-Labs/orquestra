@@ -2,7 +2,11 @@
 import { runReppoStdout } from './exec.js'
 
 
-export interface ClaimableEmission { podId: string; datanetId: string; epoch: number; reppo: number }
+/** The emission token for a claimable (pod,epoch) when it is NOT REPPO. Attached by the
+ *  on-chain voter-claim wiring (resolved from the datanet's nativeToken / SubnetManager);
+ *  absent ⇒ a plain REPPO claim. */
+export interface ClaimToken { address: string; symbol: string; decimals: number }
+export interface ClaimableEmission { podId: string; datanetId: string; epoch: number; reppo: number; token?: ClaimToken }
 export interface EmissionsDue { totalReppo: number; pods: ClaimableEmission[] }
 
 const toFinite = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0 }

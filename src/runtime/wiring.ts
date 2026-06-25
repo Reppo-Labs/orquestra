@@ -19,7 +19,7 @@ import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
-import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
+import type { ClaimableEmission, ClaimToken } from '../reppo/queryEmissionsDue.js'
 import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
@@ -256,6 +256,27 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // datanets in the cycle.
   const videoCap = w.videoPodsPerCycle ?? 4
   let videoBudget = videoCap
+
+  // Attach the NON-REPPO emission token to claimable (pod,epoch)s so the executor can read the
+  // claimed native amount from the tx receipt. The on-chain claim scanners return datanetId='' and
+  // no token; we resolve pod→datanet from our own vote/mint activity and datanet→token from the
+  // catalog. Best-effort + only when there ARE claims (avoids a per-cycle CLI call when idle).
+  const enrichTokens = async (due: ClaimableEmission[]): Promise<ClaimableEmission[]> => {
+    if (due.length === 0) return due
+    const podDatanet = new Map<string, string>()
+    for (const e of readActivity(w.dataDir, { limit: 100_000 })) {
+      if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) podDatanet.set(e.podId, e.datanetId)
+    }
+    const tokenByDatanet = new Map<string, ClaimToken>()
+    try {
+      for (const d of await listDatanetsJson()) if (d.nativeToken) tokenByDatanet.set(d.id, d.nativeToken)
+    } catch { /* best-effort: skip token enrichment this cycle (claims still record REPPO) */ }
+    return due.map((em) => {
+      const datanetId = em.datanetId || podDatanet.get(em.podId) || ''
+      return { ...em, datanetId, token: tokenByDatanet.get(datanetId) }
+    })
+  }
+
   return {
     dataDir: w.dataDir,
     topN: 12,
@@ -340,9 +361,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
     // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
     // cycle's claim phase (it skips claiming that cycle).
-    getEmissionsDue: async () => (w.rpcUrl && w.walletAddress)
-      ? queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
-      : (await io.emissionsDue()).pods,
+    getEmissionsDue: async () => enrichTokens((w.rpcUrl && w.walletAddress)
+      ? await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
+      : (await io.emissionsDue()).pods),
     // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod set comes
     // from our executed-vote activity (the wallet doesn't own them, so they're absent from the
     // owner Transfer-log cache); claimable (pod,epoch) is then detected on-chain. RPC-only —
@@ -359,7 +380,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // gate inside bounds it further to epochs the wallet actually voted in.
       const floorRaw = Number(process.env.REPPO_EMISSIONS_FLOOR_EPOCH)
       const floorEpoch = Number.isFinite(floorRaw) && floorRaw > 0 ? floorRaw : undefined
-      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch })
+      return enrichTokens(await queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch }))
     },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {

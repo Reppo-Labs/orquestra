@@ -63,6 +63,9 @@ export interface EarnSummary {
   mintedPods: number
   /** Σ reppoClaimed over executed claims. */
   claimedReppo: number
+  /** Σ claimed per NON-REPPO emission token (e.g. LBM), one entry per token symbol. Kept
+   *  separate from claimedReppo — native tokens are NOT converted into a REPPO equivalent. */
+  claimedTokens: { symbol: string; amount: number }[]
   /** still-unclaimed emissions across our pods (live query). */
   claimableReppo: number
   totalUpVotes: number
@@ -93,20 +96,29 @@ export function earnSummary(activity: ActivityEntry[], emissionsDue: EmissionsDu
   // Exclude 'backfill' rows — those are pre-dashboard historical placeholders, not pods
   // this node minted; counting them would overstate the earn-test's actual output.
   const mintedPods = activity.filter((e) => e.kind === 'mint' && e.status === 'executed' && e.cycleId !== 'backfill').length
-  const claimedReppo = activity
-    .filter((e) => e.kind === 'claim' && e.status === 'executed')
-    .reduce((s, e) => s + (e.reppoClaimed ?? 0), 0)
+  const executedClaims = activity.filter((e) => e.kind === 'claim' && e.status === 'executed')
+  const claimedReppo = executedClaims.reduce((s, e) => s + (e.reppoClaimed ?? 0), 0)
+  // Per-token claimed totals (non-REPPO emissions, e.g. LBM) — aggregated by symbol, kept
+  // separate from claimedReppo (no conversion to a REPPO equivalent).
+  const tokenTotals = new Map<string, number>()
+  for (const e of executedClaims) {
+    if (e.claimedTokenSymbol && e.claimedTokenAmount) {
+      tokenTotals.set(e.claimedTokenSymbol, (tokenTotals.get(e.claimedTokenSymbol) ?? 0) + e.claimedTokenAmount)
+    }
+  }
+  const claimedTokens = [...tokenTotals.entries()].map(([symbol, amount]) => ({ symbol, amount }))
   const claimableReppo = emissionsDue.totalReppo
   const totalUpVotes = ownPodVotes.reduce((s, p) => s + p.upVotes, 0)
   const totalDownVotes = ownPodVotes.reduce((s, p) => s + p.downVotes, 0)
   return {
     mintedPods,
     claimedReppo,
+    claimedTokens,
     claimableReppo,
     totalUpVotes,
     totalDownVotes,
     pods: ownPodVotes,
-    earning: claimedReppo > 0 || claimableReppo > 0,
+    earning: claimedReppo > 0 || claimableReppo > 0 || claimedTokens.length > 0,
   }
 }
 
@@ -118,6 +130,7 @@ export function formatEarnStatus(s: EarnSummary): string {
     `minted pods (executed): ${s.mintedPods}`,
     `claimable REPPO (now):  ${s.claimableReppo}`,
     `claimed REPPO (to date): ${s.claimedReppo}`,
+    ...(s.claimedTokens.length ? [`claimed (native): ${s.claimedTokens.map((t) => `${t.amount} ${t.symbol}`).join(', ')}`] : []),
     `pod votes: ${s.totalUpVotes} up / ${s.totalDownVotes} down across ${s.pods.length} pod(s)`,
   ]
   for (const p of s.pods) {

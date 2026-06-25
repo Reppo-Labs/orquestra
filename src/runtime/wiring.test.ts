@@ -24,6 +24,9 @@ const h = vi.hoisted(() => ({
   generateObjectWithRetry: vi.fn(async () => ({ score: 5, reason: 'r' })),
   snap: { ts: 't', cycleId: 'c', balance: {}, votingPower: {}, emissionsDue: { totalReppo: 0, pods: [] }, budget: {}, epoch: { epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 } },
 }))
+// Stub the datanet catalog so discovery + token-enrichment never spawn the real `reppo`
+// CLI in unit tests (its variable spawn latency intermittently blew the 5s tick timeout).
+vi.mock('../reppo/listDatanets.js', () => ({ listDatanetsJson: vi.fn(async () => []) }))
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
 vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
 vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))

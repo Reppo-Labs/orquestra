@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS activity (
   ts TEXT NOT NULL, cycleId TEXT, kind TEXT, datanetId TEXT, podId TEXT,
   direction TEXT, conviction REAL, reason TEXT, canonicalKey TEXT, podName TEXT,
   epoch INTEGER, reppoClaimed REAL, status TEXT, txHash TEXT, gasEth REAL,
-  detail TEXT, panel TEXT
+  detail TEXT, panel TEXT,
+  claimedTokenSymbol TEXT, claimedTokenAmount REAL
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
 
@@ -114,8 +115,26 @@ export function getDb(dataDir: string): SqliteDb {
   if (existing) return existing
   const d = new DatabaseSync(path)
   d.exec(DDL)
+  migrate(d)
   dbs.set(path, d)
   return d
+}
+
+/** Idempotent column additions for DBs created before a column existed (CREATE TABLE IF NOT
+ *  EXISTS won't add columns to an existing table). Each entry is added only when absent, so
+ *  this is a safe no-op on fresh DBs (the column is already in DDL) and on already-migrated ones.
+ *  Column names/types are hardcoded literals below — no external input reaches the SQL. */
+function migrate(d: SqliteDb): void {
+  const cols = (d.prepare('PRAGMA table_info(activity)').all() as { name: string }[]).map((c) => c.name)
+  const add: [string, string][] = [
+    ['claimedTokenSymbol', 'TEXT'],
+    ['claimedTokenAmount', 'REAL'],
+  ]
+  for (const [name, type] of add) {
+    if (cols.includes(name)) continue
+    const ddl = 'ALTER TABLE activity ADD COLUMN ' + name + ' ' + type
+    d.exec(ddl)
+  }
 }
 
 /** Test helper: close and forget all cached handles. */

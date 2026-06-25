@@ -18,7 +18,7 @@ import { BudgetLedger } from './wallet/ledger.js'
 import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
 import { planStakeTopUp, stakeTopUpKey, markStakeTargetAttempted } from './wallet/stakeTopUp.js'
 import { defaultReppoCli } from './reppo/cli.js'
-import { readMintReppoFee, readClaimedReppo } from './reppo/mintFee.js'
+import { readMintReppoFee, readClaimedReppo, readClaimedToken } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
@@ -245,7 +245,10 @@ async function start(): Promise<void> {
   const rpcUrl = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
   const reppoFeeReader = rpcUrl ? (txHash: string) => readMintReppoFee(rpcUrl, txHash) : undefined
   const claimReppoReader = rpcUrl ? (txHash: string) => readClaimedReppo(rpcUrl, txHash) : undefined
-  const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader, claimReppoReader)
+  const claimTokenReader = rpcUrl
+    ? (txHash: string, token: string, decimals: number) => readClaimedToken(rpcUrl, txHash, token, decimals)
+    : undefined
+  const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader, claimReppoReader, claimTokenReader)
   // A mint reserves a conservative MINT_REPPO_FALLBACK against mintReppoMax before
   // signing (refuse-before, not after). If the cap is below one such reserve, EVERY
   // mint is refused — warn loudly so the operator isn't left wondering why nothing mints.
