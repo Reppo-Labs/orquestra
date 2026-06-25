@@ -60,7 +60,13 @@ export function makeOAuthFetch(tokenProvider: () => Promise<string>, baseFetch: 
         // not a JSON body — leave untouched
       }
     }
-    return baseFetch(input, { ...init, headers, body })
+    const response = await baseFetch(input, { ...init, headers, body })
+    // A 401 means the stored OAuth token has expired or been revoked.
+    // Throw before the SDK parses the body so operators see a recovery hint, not a raw auth error.
+    if (response.status === 401) {
+      throw new Error('Anthropic OAuth token expired or revoked — run `orquestra login-anthropic` to refresh, then restart the node')
+    }
+    return response
   }
 }
 
