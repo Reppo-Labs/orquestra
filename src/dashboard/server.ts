@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
-import { readActivity, readActivitySince } from './activityLog.js'
+import { readActivity, readActivitySince, sumClaimedReppo } from './activityLog.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
@@ -324,8 +324,10 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     }
     if (url === '/api/pnl') {
       const snapshot = readSnapshot(dataDir)
-      const activity = readActivity(dataDir, { limit: 5000 })
-      const pnl = snapshot ? derivePnl(snapshot, activity) : null
+      // claimed total must be the unbounded SQL sum, NOT a readActivity({ limit })
+      // slice — a capped window drops old claims while mint spend is cumulative,
+      // making net REPPO read falsely negative as the log grows.
+      const pnl = snapshot ? derivePnl(snapshot, sumClaimedReppo(dataDir)) : null
       json(res, 200, { pnl, snapshot }); return
     }
     // Static SPA: exact asset first, then index.html fallback so client-side

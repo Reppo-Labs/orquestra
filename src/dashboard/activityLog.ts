@@ -146,6 +146,17 @@ export function readActivity(dataDir: string, opts: { limit: number }): Activity
   return rows.map(rowToEntry)
 }
 
+/** Total REPPO from every executed claim in the log, summed in SQL (unbounded).
+ *  PnL must use this rather than summing a `readActivity({ limit })` slice — a
+ *  capped read drops old claims while cumulative mint spend is never truncated,
+ *  making net REPPO read falsely negative. Missing DB → 0. */
+export function sumClaimedReppo(dataDir: string): number {
+  const row = conn(dataDir)
+    .prepare("SELECT COALESCE(SUM(reppoClaimed), 0) AS total FROM activity WHERE kind = 'claim' AND status = 'executed'")
+    .get() as { total: number }
+  return row.total
+}
+
 /** Entries at or after `sinceMs` (epoch millis), newest-first. Indexed on ts, so
  *  the dashboard health window doesn't re-read the whole history each poll. */
 export function readActivitySince(dataDir: string, sinceMs: number): ActivityEntry[] {

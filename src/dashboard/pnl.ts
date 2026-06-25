@@ -1,6 +1,5 @@
 // src/dashboard/pnl.ts
 import type { Snapshot } from './snapshot.js'
-import type { ActivityEntry } from './activityLog.js'
 
 export interface Pnl {
   claimedReppo: number
@@ -11,12 +10,13 @@ export interface Pnl {
   gasSpentEth: number
 }
 
-/** Pure PnL summary. claimed = Σ executed claim amounts in the log; claimable =
- *  still-unclaimed emissions in the latest snapshot; spent = REPPO on mints. */
-export function derivePnl(snapshot: Snapshot, activity: ActivityEntry[]): Pnl {
-  const claimedReppo = activity
-    .filter((e) => e.kind === 'claim' && e.status === 'executed')
-    .reduce((s, e) => s + (e.reppoClaimed ?? 0), 0)
+/** Pure PnL summary. `claimedReppo` is the lifetime sum of executed claims — the
+ *  caller MUST pass the unbounded total (activityLog.sumClaimedReppo), NOT a sum
+ *  over a windowed `readActivity` slice: a capped window drops old claims while
+ *  cumulative mint spend is never truncated, so net would read falsely negative.
+ *  claimable = still-unclaimed emissions in the latest snapshot; spent = REPPO
+ *  on mints. */
+export function derivePnl(snapshot: Snapshot, claimedReppo: number): Pnl {
   const claimableReppo = snapshot.emissionsDue.totalReppo
   const earnedReppo = claimedReppo + claimableReppo
   const spentReppo = snapshot.budget.mintReppoSpent
