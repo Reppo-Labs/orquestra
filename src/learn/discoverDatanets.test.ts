@@ -32,27 +32,27 @@ const cfg = (datanets: StrategyConfig['datanets'] = {}): StrategyConfig =>
 const enabledDatanet = { vote: true as const, mint: false as const, strictness: 'balanced' as const, mintMode: 'pin' as const, voteShare: 1 }
 
 describe('discoverDatanets — REPPO emissions', () => {
-  it('creates a vote_enable proposal for an emitting datanet not in config', () => {
-    discoverDatanets(dir, [dn({})], cfg(), 100)
+  it('creates a vote_enable proposal for an emitting datanet not in config', async () => {
+    await discoverDatanets(dir, [dn({})], cfg(), 100)
     const proposals = readProposals(dir)
     expect(proposals).toHaveLength(1)
     expect(proposals[0]).toMatchObject({ datanetId: '9', field: 'vote_enable', toValue: 'true' })
     expect(proposals[0].rationale).toContain('500.00 REPPO/epoch')
   })
 
-  it('skips datanet already vote-enabled in config', () => {
-    discoverDatanets(dir, [dn({})], cfg({ '9': enabledDatanet }), 100)
+  it('skips datanet already vote-enabled in config', async () => {
+    await discoverDatanets(dir, [dn({})], cfg({ '9': enabledDatanet }), 100)
     expect(readProposals(dir)).toHaveLength(0)
   })
 
-  it('skips datanet with zero REPPO emissions and no nativeToken', () => {
-    discoverDatanets(dir, [dn({ emissionsPerEpochReppo: 0 })], cfg(), 100)
+  it('skips datanet with zero REPPO emissions and no nativeToken', async () => {
+    await discoverDatanets(dir, [dn({ emissionsPerEpochReppo: 0 })], cfg(), 100)
     expect(readProposals(dir)).toHaveLength(0)
   })
 
-  it('deduplicates — no second proposal when one is already pending', () => {
-    discoverDatanets(dir, [dn({})], cfg(), 100)
-    discoverDatanets(dir, [dn({})], cfg(), 101)
+  it('deduplicates — no second proposal when one is already pending', async () => {
+    await discoverDatanets(dir, [dn({})], cfg(), 100)
+    await discoverDatanets(dir, [dn({})], cfg(), 101)
     expect(readProposals(dir)).toHaveLength(1)
   })
 })
@@ -63,28 +63,49 @@ describe('discoverDatanets — non-REPPO (nativeToken) emissions', () => {
     nativeToken: { symbol: 'LBM', address: '0xabc', decimals: 18 },
   })
 
-  it('creates a vote_enable proposal for a nativeToken datanet', () => {
-    discoverDatanets(dir, [litebeam], cfg(), 100)
+  it('creates a vote_enable proposal for a nativeToken datanet (quantity-less without a resolver)', async () => {
+    await discoverDatanets(dir, [litebeam], cfg(), 100)
     const proposals = readProposals(dir)
     expect(proposals).toHaveLength(1)
     expect(proposals[0]).toMatchObject({ datanetId: '22', field: 'vote_enable', toValue: 'true' })
     expect(proposals[0].rationale).toContain('LBM/epoch')
+    expect(proposals[0].rationale).not.toMatch(/\d.*LBM/) // no magnitude when no resolver
   })
 
-  it('skips nativeToken datanet already vote-enabled', () => {
-    discoverDatanets(dir, [litebeam], cfg({ '22': enabledDatanet }), 100)
+  it('includes the emission magnitude when a resolver is supplied', async () => {
+    await discoverDatanets(dir, [litebeam], cfg(), 100, async () => 40000)
+    const proposals = readProposals(dir)
+    expect(proposals).toHaveLength(1)
+    expect(proposals[0].rationale).toContain('40,000 LBM/epoch')
+  })
+
+  it('falls back to quantity-less when the resolver throws', async () => {
+    await discoverDatanets(dir, [litebeam], cfg(), 100, async () => { throw new Error('rpc down') })
+    const proposals = readProposals(dir)
+    expect(proposals).toHaveLength(1)
+    expect(proposals[0].rationale).toContain('LBM/epoch')
+    expect(proposals[0].rationale).not.toMatch(/\d.*LBM/)
+  })
+
+  it('falls back to quantity-less when the resolver returns null', async () => {
+    await discoverDatanets(dir, [litebeam], cfg(), 100, async () => null)
+    expect(readProposals(dir)[0].rationale).toContain('LBM/epoch')
+  })
+
+  it('skips nativeToken datanet already vote-enabled', async () => {
+    await discoverDatanets(dir, [litebeam], cfg({ '22': enabledDatanet }), 100)
     expect(readProposals(dir)).toHaveLength(0)
   })
 
-  it('deduplicates nativeToken proposals across epochs', () => {
-    discoverDatanets(dir, [litebeam], cfg(), 100)
-    discoverDatanets(dir, [litebeam], cfg(), 101)
+  it('deduplicates nativeToken proposals across epochs', async () => {
+    await discoverDatanets(dir, [litebeam], cfg(), 100)
+    await discoverDatanets(dir, [litebeam], cfg(), 101)
     expect(readProposals(dir)).toHaveLength(1)
   })
 
-  it('handles nativeToken with blank symbol ("?") without throwing', () => {
+  it('handles nativeToken with blank symbol ("?") without throwing', async () => {
     const blankSymbol = dn({ id: '33', emissionsPerEpochReppo: 0, nativeToken: { symbol: '?', address: '0xdef', decimals: 18 } })
-    discoverDatanets(dir, [blankSymbol], cfg(), 100)
+    await discoverDatanets(dir, [blankSymbol], cfg(), 100)
     const proposals = readProposals(dir)
     expect(proposals).toHaveLength(1)
     expect(proposals[0].rationale).toContain('?/epoch')
