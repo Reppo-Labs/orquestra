@@ -168,6 +168,25 @@ describe('buildCycleDeps', () => {
     expect(await deps.grantedSubnets!()).toEqual(new Set())
   })
 
+  it('registerVoteOnPlatform is always wired (cred check deferred to call time)', () => {
+    const deps = buildCycleDeps(wiring())
+    expect(deps.registerVoteOnPlatform).toBeDefined()
+  })
+
+  it('registerVoteOnPlatform is a no-op when REPPO_AGENT_ID / REPPO_API_KEY are absent', async () => {
+    const savedId = process.env.REPPO_AGENT_ID
+    const savedKey = process.env.REPPO_API_KEY
+    delete process.env.REPPO_AGENT_ID
+    delete process.env.REPPO_API_KEY
+    try {
+      const deps = buildCycleDeps(wiring())
+      await expect(deps.registerVoteOnPlatform!('pod-1', '0xtx')).resolves.toBeUndefined()
+    } finally {
+      if (savedId !== undefined) process.env.REPPO_AGENT_ID = savedId
+      if (savedKey !== undefined) process.env.REPPO_API_KEY = savedKey
+    }
+  })
+
   it('getExistingPodNames tolerates a failing list (returns [])', async () => {
     const deps = buildCycleDeps(wiring({
       io: { listPods: async () => { throw new Error('boom') }, fetchContent: async () => '' },

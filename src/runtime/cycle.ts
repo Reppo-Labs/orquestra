@@ -181,7 +181,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     if (r.status === 'executed') {
       deps.recordVote(datanetId, intent.podId)
       if (r.txHash) deps.registerVoteOnPlatform?.(intent.podId, r.txHash)
-        .catch((e: unknown) => console.error(`orquestra: platform vote register failed pod ${intent.podId}: ${(e as Error).message}`))
+        .catch((e: unknown) => console.error(redactSecrets(`orquestra: platform vote register failed pod ${intent.podId}: ${(e as Error).message}`)))
     } else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
       console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
       deps.recordVote(datanetId, intent.podId)

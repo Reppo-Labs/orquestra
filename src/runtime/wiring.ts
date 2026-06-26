@@ -357,14 +357,14 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     executor: w.executor,
     ledger: w.ledger,
     recordVote: (id, podId) => w.dedup.recordVote(id, podId),
-    // Wire platform vote registration when agent creds are available (set at startup from
-    // the SQLite agent store). Absent creds → dep is undefined → cycle skips the call.
-    ...(process.env.REPPO_AGENT_ID && process.env.REPPO_API_KEY
-      ? {
-          registerVoteOnPlatform: (podId: string, txHash: string) =>
-            registerVoteOnPlatform(process.env.REPPO_AGENT_ID!, podId, txHash, process.env.REPPO_API_KEY!).then(() => {}),
-        }
-      : {}),
+    // Cred check deferred to call time so late-arriving or rotated creds take effect
+    // without restarting the node (env vars set from SQLite at startup but re-read here).
+    registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+      const agentId = process.env.REPPO_AGENT_ID
+      const apiKey = process.env.REPPO_API_KEY
+      if (!agentId || !apiKey) return Promise.resolve()
+      return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
+    },
     recordMint: (id, key) => w.dedup.recordMint(id, key),
     // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
