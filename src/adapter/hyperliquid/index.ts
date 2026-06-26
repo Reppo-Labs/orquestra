@@ -15,6 +15,8 @@ const MAX_PAGES = 50
 
 const finite = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
 /** Page through fills over [window.startTime, window.endTime] (ms) using an injected
  *  page fetcher. Dedups by `hash` so fills sharing a boundary timestamp are neither
  *  dropped nor double-counted; terminates on a short page or when a page adds nothing
@@ -23,14 +25,16 @@ const finite = (v: unknown): number => { const n = Number(v); return Number.isFi
 export async function fetchFillsPaged(
   fetchPage: (startTime: number, endTime: number) => Promise<Array<{ time?: number; hash?: string }>>,
   window: FillsWindow,
-  opts: { pageSize?: number; maxPages?: number } = {},
+  opts: { pageSize?: number; maxPages?: number; interPageDelayMs?: number } = {},
 ): Promise<unknown[]> {
   const pageSize = opts.pageSize ?? HL_PAGE_SIZE
   const maxPages = opts.maxPages ?? MAX_PAGES
+  const interPageDelayMs = opts.interPageDelayMs ?? 200
   const seen = new Set<string>()
   const all: unknown[] = []
   let cursor = window.startTime
   for (let page = 0; page < maxPages; page++) {
+    if (page > 0) await sleep(interPageDelayMs)
     const batch = await fetchPage(cursor, window.endTime)
     if (!Array.isArray(batch) || batch.length === 0) break
     let added = 0
@@ -63,6 +67,8 @@ export interface HlParams extends QualityParams {
   minVlm: number
   /** days before the epoch start to reach back so opens are captured. */
   openLookbackDays: number
+  /** ms to wait between wallet fetches — avoids 429 from HL's public API. */
+  walletDelayMs: number
 }
 
 export const HL_DEFAULTS: HlParams = {
@@ -72,6 +78,7 @@ export const HL_DEFAULTS: HlParams = {
   minRoundTrips: 3,
   minMarkets: 2,
   minRealizedPnl: 0,
+  walletDelayMs: 300,
 }
 
 export interface HlFetchers {
@@ -134,7 +141,9 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
       const pool = rankByMargin(lb, LEADERBOARD_WINDOW, params.poolSize, params.minVlm)
 
       const scored: Array<{ cand: CandidatePod; realizedPnl: number; nTrips: number }> = []
-      for (const wallet of pool) {
+      for (let i = 0; i < pool.length; i++) {
+        if (i > 0) await sleep(params.walletDelayMs)
+        const wallet = pool[i]!
         try {
           const fills = await fetchers.fetchFills(wallet, window)
           const trips = aggregateRoundTrips(fills as Parameters<typeof aggregateRoundTrips>[0])
