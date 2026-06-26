@@ -25,16 +25,17 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export async function fetchFillsPaged(
   fetchPage: (startTime: number, endTime: number) => Promise<Array<{ time?: number; hash?: string }>>,
   window: FillsWindow,
-  opts: { pageSize?: number; maxPages?: number; interPageDelayMs?: number } = {},
+  opts: { pageSize?: number; maxPages?: number; interPageDelayMs?: number; sleepFn?: (ms: number) => Promise<void> } = {},
 ): Promise<unknown[]> {
   const pageSize = opts.pageSize ?? HL_PAGE_SIZE
   const maxPages = opts.maxPages ?? MAX_PAGES
   const interPageDelayMs = opts.interPageDelayMs ?? 200
+  const nap = opts.sleepFn ?? sleep
   const seen = new Set<string>()
   const all: unknown[] = []
   let cursor = window.startTime
   for (let page = 0; page < maxPages; page++) {
-    if (page > 0) await sleep(interPageDelayMs)
+    if (page > 0 && interPageDelayMs > 0) await nap(interPageDelayMs)
     const batch = await fetchPage(cursor, window.endTime)
     if (!Array.isArray(batch) || batch.length === 0) break
     let added = 0
@@ -69,6 +70,8 @@ export interface HlParams extends QualityParams {
   openLookbackDays: number
   /** ms to wait between wallet fetches — avoids 429 from HL's public API. */
   walletDelayMs: number
+  /** ms to wait between fill-page fetches — avoids 429 from HL's public API. */
+  interPageDelayMs: number
 }
 
 export const HL_DEFAULTS: HlParams = {
@@ -79,6 +82,7 @@ export const HL_DEFAULTS: HlParams = {
   minMarkets: 2,
   minRealizedPnl: 0,
   walletDelayMs: 300,
+  interPageDelayMs: 200,
 }
 
 export interface HlFetchers {
@@ -94,31 +98,34 @@ export interface HlDeps {
   epochProvider?: () => Promise<{ epochStart: number; epochDurationSeconds: number }>
   /** clock (default: Date.now). Injected in tests. */
   now?: () => number
+  /** injectable sleep for tests (default: real setTimeout). */
+  sleepFn?: (ms: number) => Promise<void>
 }
 
-/** Default fetchers hit the HL public API (no auth) via curl. fetchFills pages
- *  forward over the window (HL caps ~2000 fills/response) until exhausted. */
-const defaultFetchers: HlFetchers = {
-  async fetchLeaderboard() {
-    const { stdout } = await execFileAsync('curl', ['-fsS', '--max-time', '60', 'https://stats-data.hyperliquid.xyz/Mainnet/leaderboard'], { maxBuffer: 64 * 1024 * 1024 })
-    return JSON.parse(stdout)
-  },
-  async fetchFills(wallet: string, window: FillsWindow) {
-    return fetchFillsPaged(async (startTime, endTime) => {
-      const body = JSON.stringify({ type: 'userFillsByTime', user: wallet, startTime, endTime, aggregateByTime: false })
-      const { stdout } = await execFileAsync('curl', ['-fsS', '--max-time', '60', '-H', 'Content-Type: application/json', '-d', body, 'https://api.hyperliquid.xyz/info'], { maxBuffer: 64 * 1024 * 1024 })
-      const parsed = JSON.parse(stdout)
-      return Array.isArray(parsed) ? parsed : []
-    }, window)
-  },
+function makeDefaultFetchers(interPageDelayMs: number, sleepFn: (ms: number) => Promise<void>): HlFetchers {
+  return {
+    async fetchLeaderboard() {
+      const { stdout } = await execFileAsync('curl', ['-fsS', '--max-time', '60', 'https://stats-data.hyperliquid.xyz/Mainnet/leaderboard'], { maxBuffer: 64 * 1024 * 1024 })
+      return JSON.parse(stdout)
+    },
+    async fetchFills(wallet: string, window: FillsWindow) {
+      return fetchFillsPaged(async (startTime, endTime) => {
+        const body = JSON.stringify({ type: 'userFillsByTime', user: wallet, startTime, endTime, aggregateByTime: false })
+        const { stdout } = await execFileAsync('curl', ['-fsS', '--max-time', '60', '-H', 'Content-Type: application/json', '-d', body, 'https://api.hyperliquid.xyz/info'], { maxBuffer: 64 * 1024 * 1024 })
+        const parsed = JSON.parse(stdout)
+        return Array.isArray(parsed) ? parsed : []
+      }, window, { interPageDelayMs, sleepFn })
+    },
+  }
 }
 
 /** Reference adapter: HL leaderboard (candidate pool) → epoch-aligned fills per
  *  wallet → reconstructed round-trips → rank by realized in-window PnL → quality
  *  gate → labeled datasets. */
 export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
-  const fetchers = deps.fetchers ?? defaultFetchers
   const params: HlParams = { ...HL_DEFAULTS, ...deps.params }
+  const nap = deps.sleepFn ?? sleep
+  const fetchers = deps.fetchers ?? makeDefaultFetchers(params.interPageDelayMs, nap)
   const epochProvider = deps.epochProvider ?? (async () => {
     const e = await queryEpochJson()
     return { epochStart: e.epochStart, epochDurationSeconds: e.epochDurationSeconds }
@@ -142,9 +149,9 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
 
       const scored: Array<{ cand: CandidatePod; realizedPnl: number; nTrips: number }> = []
       for (let i = 0; i < pool.length; i++) {
-        if (i > 0) await sleep(params.walletDelayMs)
         const wallet = pool[i]!
         try {
+          if (i > 0 && params.walletDelayMs > 0) await nap(params.walletDelayMs)
           const fills = await fetchers.fetchFills(wallet, window)
           const trips = aggregateRoundTrips(fills as Parameters<typeof aggregateRoundTrips>[0])
           const q = walletQuality(trips)
