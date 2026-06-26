@@ -88,6 +88,9 @@ export interface CycleDeps {
   executor: WalletExecutor
   ledger: BudgetLedger
   recordVote(datanetId: string, podId: string): void
+  /** Register the on-chain vote with the Reppo platform API so the frontend can display it.
+   *  Fire-and-forget: absence or failure never aborts the cycle. */
+  registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
   recordMint(datanetId: string, canonicalKey: string): void
   getEmissionsDue(): Promise<ClaimableEmission[]>
   /** Claimable VOTER emissions (pods the wallet voted on, not owned). Optional: wirings
@@ -175,8 +178,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // Record dedup ONLY on confirmed execution (a non-executed result most often never
     // submitted, so recording it would permanently block a legitimate retry). Exception:
     // CANNOT_VOTE_FOR_OWN_POD is PERMANENT (we minted the pod; the own-pods query missed it).
-    if (r.status === 'executed') deps.recordVote(datanetId, intent.podId)
-    else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
+    if (r.status === 'executed') {
+      deps.recordVote(datanetId, intent.podId)
+      if (r.txHash) deps.registerVoteOnPlatform?.(intent.podId, r.txHash)
+        .catch((e: unknown) => console.error(`orquestra: platform vote register failed pod ${intent.podId}: ${(e as Error).message}`))
+    } else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
       console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
       deps.recordVote(datanetId, intent.podId)
     }
