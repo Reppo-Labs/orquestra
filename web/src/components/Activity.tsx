@@ -59,7 +59,10 @@ export function Activity({ activity, netNames, onOpenPanel }: {
           <tbody>
             {rows.length ? rows.map((r, i) => (
               <tr key={i}>
-                <td className="mono faint">{new Date(r.ts).toLocaleTimeString()}</td>
+                <td className="mono faint" style={{ whiteSpace: 'nowrap' }}>
+                  <div>{new Date(r.ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
+                  <div>{new Date(r.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+                </td>
                 <td>
                   <span className={`pill ${pillClass(r)}`}>{r.kind}</span>
                   {r.panel && (
