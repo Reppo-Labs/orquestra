@@ -13,6 +13,7 @@ const rubric = { datanetId: '9', name: 'TradingGym AI', canMint: true } as Datan
 // Deterministic epoch + clock so the window is fixed in tests (no network, no Date.now).
 const epochProvider = async () => ({ epochStart: 1_700_000_000, epochDurationSeconds: 172_800 })
 const now = () => 1_700_100_000_000
+const noDelay = { walletDelayMs: 0, interPageDelayMs: 0 }
 
 // Helper: a wallet with 2 markets, each a complete round-trip (open + 10 partial closes
 // that net the position back to flat → entry_px present), so it clears the 20-closed-fill
@@ -28,14 +29,14 @@ const wallet = (pnlPerClose: { btc: number; eth: number }) => {
 
 describe('hyperliquidAdapter', () => {
   it('has id "hyperliquid"', () => {
-    expect(createHyperliquidAdapter({ fetchers: { fetchLeaderboard: async () => lb, fetchFills: async () => fills } }).id).toBe('hyperliquid')
+    expect(createHyperliquidAdapter({ fetchers: { fetchLeaderboard: async () => lb, fetchFills: async () => fills }, params: noDelay }).id).toBe('hyperliquid')
   })
 
   it('passes the computed epoch-aligned window to fetchFills (not now-7d)', async () => {
     const fetchFills = vi.fn(async (_w: string, _win: FillsWindow) => fills)
     const a = createHyperliquidAdapter({
       fetchers: { fetchLeaderboard: async () => lb, fetchFills },
-      epochProvider, now, params: { minRealizedPnl: -1e12, minRoundTrips: 1, minMarkets: 1 },
+      epochProvider, now, params: { minRealizedPnl: -1e12, minRoundTrips: 1, minMarkets: 1, ...noDelay },
     })
     await a.discover({ datanetId: '9', rubric, topN: 2 })
     expect(fetchFills).toHaveBeenCalled()
@@ -48,7 +49,7 @@ describe('hyperliquidAdapter', () => {
     // hl-fills.json is close-only (entry_px null) → 0 complete round-trips → rejected.
     const a = createHyperliquidAdapter({
       fetchers: { fetchLeaderboard: async () => lb, fetchFills: async () => fills },
-      epochProvider, now,
+      epochProvider, now, params: noDelay,
     })
     const cands = await a.discover({ datanetId: '9', rubric, topN: 5 })
     expect(cands).toEqual([])
@@ -61,7 +62,7 @@ describe('hyperliquidAdapter', () => {
     const a = createHyperliquidAdapter({
       fetchers: { fetchLeaderboard: async () => lb, fetchFills: async (w) => byWallet[w] ?? [] },
       epochProvider, now,
-      params: { minRoundTrips: 2, minMarkets: 2, minRealizedPnl: 0, minVlm: 100_000, poolSize: 12 },
+      params: { minRoundTrips: 2, minMarkets: 2, minRealizedPnl: 0, minVlm: 100_000, poolSize: 12, ...noDelay },
     })
     const cands = await a.discover({ datanetId: '9', rubric, topN: 5 })
     expect(cands.length).toBe(2)
@@ -76,7 +77,7 @@ describe('hyperliquidAdapter', () => {
         fetchLeaderboard: async () => lb,
         fetchFills: async () => { if (++n === 1) throw new Error('rpc'); return good },
       },
-      epochProvider, now, params: { minRoundTrips: 2, minMarkets: 2, minRealizedPnl: 0, poolSize: 12 },
+      epochProvider, now, params: { minRoundTrips: 2, minMarkets: 2, minRealizedPnl: 0, poolSize: 12, ...noDelay },
     })
     const cands = await a.discover({ datanetId: '9', rubric, topN: 5 })
     expect(cands.length).toBe(1) // first wallet threw, second still produced a candidate

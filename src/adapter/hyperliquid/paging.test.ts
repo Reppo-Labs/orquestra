@@ -3,11 +3,12 @@ import { fetchFillsPaged } from './index.js'
 
 const win = { startTime: 0, endTime: 1_000_000 }
 const fill = (time: number, hash: string) => ({ time, hash, coin: 'BTC' })
+const noDelay = { interPageDelayMs: 0 }
 
 describe('fetchFillsPaged', () => {
   it('returns a single short page as-is', async () => {
     const page = [fill(1, '0x1'), fill(2, '0x2')]
-    const out = await fetchFillsPaged(async () => page, win, { pageSize: 2000 })
+    const out = await fetchFillsPaged(async () => page, win, { pageSize: 2000, ...noDelay })
     expect(out).toHaveLength(2)
   })
 
@@ -18,7 +19,7 @@ describe('fetchFillsPaged', () => {
       [fill(30, 'c0')], // short page → stop
     ]
     let p = 0
-    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3 })
+    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3, ...noDelay })
     expect(out).toHaveLength(7)
   })
 
@@ -29,7 +30,7 @@ describe('fetchFillsPaged', () => {
       [fill(30, 'x3'), fill(40, 'x4')],                 // short page; x3 is a dup
     ]
     let p = 0
-    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3 })
+    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3, ...noDelay })
     expect(out).toHaveLength(4)            // x1,x2,x3,x4 — x3 not double-counted
   })
 
@@ -41,14 +42,14 @@ describe('fetchFillsPaged', () => {
       [fill(40, 'e0')],                                  // short page → stop
     ]
     let p = 0
-    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3 })
+    const out = await fetchFillsPaged(async () => pages[p++] ?? [], win, { pageSize: 3, ...noDelay })
     expect(out).toHaveLength(4) // all of page 1 + page 2, none truncated
   })
 
   it('stops (no infinite loop) when a full page is stuck at one timestamp with all-dup hashes', async () => {
     const stuck = Array.from({ length: 3 }, (_, i) => fill(50, `s${i}`)) // all same ts, full page
     let calls = 0
-    const out = await fetchFillsPaged(async () => { calls++; return stuck }, win, { pageSize: 3, maxPages: 10 })
+    const out = await fetchFillsPaged(async () => { calls++; return stuck }, win, { pageSize: 3, maxPages: 10, ...noDelay })
     expect(calls).toBeLessThanOrEqual(2)   // first page adds 3, second adds 0 → stop
     expect(out).toHaveLength(3)
   })
