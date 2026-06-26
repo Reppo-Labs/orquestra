@@ -69,4 +69,15 @@ describe('withRetry', () => {
     await expect(withRetry(async () => { calls++; throw new Error(`fail ${calls}`) }, [1, 1], noSleep))
       .rejects.toThrow('fail 3')
   })
+
+  it('does not retry when isRetryable returns false (e.g. 429)', async () => {
+    let calls = 0
+    await expect(withRetry(
+      async () => { calls++; throw new Error('429 Too Many Requests') },
+      [1, 1],
+      noSleep,
+      (e) => !(e instanceof Error && e.message.includes('429')),
+    )).rejects.toThrow('429 Too Many Requests')
+    expect(calls).toBe(1) // no retries
+  })
 })

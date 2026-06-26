@@ -41,33 +41,43 @@ export function buildGdeltQuery(focus: string): string {
 
 export interface GdeltQuery { query: string; timespanHours: number; maxRecords: number }
 
-/** Run fn, retrying after each delay on failure. GDELT throttles per-IP ("one request
- *  every 5 seconds", with longer penalty windows) — a couple of spaced retries usually
- *  outlives a transient 429 without giving up the whole 1h cycle. Exposed for testing. */
-export async function withRetry<T>(fn: () => Promise<T>, delaysMs: number[], sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<T> {
+/** Run fn, retrying after each delay on failure. 429s are never retried — doing so
+ *  escalates GDELT's penalty window (observed live: repeated 429s extend the block from
+ *  seconds to minutes). Only transient errors (5xx, network) are worth retrying.
+ *  Exposed for testing. */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  delaysMs: number[],
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  isRetryable: (err: unknown) => boolean = () => true,
+): Promise<T> {
   let lastErr: unknown
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn()
     } catch (e) {
       lastErr = e
-      if (attempt >= delaysMs.length) throw lastErr
+      if (attempt >= delaysMs.length || !isRetryable(e)) throw lastErr
       await sleep(delaysMs[attempt])
     }
   }
 }
 
+const is429 = (e: unknown): boolean => e instanceof Error && e.message.includes('429')
+
 /** Live: fetch recent geopolitical articles from GDELT DOC 2.0 (no auth, curl).
- *  Retries at 15s/60s/180s: GDELT's per-IP throttle escalates from a 5s spacing rule
- *  to multi-minute penalty windows (observed live), and on a 1h cadence waiting up to
- *  ~4 min beats losing the cycle's whole mint discovery. */
+ *  Retries at 15s/60s on transient errors only. 429 is not retried — GDELT's penalty
+ *  window escalates with each failed attempt; failing fast lets the next cycle (15+ min
+ *  later) succeed after the window expires naturally. */
 export async function fetchGeoEvents(q: GdeltQuery): Promise<GeoArticle[]> {
   const url =
     `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(q.query)}` +
     `&mode=ArtList&maxrecords=${q.maxRecords}&timespan=${q.timespanHours}h&sort=DateDesc&format=json`
   const { stdout } = await withRetry(
     () => execFileAsync('curl', ['-fsS', '--max-time', '60', url], { maxBuffer: 64 * 1024 * 1024 }),
-    [15_000, 60_000, 180_000],
+    [15_000, 60_000],
+    undefined,
+    (e) => !is429(e),
   )
   try {
     return parseGdelt(JSON.parse(stdout))
