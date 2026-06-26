@@ -311,6 +311,47 @@ describe('runCycle', () => {
     expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
 
+  it('calls registerVoteOnPlatform with (podId, txHash) on an executed vote', async () => {
+    const registerVoteOnPlatform = vi.fn(async () => {})
+    const d = deps({ registerVoteOnPlatform })
+    await runCycle(config, 'c-plat', d)
+    // default executeVote returns txHash:'0xvote'; datanets 9 and 2 both vote on pod p1
+    expect(registerVoteOnPlatform).toHaveBeenCalledWith('p1', '0xvote')
+    expect(registerVoteOnPlatform).toHaveBeenCalledTimes(2) // once per vote-enabled datanet
+  })
+
+  it('does not call registerVoteOnPlatform when txHash is absent', async () => {
+    const registerVoteOnPlatform = vi.fn(async () => {})
+    const d = deps({
+      registerVoteOnPlatform,
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true as const, status: 'executed' as const })), // no txHash
+        executeMint: vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xm' })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(config, 'c-plat-notx', d)
+    expect(registerVoteOnPlatform).not.toHaveBeenCalled()
+  })
+
+  it('does not call registerVoteOnPlatform on non-executed vote status', async () => {
+    const registerVoteOnPlatform = vi.fn(async () => {})
+    const d = deps({
+      registerVoteOnPlatform,
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: false as const, status: 'error' as const, txHash: '0xerr', detail: 'fail' })),
+        executeMint: vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xm' })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(config, 'c-plat-err', d)
+    expect(registerVoteOnPlatform).not.toHaveBeenCalled()
+  })
+
+  it('a rejected registerVoteOnPlatform never aborts the cycle', async () => {
+    const d = deps({ registerVoteOnPlatform: vi.fn(async () => { throw new Error('api down') }) })
+    await expect(runCycle(config, 'c-plat-fail', d)).resolves.toBeDefined()
+    await Promise.resolve() // flush fire-and-forget .catch handler
+  })
+
   it('skips vote AND mint when subnet access is required and the grant fails (no scoring waste)', async () => {
     const executeGrantAccess = vi.fn(async () => ({
       ok: false as const, status: 'error' as const,

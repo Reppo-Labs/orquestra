@@ -42,6 +42,7 @@ import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import { getSubnetEmissionInfo, formatTokenAmount } from '../reppo/subnetManager.js'
+import { registerVoteOnPlatform } from '../reppo/platformApi.js'
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
@@ -356,6 +357,14 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     executor: w.executor,
     ledger: w.ledger,
     recordVote: (id, podId) => w.dedup.recordVote(id, podId),
+    // Cred check deferred to call time so late-arriving or rotated creds take effect
+    // without restarting the node (env vars set from SQLite at startup but re-read here).
+    registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+      const agentId = process.env.REPPO_AGENT_ID
+      const apiKey = process.env.REPPO_API_KEY
+      if (!agentId || !apiKey) return Promise.resolve()
+      return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
+    },
     recordMint: (id, key) => w.dedup.recordMint(id, key),
     // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
