@@ -389,7 +389,10 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // gate inside bounds it further to epochs the wallet actually voted in.
       const floorRaw = Number(process.env.REPPO_EMISSIONS_FLOOR_EPOCH)
       const floorEpoch = Number.isFinite(floorRaw) && floorRaw > 0 ? floorRaw : undefined
-      return enrichTokens(await queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch }))
+      // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
+      // describes publisher/mint emissions only). Enriching here causes readClaimedToken
+      // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
+      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch })
     },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
