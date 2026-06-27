@@ -363,3 +363,21 @@ describe('actual-REPPO reconciliation (reppoFee from CLI >=0.8.4)', () => {
     expect(ledger.state.mintReppoSpent).toBe(100)
   })
 })
+
+describe('podId propagation (mint-pod --json)', () => {
+  it('surfaces podId from the CLI result in the ExecResult', async () => {
+    const cli = fakeCli()
+    ;(cli.mintPod as any) = vi.fn(async () => ({ txHash: '0xm', gasEth: 0.01, podId: '508' }))
+    const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeMint(mintIntent('k1', 50))
+    expect(r.podId).toBe('508')
+  })
+  it('omits podId when the CLI does not report it (older CLI)', async () => {
+    const cli = fakeCli() // default mock: { txHash: '0xmint', gasEth: 0.01 } — no podId
+    const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeMint(mintIntent('k1', 50))
+    expect(r.podId).toBeUndefined()
+  })
+})

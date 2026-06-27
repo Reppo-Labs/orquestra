@@ -64,6 +64,10 @@ export interface ExecResult {
   txHash?: string
   /** actual gas (ETH) when known; surfaced for the activity log. */
   gasEth?: number
+  /** On-chain pod ID assigned by the contract when a mint lands.
+   *  Sourced from the PodMinted event via `reppo mint-pod --json`. Absent on
+   *  vote/claim/grant results and when the CLI omits it (older versions). */
+  podId?: string
   /** actual REPPO claimed (read from the claim tx receipt; CLI/contract omit it). */
   reppoClaimed?: number
   /** actual NON-REPPO token claimed (read from the claim tx receipt), when the claim paid a

@@ -27,6 +27,10 @@ export interface ChainResult {
   gasEth: number
   /** actual REPPO paid (mint fee / grant fee), reported by reppo >=0.8.4. */
   reppoFee?: number
+  /** On-chain pod ID assigned by the contract when a pod is minted.
+   *  Extracted from the PodMinted event in the tx receipt by `reppo mint-pod --json`.
+   *  Absent on vote/claim/grant results. */
+  podId?: string
   /** The token an access fee was paid in (reppo >=0.8.5 grant-access result). Present on
    *  non-REPPO grants — informational (the fee is consent-bounded, not budget-gated). */
   feeToken?: { symbol: string; address: string; decimals: number }
@@ -80,6 +84,8 @@ export function foldExecError(e: unknown): Error {
 export function parseChainResult(stdout: string, warn: (m: string) => void = (m) => console.warn(m)): ChainResult {
   const j = JSON.parse(stdout) as {
     txHash?: string; tx?: string; gasEth?: number; reppoFee?: number | string
+    // mint-pod result: on-chain pod ID assigned by the contract (from PodMinted event).
+    podId?: string | number
     // grant-access >=0.8.5 (best-effort; absent on vote/mint/claim results):
     feeToken?: { symbol?: string; address?: string; decimals?: number }
     feeAmount?: { raw?: string; formatted?: string } | number | string
@@ -90,10 +96,12 @@ export function parseChainResult(stdout: string, warn: (m: string) => void = (m)
     warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
   }
   const fee = j.reppoFee !== undefined ? Number(j.reppoFee) : undefined
+  const podId = j.podId !== undefined ? String(j.podId) : undefined
   return {
     txHash: j.txHash ?? j.tx ?? '',
     gasEth: Number(j.gasEth ?? 0),
     ...(fee !== undefined && !Number.isNaN(fee) ? { reppoFee: fee } : {}),
+    ...(podId !== undefined ? { podId } : {}),
     ...parseGrantFee(j),
   }
 }

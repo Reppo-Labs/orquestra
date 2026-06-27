@@ -67,6 +67,20 @@ describe('parseChainResult', () => {
   })
 })
 
+describe('parseChainResult podId (mint-pod result)', () => {
+  it('parses podId when the CLI reports it (string)', () => {
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.01,"podId":"508"}', () => {})
+    expect(r.podId).toBe('508')
+  })
+  it('coerces a numeric podId to string', () => {
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.01,"podId":508}', () => {})
+    expect(r.podId).toBe('508')
+  })
+  it('podId absent → undefined (vote/claim/grant results)', () => {
+    expect(parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {}).podId).toBeUndefined()
+  })
+})
+
 describe('parseChainResult reppoFee', () => {
   it('parses reppoFee when the CLI reports it (0.8.4+)', () => {
     const r = parseChainResult('{"txHash":"0x1","gasEth":0.001,"reppoFee":"100"}', () => {})
