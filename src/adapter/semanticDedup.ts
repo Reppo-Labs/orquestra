@@ -85,8 +85,8 @@ export async function filterNovelSemantic(
 /** Sanitize untrusted pod name before inserting into the prompt.
  *  Strips control characters (including newlines) that could inject fake sections,
  *  and truncates to prevent payload-stuffing attacks. */
-function sanitizePodName(name: string): string {
-  return name.replace(/[\x00-\x1F\x7F]/g, ' ').trim().slice(0, 150)
+function sanitizePodName(name: string, maxLen = 150): string {
+  return name.replace(/[\x00-\x1F\x7F]/g, ' ').trim().slice(0, maxLen)
 }
 
 /** Pure: build the (system, prompt) for the dedup judge call. Exposed for testing. */
@@ -104,7 +104,7 @@ export function buildDedupPrompt(candidates: CandidatePod[], existingPodNames: s
     .map((e) => `<existing_pod>${sanitizePodName(e)}</existing_pod>`)
     .join('\n')
   const cand = candidates
-    .map((c, i) => `<candidate index="${i}"><name>${sanitizePodName(c.podName)}</name><text>${sanitizePodName(textOf(c))}</text></candidate>`)
+    .map((c, i) => `<candidate index="${i}"><name>${sanitizePodName(c.podName)}</name><text>${sanitizePodName(textOf(c), 300)}</text></candidate>`)
     .join('\n')
   const prompt =
     `<existing_pods>\n${existing}\n</existing_pods>\n` +
