@@ -264,7 +264,8 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
           json(res, 409, { error: msg }); return
         }
         const lockConstraints = await getLockConstraints()
-        const result = await runStrategyChat({ messages, currentConfig: current, lockConstraints, model: chatModel })
+        const snapshot = readSnapshot(dataDir)
+        const result = await runStrategyChat({ messages, currentConfig: current, lockConstraints, snapshot, model: chatModel })
         json(res, 200, result)
         return
       }
