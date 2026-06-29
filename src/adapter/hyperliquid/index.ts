@@ -81,8 +81,8 @@ export const HL_DEFAULTS: HlParams = {
   minRoundTrips: 3,
   minMarkets: 2,
   minRealizedPnl: 0,
-  walletDelayMs: 300,
-  interPageDelayMs: 200,
+  walletDelayMs: 1000,
+  interPageDelayMs: 500,
 }
 
 export interface HlFetchers {
@@ -159,7 +159,11 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
           const cand = buildHlDataset(wallet, fills, ctx.datanetId)
           if (cand) scored.push({ cand, realizedPnl: q.realizedPnl, nTrips: q.nCompleteTrips })
         } catch (err) {
-          console.warn(`[hl-adapter] wallet ${wallet} skipped:`, err instanceof Error ? err.message : String(err))
+          const msg = err instanceof Error ? err.message : String(err)
+          // 429 from HL means we're in a penalty window — hitting more wallets extends it.
+          // Re-throw to abort discover for this cycle; runCycle logs and skips the datanet.
+          if (msg.includes('429')) throw new Error(`[hl-adapter] rate-limited by Hyperliquid (429) — aborting this cycle to avoid extending the penalty window`)
+          console.warn(`[hl-adapter] wallet ${wallet} skipped:`, msg)
         }
       }
 
