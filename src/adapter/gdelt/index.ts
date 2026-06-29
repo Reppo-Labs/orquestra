@@ -3,6 +3,7 @@ import type { LanguageModel } from 'ai'
 import { fetchGeoEvents, buildGdeltQuery, type GeoArticle, type GdeltQuery } from './gdelt.js'
 import { synthesizeClaims, type GdeltStrategy } from './claim.js'
 import { filterNovel } from '../dedup.js'
+import { filterNovelSemantic } from '../semanticDedup.js'
 import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
 
 export interface GdeltDeps {
@@ -73,7 +74,8 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
         model: deps.model,
         generate: deps.generate as never,
       })
-      return filterNovel(cands, ctx.existingPodNames ?? [])
+      const novel = filterNovel(cands, ctx.existingPodNames ?? [])
+      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model: deps.model })
     },
   }
 }
