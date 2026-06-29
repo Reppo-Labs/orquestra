@@ -366,7 +366,18 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     },
     recordClaim: (key) => w.dedup.recordClaim(key),
     strategyFor,
-    getExistingPodNames: async (id) => (await io.listPods(id, { all: true }).catch(() => [])).map((p) => p.name).filter(Boolean),
+    getExistingPodNames: async (id) => {
+      const pods = await io.listPods(id, { all: true }).catch(() => [] as VoterPod[])
+      const currentEpoch = deriveCurrentEpoch(pods)
+      // Current-epoch pods are the most likely semantic duplicates of new candidates;
+      // sort them first, then cap to avoid flooding the LLM judge with stale history.
+      const MAX_EXISTING = 50
+      const sorted = currentEpoch === null ? pods : [
+        ...pods.filter((p) => p.validityEpoch === currentEpoch),
+        ...pods.filter((p) => p.validityEpoch !== currentEpoch),
+      ]
+      return sorted.slice(0, MAX_EXISTING).map((p) => p.name).filter(Boolean)
+    },
     grantedSubnets: async () => new Set(w.dedup.getGrantedSubnets()),
     recordGrant: (id) => w.dedup.recordGrant(id),
     revokeGrant: (id) => w.dedup.removeGrant(id),
