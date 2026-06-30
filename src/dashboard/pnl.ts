@@ -10,16 +10,15 @@ export interface Pnl {
   gasSpentEth: number
 }
 
-/** Pure PnL summary. `claimedReppo` is the lifetime sum of executed claims — the
- *  caller MUST pass the unbounded total (activityLog.sumClaimedReppo), NOT a sum
- *  over a windowed `readActivity` slice: a capped window drops old claims while
- *  cumulative mint spend is never truncated, so net would read falsely negative.
- *  claimable = still-unclaimed emissions in the latest snapshot; spent = REPPO
- *  on mints. */
-export function derivePnl(snapshot: Snapshot, claimedReppo: number): Pnl {
+/** Pure PnL summary. Both `claimedReppo` and `mintReppoSpent` MUST be lifetime
+ *  unbounded totals from the activity log (sumClaimedReppo / sumMintReppoSpent) —
+ *  NOT the rolling budget-ledger values which reset each horizon window. Using the
+ *  ledger's mintReppoSpent causes a misleading flip from negative to strongly positive
+ *  at each horizon rollover while claimed stays lifetime. */
+export function derivePnl(snapshot: Snapshot, claimedReppo: number, mintReppoSpent: number): Pnl {
   const claimableReppo = snapshot.emissionsDue.totalReppo
   const earnedReppo = claimedReppo + claimableReppo
-  const spentReppo = snapshot.budget.mintReppoSpent
+  const spentReppo = mintReppoSpent
   const gasSpentEth = snapshot.budget.mintGasSpentEth + snapshot.budget.voteGasSpentEth + snapshot.budget.claimGasSpentEth
   return { claimedReppo, claimableReppo, earnedReppo, spentReppo, netReppo: earnedReppo - spentReppo, gasSpentEth }
 }

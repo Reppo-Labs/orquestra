@@ -31,6 +31,9 @@ export interface ActivityEntry {
    *  paid a datanet's native token. Absent for plain REPPO claims. */
   claimedTokenSymbol?: string
   claimedTokenAmount?: number
+  /** REPPO fee paid for this mint (reconciled actual, or MINT_REPPO_FALLBACK when unknown).
+   *  Only present on kind='mint' + status='executed'. Used for lifetime PnL. */
+  reppoSpent?: number
   status: 'executed' | 'refused-budget' | 'error' | 'skipped'
   txHash?: string
   gasEth?: number
@@ -64,7 +67,7 @@ function redactEntry(entry: ActivityEntry): ActivityEntry {
 const COLUMNS = [
   'ts', 'cycleId', 'kind', 'datanetId', 'podId', 'direction', 'conviction', 'reason',
   'canonicalKey', 'podName', 'epoch', 'reppoClaimed', 'status', 'txHash', 'gasEth', 'detail', 'panel',
-  'claimedTokenSymbol', 'claimedTokenAmount',
+  'claimedTokenSymbol', 'claimedTokenAmount', 'reppoSpent',
 ] as const
 
 // The `activity` table is owned by db.ts. We run the one-time JSONL import on first
@@ -120,7 +123,7 @@ function insert(d: SqliteDb, entry: ActivityEntry): void {
     e.direction ?? null, e.conviction ?? null, e.reason ?? null, e.canonicalKey ?? null, e.podName ?? null,
     e.epoch ?? null, e.reppoClaimed ?? null, e.status ?? null, e.txHash ?? null, e.gasEth ?? null,
     e.detail ?? null, e.panel ? JSON.stringify(e.panel) : null,
-    e.claimedTokenSymbol ?? null, e.claimedTokenAmount ?? null,
+    e.claimedTokenSymbol ?? null, e.claimedTokenAmount ?? null, e.reppoSpent ?? null,
   ]
   d.prepare(`INSERT INTO activity (${COLUMNS.join(', ')}) VALUES (${PLACEHOLDERS})`).run(...vals)
 }
@@ -159,6 +162,16 @@ export function readActivity(dataDir: string, opts: { limit: number }): Activity
 export function sumClaimedReppo(dataDir: string): number {
   const row = conn(dataDir)
     .prepare("SELECT COALESCE(SUM(reppoClaimed), 0) AS total FROM activity WHERE kind = 'claim' AND status = 'executed'")
+    .get() as { total: number }
+  return row.total
+}
+
+/** Lifetime REPPO spent on mints (unbounded sum of reppoSpent on executed mints).
+ *  Parallel to sumClaimedReppo — both must be lifetime to keep netReppo accurate
+ *  across budget-horizon resets. Missing DB or pre-migration rows (reppoSpent=NULL) → 0. */
+export function sumMintReppoSpent(dataDir: string): number {
+  const row = conn(dataDir)
+    .prepare("SELECT COALESCE(SUM(reppoSpent), 0) AS total FROM activity WHERE kind = 'mint' AND status = 'executed'")
     .get() as { total: number }
   return row.total
 }

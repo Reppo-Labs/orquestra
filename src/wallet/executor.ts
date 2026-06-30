@@ -150,7 +150,7 @@ export class WalletExecutor {
         reppoFee = MINT_REPPO_FALLBACK
       }
       this.ledger.reconcileMint(res, r.gasEth, reppoFee)
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, ...(r.podId ? { podId: r.podId } : {}) }
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: reppoFee, ...(r.podId ? { podId: r.podId } : {}) }
     } catch (e) {
       this.ledger.releaseMint(res)
       let detail = (e as Error).message

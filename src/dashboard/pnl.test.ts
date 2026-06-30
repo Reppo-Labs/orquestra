@@ -12,27 +12,28 @@ const snapshot: Snapshot = {
 }
 
 describe('derivePnl', () => {
-  it('uses the passed claimed total and adds claimable for earned', () => {
-    const p = derivePnl(snapshot, 163) // caller passes the unbounded executed-claim sum
+  it('uses the passed claimed and mint-spent totals for net (both lifetime)', () => {
+    const p = derivePnl(snapshot, 163, 100) // both args are lifetime activity-log sums
     expect(p.claimedReppo).toBe(163)
     expect(p.claimableReppo).toBe(5)      // snapshot.emissionsDue.totalReppo
     expect(p.earnedReppo).toBe(168)       // 163 + 5
-    expect(p.spentReppo).toBe(100)        // mintReppoSpent
+    expect(p.spentReppo).toBe(100)        // lifetime mint spend, NOT snapshot.budget.mintReppoSpent
     expect(p.netReppo).toBe(68)           // 168 - 100
     expect(p.gasSpentEth).toBeCloseTo(0.0047) // 0.003 + 0.001 + 0.0007
   })
 
   it('handles zero claimed', () => {
-    const p = derivePnl(snapshot, 0)
+    const p = derivePnl(snapshot, 0, 0)
     expect(p.claimedReppo).toBe(0)
     expect(p.earnedReppo).toBe(5)
   })
 
-  it('net stays positive when claimed exceeds spend (the truncation-bug scenario)', () => {
-    // Real data: lifetime claimed 5309 vs mint spend 4935 → +374, not the
-    // −2166 a windowed claim sum produced.
-    const big: Snapshot = { ...snapshot, budget: { ...snapshot.budget, mintReppoSpent: 4935 }, emissionsDue: { totalReppo: 0, pods: [] } }
-    const p = derivePnl(big, 5309)
-    expect(p.netReppo).toBeCloseTo(374)
+  it('net is accurate across a horizon reset (horizon-rollover fix)', () => {
+    // Before fix: budget.mintReppoSpent reset to 30 at horizon rollover while
+    // claimedReppo stayed lifetime → net read +6050 instead of true ~+1145.
+    // Now both args are lifetime from the activity log; horizon rollover has no effect.
+    const big: Snapshot = { ...snapshot, budget: { ...snapshot.budget, mintReppoSpent: 30 }, emissionsDue: { totalReppo: 0, pods: [] } }
+    const p = derivePnl(big, 6080, 4935) // 6080 claimed, 4935 lifetime mint spend
+    expect(p.netReppo).toBeCloseTo(1145)  // 6080 - 4935, not 6080 - 30
   })
 })

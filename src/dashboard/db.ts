@@ -129,6 +129,7 @@ function migrate(d: SqliteDb): void {
   const add: [string, string][] = [
     ['claimedTokenSymbol', 'TEXT'],
     ['claimedTokenAmount', 'REAL'],
+    ['reppoSpent', 'REAL'],
   ]
   for (const [name, type] of add) {
     if (cols.includes(name)) continue

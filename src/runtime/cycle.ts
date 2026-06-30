@@ -432,6 +432,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
               ...(intent.selfScore !== undefined ? { conviction: intent.selfScore } : {}),
               ...(intent.reason ? { reason: intent.reason } : {}),
               status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+              ...(r.reppoSpent !== undefined ? { reppoSpent: r.reppoSpent } : {}),
               // podId from the on-chain PodMinted event (via mint-pod --json); enables
               // linking mint activity rows to their publisher emissions by pod ID.
               ...(r.podId ? { podId: r.podId } : {}),

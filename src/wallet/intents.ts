@@ -70,6 +70,9 @@ export interface ExecResult {
   podId?: string
   /** actual REPPO claimed (read from the claim tx receipt; CLI/contract omit it). */
   reppoClaimed?: number
+  /** actual REPPO fee paid for a mint (reconciled from receipt or CLI; fallback = MINT_REPPO_FALLBACK).
+   *  Absent on vote/claim/grant results. Stored in the activity log for lifetime PnL. */
+  reppoSpent?: number
   /** actual NON-REPPO token claimed (read from the claim tx receipt), when the claim paid a
    *  datanet's native emission token. amount is in human units (scaled by token decimals). */
   tokenClaimed?: { symbol: string; amount: number }
