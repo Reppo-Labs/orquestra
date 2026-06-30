@@ -35,6 +35,7 @@ import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
 import { startDashboard } from './dashboard/server.js'
+import { backfillMintReppoSpent } from './dashboard/activityLog.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -264,6 +265,9 @@ async function start(): Promise<void> {
   // Wallet address for on-chain emissions detection (the platform `emissions-due` API
   // under-reports; we read PodManager directly). Best-effort — null falls back to the CLI.
   const walletAddress = rpcUrl ? ((await queryWalletAddress().catch(() => null)) ?? undefined) : undefined
+  // Fire-and-forget: reconcile reppoSpent for historical mints that predate the column.
+  // Upgrading operators get accurate lifetime PnL without manual intervention.
+  backfillMintReppoSpent(DATA_DIR, rpcUrl || undefined).catch(() => {/* already logged inside */})
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     model,

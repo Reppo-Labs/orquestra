@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { redactSecrets } from '../util/redact.js'
 import type { PanelTranscript } from '../panel/types.js'
 import { getDb, type SqliteDb } from './db.js'
+import { readMintReppoFee } from '../reppo/mintFee.js'
 
 export interface ActivityEntry {
   ts: string
@@ -182,4 +183,33 @@ export function readActivitySince(dataDir: string, sinceMs: number): ActivityEnt
   const since = new Date(sinceMs).toISOString()
   const rows = conn(dataDir).prepare('SELECT * FROM activity WHERE ts >= ? ORDER BY id DESC').all(since) as Row[]
   return rows.map(rowToEntry)
+}
+
+/** Back-fill reppoSpent for historical mint rows that predate the column (upgrading operators).
+ *  Runs once at startup, fire-and-forget. Requires rpcUrl; logs a one-time warning without it.
+ *  Safe to re-run: skips rows already having reppoSpent or missing txHash. */
+export async function backfillMintReppoSpent(dataDir: string, rpcUrl: string | undefined): Promise<void> {
+  const db = conn(dataDir)
+  const rows = db.prepare(
+    "SELECT id, txHash FROM activity WHERE kind='mint' AND status='executed' AND reppoSpent IS NULL AND txHash IS NOT NULL"
+  ).all() as { id: number; txHash: string }[]
+  if (rows.length === 0) return
+  if (!rpcUrl) {
+    console.warn(
+      `orquestra: ${rows.length} historical mint(s) have no recorded REPPO spend — ` +
+      `set RPC_URL to auto-backfill and get accurate lifetime PnL.`
+    )
+    return
+  }
+  console.error(`orquestra: backfilling reppoSpent for ${rows.length} historical mint(s) …`)
+  const update = db.prepare('UPDATE activity SET reppoSpent = ? WHERE id = ?')
+  let ok = 0
+  for (const row of rows) {
+    const fee = await readMintReppoFee(rpcUrl, row.txHash).catch(() => undefined)
+    if (fee === undefined) continue
+    update.run(fee, row.id)
+    ok++
+    await new Promise((r) => setTimeout(r, 80))
+  }
+  console.error(`orquestra: reppoSpent backfill complete — ${ok}/${rows.length} mints reconciled`)
 }
