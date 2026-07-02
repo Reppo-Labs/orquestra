@@ -77,7 +77,7 @@ export function Activity({ activity, netNames, onOpenPanel }: {
                 <td className={r.status === 'executed' ? 'pos' : 'neg'}>{r.status}</td>
                 <td>{txLink(r)}</td>
               </tr>
-            )) : <tr><td colSpan={7} className="empty">no activity yet</td></tr>}
+            )) : <tr><td colSpan={7} className="empty">no cycles yet — the node runs on your configured cadence; votes and mints appear here as each cycle completes</td></tr>}
           </tbody>
         </table>
       </div>

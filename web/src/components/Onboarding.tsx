@@ -84,10 +84,20 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
   const [finalized, setFinalized] = useState<OnboardingAnswers | null>(null)
   const [confirmMsg, setConfirmMsg] = useState('')
   const logRef = useRef<HTMLDivElement>(null)
+  const confirmRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [log, busy])
+
+  // The finalize → "you must now act" transition was easy to miss: signpost it by
+  // scrolling the Start button into view (its pulse animation is pure CSS, one-shot).
+  useEffect(() => {
+    if (finalized && confirmRef.current) confirmRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [finalized])
+
+  // Stepper state: 1 Connect (pre-start) → 2 Interview → 3 Review → 4 Start.
+  const step = !started ? 1 : !finalized ? 2 : confirmMsg.startsWith('saved') ? 4 : 3
 
   const turn = async (message?: string) => {
     setBusy(true)
@@ -133,6 +143,13 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
         {onCancel && <a href="#" onClick={(e) => { e.preventDefault(); onCancel() }}>← back to dashboard</a>}
         <h1 className="ob-title">orquestra</h1>
         <p className="ob-sub">Let's set up your node — what to vote and mint, how much to spend, and how often to run. Chat below; your strategy takes shape on the right. Nothing is saved until you confirm.</p>
+        <div className="ob-steps" aria-label="onboarding progress">
+          {['Connect', 'Interview', 'Review', 'Start'].map((label, i) => (
+            <div className={`ob-step ${step === i + 1 ? 'active' : step > i + 1 ? 'done' : ''}`} key={label}>
+              <span className="n">{step > i + 1 ? '✓' : i + 1}</span> {label}
+            </div>
+          ))}
+        </div>
       </div>
       {!status.chatAvailable && (
         <div className="ob-warn">
@@ -151,11 +168,20 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
             <>
               <div className="chat-log ob-log" ref={logRef}>
                 {log.map((e, i) => (
-                  <div key={i} className={`ob-msg ${e.role}`}>
-                    <span className={e.role === 'user' ? 'muted' : 'pos'}>{e.role === 'user' ? 'you' : 'orquestra'}:</span> {e.text}
+                  // Same avatar+bubble treatment as the strategy chat, so both chats read identically.
+                  <div className={`msg-row ${e.role} ${i > 0 && log[i - 1].role === e.role ? 'follow' : ''}`} key={i}>
+                    <div className="avatar" aria-label={e.role === 'user' ? 'you' : 'orquestra'} title={e.role === 'user' ? 'you' : 'orquestra'}>
+                      {e.role === 'user' ? 'Y' : 'O'}
+                    </div>
+                    <div className={`msg ${e.role} ob-msg`}>{e.text}</div>
                   </div>
                 ))}
-                {busy && <div className="muted">thinking…</div>}
+                {busy && (
+                  <div className="msg-row assistant">
+                    <div className="avatar" aria-label="orquestra">O</div>
+                    <div className="msg assistant typing">thinking…</div>
+                  </div>
+                )}
               </div>
               {!finalized && (
                 <div className="ob-chips">
@@ -182,8 +208,9 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
           </div>
           <DraftSheet draft={draft} names={netNames} />
           {finalized && (
-            <div className="ob-confirm">
-              <button className="btn primary" onClick={() => void confirm()}>Confirm & start the node</button>
+            <div className="ob-confirm" ref={confirmRef}>
+              <div className="ob-ready">Your strategy is ready — review it above, then start the node.</div>
+              <button className="btn primary ob-pulse" onClick={() => void confirm()}>Start the node</button>
               <span className="muted"> {confirmMsg}</span>
               <div className="muted" style={{ marginTop: 6 }}>
                 want changes? just keep chatting — the assistant will re-finalize. ({fmt(draft.mintReppoMax)} REPPO mint cap)

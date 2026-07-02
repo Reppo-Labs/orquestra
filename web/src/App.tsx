@@ -11,6 +11,7 @@ import { Activity } from './components/Activity'
 import { LearningTab } from './components/LearningTab'
 import { PanelDrawer } from './components/PanelDrawer'
 import { Onboarding } from './components/Onboarding'
+import { FirstRunCard } from './components/FirstRunCard'
 import { fmt } from './lib/format'
 
 function SecHead({ title }: { title: string }) {
@@ -66,6 +67,12 @@ export function App() {
       <main className="shell">
         {tab === 'overview' && (
           <div key="ov">
+            <FirstRunCard
+              cadenceHours={cfg?.cadenceHours}
+              hasActivity={(data?.activity.length ?? 0) > 0}
+              onGoToActivity={() => setTab('activity')}
+              onGoToStrategy={() => setTab('strategy')}
+            />
             <div className="earn-banner">
               <span className={`dot ${earn?.earning ? 'on' : earn && earn.totalUpVotes > 0 ? 'warm' : 'off'}`} />
               {earn
