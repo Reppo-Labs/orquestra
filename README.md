@@ -110,9 +110,31 @@ echo '{"access_token":"sk-ant-oat01-PASTE_TOKEN_HERE"}' \
 chmod 600 ./orquestra-data/anthropic-oauth.json
 ```
 
-All three write `anthropic-oauth.json` to the bind-mounted data dir the container reads. Then set
+**Option D — Docker only (no Node.js and no `claude` CLI on the host):**
+
+Mint the token in a throwaway container — `setup-token` prints an auth URL you can open in
+any browser (even on another machine) and paste the code back:
+```sh
+docker run -it --rm node:22 npx -y @anthropic-ai/claude-code setup-token
+```
+Copy the printed `sk-ant-oat01-…` token, then write the credential file straight into the
+running node's data volume and restart — no host tooling touched:
+```sh
+docker exec orquestra sh -c 'umask 077; printf %s "{\"access_token\":\"sk-ant-oat01-PASTE_TOKEN_HERE\"}" > /data/anthropic-oauth.json'
+docker restart orquestra
+```
+
+All options write `anthropic-oauth.json` to the data dir the container reads. Then set
 `LLM_PROVIDER=anthropic-oauth` and restart the node. Note: programmatic use of a consumer
 subscription may violate Anthropic's terms (seat-ban risk) — see `.env.example`.
+
+> **Pitfall:** don't create or edit the JSON in TextEdit / Notes / a chat app — smart-quote
+> substitution (`“access_token”` instead of `"access_token"`) makes it invalid JSON, and the
+> node then logs `LLM_PROVIDER=anthropic-oauth but no subscription is linked` even though the
+> file looks fine. Verify it parses:
+> ```sh
+> docker exec orquestra node -e 'JSON.parse(require("fs").readFileSync("/data/anthropic-oauth.json","utf8")); console.log("valid")'
+> ```
 
 ### After you start the node
 

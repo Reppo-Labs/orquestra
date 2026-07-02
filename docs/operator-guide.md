@@ -99,7 +99,28 @@ you handle the one-time mint.
    provider — availability comes from the stored token, not a key. The dashboard model
    picker also lists `anthropic-oauth` once the token is present.
 
-The token is long-lived; if it is ever revoked or expires, re-run step 2 and restart.
+**Docker-only host (no Node.js, no `claude` CLI)?** Replace steps 1–2 with:
+
+1. Mint the token in a throwaway container — `setup-token` prints an auth URL you can open
+   in any browser (even another machine) and paste the code back:
+   ```sh
+   docker run -it --rm node:22 npx -y @anthropic-ai/claude-code setup-token
+   ```
+2. Write the printed `sk-ant-oat01-…` token into the node's data volume and restart —
+   no host tooling at all:
+   ```sh
+   docker exec orquestra sh -c 'umask 077; printf %s "{\"access_token\":\"sk-ant-oat01-PASTE_TOKEN_HERE\"}" > /data/anthropic-oauth.json'
+   docker restart orquestra
+   ```
+
+> **Pitfall:** never hand-edit that JSON in TextEdit / Notes / a chat app — smart-quote
+> substitution (`“access_token”`) breaks the parse, and the node reports
+> `no subscription is linked` even though the file looks fine on screen. Verify it parses:
+> ```sh
+> docker exec orquestra node -e 'JSON.parse(require("fs").readFileSync("/data/anthropic-oauth.json","utf8")); console.log("valid")'
+> ```
+
+The token is long-lived; if it is ever revoked or expires, re-run the mint step and restart.
 A node set to `anthropic-oauth` with no token logs a startup WARNING and every LLM call
 fails until you log in — it does not fall back to an API key.
 
