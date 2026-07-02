@@ -140,8 +140,10 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
     else if (res.source !== 'skipped') console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
     // Keep the platform display name in step with REPPO_AGENT_NAME: registration is
     // one-time, so without this a name change after first start was silently ignored.
+    // ONLY when the env var is explicitly set — the wallet-derived default must not
+    // clobber a rename made in the dashboard (POST /api/agent/name) on restart.
     // Cosmetic — a failed PATCH never blocks the node.
-    if (res.source === 'stored') {
+    if (res.source === 'stored' && process.env.REPPO_AGENT_NAME?.trim()) {
       const sync = await syncAgentName({
         desiredName: agentName,
         readStored: () => readAgentStore(DATA_DIR),

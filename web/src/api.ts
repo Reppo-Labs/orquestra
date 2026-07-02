@@ -172,6 +172,23 @@ export async function loadAll(): Promise<DashData> {
   }
 }
 
+/** Platform agent identity as served by /api/agent — never includes the apiKey. */
+export interface AgentInfo { agentId: string; name: string | null; renameable: boolean }
+
+export async function getAgent(): Promise<AgentInfo | null> {
+  return getJson<AgentInfo | null>('/api/agent', null)
+}
+
+export async function renameAgent(name: string): Promise<{ ok: boolean; error?: string }> {
+  const r = await fetch('/api/agent/name', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  const out = (await r.json().catch(() => ({}))) as { error?: string }
+  return r.ok ? { ok: true } : { ok: false, error: out.error ?? `HTTP ${r.status}` }
+}
+
 export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {
   const r = await fetch('/api/strategy', {
     method: 'POST',
