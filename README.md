@@ -114,6 +114,19 @@ All three write `anthropic-oauth.json` to the bind-mounted data dir the containe
 `LLM_PROVIDER=anthropic-oauth` and restart the node. Note: programmatic use of a consumer
 subscription may violate Anthropic's terms (seat-ban risk) — see `.env.example`.
 
+### After you start the node
+
+The node is autonomous — once your strategy is confirmed there is nothing you need to do.
+It runs a cycle on your configured cadence (e.g. every hour); each cycle it votes and mints
+within your budget caps, and every action lands in the dashboard's **Activity** tab as it
+happens. The first cycle starts shortly after onboarding completes, so the dashboard's
+panels are empty until then.
+
+- **Watch**: Activity tab (per-action log), overview cards (PnL, budget burn, emissions).
+- **Adjust**: Strategy tab or the assistant chat — changes are validated and apply from the
+  next cycle (config is hot-reloaded; nothing restarts).
+- **Health**: `GET /api/health` on the dashboard port for scripted liveness checks.
+
 ## Develop
 
 - `npm install`

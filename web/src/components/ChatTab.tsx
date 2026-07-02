@@ -23,6 +23,7 @@ export function ChatTab({ strategy, onGoToStrategy }: {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const composeRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -32,6 +33,7 @@ export function ChatTab({ strategy, onGoToStrategy }: {
     const msg = (text ?? input).trim()
     if (!msg || busy) return
     setInput('')
+    if (composeRef.current) composeRef.current.style.height = 'auto' // collapse the grown textarea
     const messages: ChatMsg[] = [...chat, { role: 'user', content: msg }]
     setChat(messages)
     setLog((l) => [...l, { role: 'user', text: msg }])
@@ -62,12 +64,23 @@ export function ChatTab({ strategy, onGoToStrategy }: {
       )}
       <div className="chat-scroll" ref={scrollRef}>
         {log.map((e, i) => (
-          <div className={`msg ${e.role}`} key={i}>
-            <div className="who">{e.role === 'user' ? 'you' : 'orquestra'}</div>
-            {e.text}{e.warn ? <span className="warn"> ({e.warn})</span> : null}
+          // "follow" tightens the gap when the previous message has the same role, so the
+          // alternation rhythm itself (big gap = speaker change) aids attribution.
+          <div className={`msg-row ${e.role} ${i > 0 && log[i - 1].role === e.role ? 'follow' : ''}`} key={i}>
+            <div className="avatar" aria-label={e.role === 'user' ? 'you' : 'orquestra'} title={e.role === 'user' ? 'you' : 'orquestra'}>
+              {e.role === 'user' ? 'Y' : 'O'}
+            </div>
+            <div className={`msg ${e.role}`}>
+              {e.text}{e.warn ? <span className="warn"> ({e.warn})</span> : null}
+            </div>
           </div>
         ))}
-        {busy && <div className="msg assistant typing">thinking…</div>}
+        {busy && (
+          <div className="msg-row assistant">
+            <div className="avatar" aria-label="orquestra">O</div>
+            <div className="msg assistant typing">thinking…</div>
+          </div>
+        )}
       </div>
       {log.length === 0 && (
         <div className="row wrap" style={{ marginBottom: 12 }}>
@@ -75,11 +88,18 @@ export function ChatTab({ strategy, onGoToStrategy }: {
         </div>
       )}
       <div className="chat-compose">
-        <input
-          type="text" placeholder={busy ? 'waiting for the assistant…' : 'set a goal or ask about your strategy…'}
+        <textarea
+          ref={composeRef}
+          rows={1}
+          placeholder={busy ? 'waiting for the assistant…' : 'set a goal or ask about your strategy… (Enter to send, Shift+Enter for a new line)'}
           value={input} disabled={busy}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void send() }}
+          onChange={(e) => {
+            setInput(e.target.value)
+            // Auto-grow up to ~6 rows, then scroll internally.
+            e.target.style.height = 'auto'
+            e.target.style.height = `${Math.min(e.target.scrollHeight, 132)}px`
+          }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
         />
         <button className="btn primary" disabled={busy} onClick={() => void send()}>Send</button>
       </div>
