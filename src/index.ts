@@ -11,7 +11,8 @@ import { listDatanetsJson } from './reppo/listDatanets.js'
 import { checkReppoVersion, getReppoVersionString } from './reppo/version.js'
 import { supportsNonReppoGrants } from './reppo/capabilities.js'
 import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
-import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName } from './reppo/agent.js'
+import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName, syncAgentName } from './reppo/agent.js'
+import { updateAgentOnPlatform } from './reppo/platformApi.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -125,7 +126,9 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
       envAgentId: process.env.REPPO_AGENT_ID,
       readStored: () => readAgentStore(DATA_DIR),
       register: () => registerAgentJson(agentName, 'Reppo Orquestra swarm node — publishes data pods'),
-      writeStored: (c) => writeAgentStore(DATA_DIR, c),
+      // Record the registered name so syncAgentName below sees a fresh registration
+      // as already-in-sync instead of immediately PATCHing the platform.
+      writeStored: (c) => writeAgentStore(DATA_DIR, { ...c, name: agentName }),
       setEnv: (c) => {
         process.env.REPPO_AGENT_ID = c.agentId
         // apiKey env name is a best-effort guess; if mint-pod needs a different name,
@@ -135,6 +138,18 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
     })
     if (res.source === 'registered') console.error(`orquestra: registered Reppo agent ${res.agentId} — persisted to ${DATA_DIR}/activity.db`)
     else if (res.source !== 'skipped') console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
+    // Keep the platform display name in step with REPPO_AGENT_NAME: registration is
+    // one-time, so without this a name change after first start was silently ignored.
+    // Cosmetic — a failed PATCH never blocks the node.
+    if (res.source === 'stored') {
+      const sync = await syncAgentName({
+        desiredName: agentName,
+        readStored: () => readAgentStore(DATA_DIR),
+        update: (id, name, key) => updateAgentOnPlatform(id, { name }, key),
+        writeStored: (c) => writeAgentStore(DATA_DIR, c),
+      }).catch((e) => { console.error(`orquestra: agent name sync failed (non-fatal): ${(e as Error).message}`); return 'unchanged' as const })
+      if (sync === 'updated') console.error(`orquestra: agent display name synced to "${agentName}" on the Reppo platform`)
+    }
   } catch (e) {
     console.error(`orquestra: agent registration failed — mints will error until REPPO_AGENT_ID is set (run \`reppo register-agent\`): ${(e as Error).message}`)
   }

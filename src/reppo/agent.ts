@@ -7,8 +7,10 @@ import { runReppoStdout } from './exec.js'
 const LEGACY_AGENT = 'agent.json'
 
 /** Reppo platform agent identity. `mint-pod` requires REPPO_AGENT_ID (>=0.8.0);
- *  registration also yields an apiKey, persisted for completeness. */
-export interface AgentCreds { agentId: string; apiKey: string }
+ *  registration also yields an apiKey, persisted for completeness.
+ *  `name` = the display name last synced to the platform (absent on pre-migration rows);
+ *  lets a changed REPPO_AGENT_NAME be detected and PATCHed on restart. */
+export interface AgentCreds { agentId: string; apiKey: string; name?: string }
 
 /** Pure: extract creds from `reppo register-agent --json`. */
 export function parseAgentRegistration(raw: unknown): AgentCreds {
@@ -45,19 +47,20 @@ function importLegacyAgent(d: SqliteDb, dataDir: string): void {
 
 /** Read persisted agent creds from the data dir; null if absent/empty/corrupt. */
 export function readAgentStore(dataDir: string): AgentCreds | null {
-  const row = conn(dataDir).prepare('SELECT agentId, apiKey FROM agent WHERE id = 1').get() as
-    | { agentId: string; apiKey: string }
+  const row = conn(dataDir).prepare('SELECT agentId, apiKey, name FROM agent WHERE id = 1').get() as
+    | { agentId: string; apiKey: string; name: string | null }
     | undefined
   if (!row) return null
-  const c = { agentId: String(row.agentId ?? ''), apiKey: String(row.apiKey ?? '') }
+  const c: AgentCreds = { agentId: String(row.agentId ?? ''), apiKey: String(row.apiKey ?? '') }
+  if (row.name != null && row.name !== '') c.name = String(row.name)
   return c.agentId ? c : null
 }
 
 /** Persist agent creds to the single `agent` row (one atomic UPSERT). */
 export function writeAgentStore(dataDir: string, creds: AgentCreds): void {
   conn(dataDir)
-    .prepare('INSERT INTO agent (id, agentId, apiKey) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET agentId = excluded.agentId, apiKey = excluded.apiKey')
-    .run(creds.agentId, creds.apiKey)
+    .prepare('INSERT INTO agent (id, agentId, apiKey, name) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET agentId = excluded.agentId, apiKey = excluded.apiKey, name = excluded.name')
+    .run(creds.agentId, creds.apiKey, creds.name ?? null)
 }
 
 /** Parse register-agent output. The CLI prints a human-readable block even with
@@ -135,4 +138,31 @@ export async function ensureAgentId(deps: EnsureAgentDeps): Promise<EnsureAgentR
   deps.writeStored(creds)
   deps.setEnv(creds)
   return { source: 'registered', agentId: creds.agentId }
+}
+
+export interface SyncAgentNameDeps {
+  /** the display name the operator wants (REPPO_AGENT_NAME / wallet-derived). */
+  desiredName: string
+  readStored(): AgentCreds | null
+  /** PATCH the platform profile (see platformApi.updateAgentOnPlatform). */
+  update(agentId: string, name: string, apiKey: string): Promise<void>
+  writeStored(creds: AgentCreds): void
+}
+
+export type SyncAgentNameResult = 'no-creds' | 'no-apikey' | 'unchanged' | 'updated'
+
+/** Keep the platform display name in step with the operator's choice. Registration is
+ *  one-time, so without this a changed REPPO_AGENT_NAME after first start was silently
+ *  ignored (stored creds short-circuit re-registration). Idempotent: PATCHes only when
+ *  the stored last-synced name differs from the desired one; a NULL stored name
+ *  (pre-migration row) counts as different → synced once, then recorded.
+ *  Callers treat failures as non-fatal — the name is cosmetic, the node keeps running. */
+export async function syncAgentName(deps: SyncAgentNameDeps): Promise<SyncAgentNameResult> {
+  const stored = deps.readStored()
+  if (!stored) return 'no-creds'
+  if (!stored.apiKey) return 'no-apikey' // env-provided id or legacy row — cannot authenticate the PATCH
+  if (stored.name === deps.desiredName) return 'unchanged'
+  await deps.update(stored.agentId, deps.desiredName, stored.apiKey)
+  deps.writeStored({ ...stored, name: deps.desiredName })
+  return 'updated'
 }

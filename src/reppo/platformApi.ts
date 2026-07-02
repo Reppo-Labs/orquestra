@@ -46,3 +46,31 @@ export async function registerVoteOnPlatform(
   const json = (await res.json()) as { data?: { id?: string } }
   return json.data?.id ?? ''
 }
+
+/** PATCH /agents/:agentId — update the agent's platform profile (name/description/thumbnail).
+ *  Docs: https://docs.reppo.ai/api/agent/custom-agents#update-an-agent
+ *  Auth: the apiKey minted at registration. Throws on any non-2xx so the caller can
+ *  decide whether the failure is fatal (it never is for the node — name sync is cosmetic). */
+export async function updateAgentOnPlatform(
+  agentId: string,
+  patch: { name?: string; description?: string; thumbnailURL?: string },
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetchImpl(`${BASE}/agents/${encodeURIComponent(agentId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(patch),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`platform updateAgent ${res.status}: ${body.slice(0, 200)}`)
+    }
+  } finally {
+    clearTimeout(t)
+  }
+}
