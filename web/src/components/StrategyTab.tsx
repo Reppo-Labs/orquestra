@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { type DatanetEntry, loadModels, type ModelProvider } from '../api'
+import { type DatanetEntry, loadModels, type ModelProvider, type AgentInfo, getAgent, renameAgent } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
 import { netLabel } from '../lib/format'
 import { AddDatanetModal } from './AddDatanetModal'
@@ -227,6 +227,59 @@ function DefaultModelPicker({ candidate, edit, providers }: {
   )
 }
 
+/** Platform agent identity: shows the registered agent + lets the operator rename it.
+ *  The rename PATCHes the Reppo platform immediately (POST /api/agent/name) — it is
+ *  NOT part of the strategy candidate, so no SaveBar involvement. */
+function AgentIdentity() {
+  const [agent, setAgent] = useState<AgentInfo | null>(null)
+  const [name, setName] = useState('')
+  const [msg, setMsg] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { void getAgent().then((a) => { setAgent(a); setName(a?.name ?? '') }) }, [])
+  if (!agent) return null // voting-only node (no registration) — nothing to show
+  const dirty = name.trim() !== (agent.name ?? '') && name.trim() !== ''
+  const save = async () => {
+    setBusy(true); setMsg('')
+    const r = await renameAgent(name.trim())
+    setBusy(false)
+    if (!r.ok) { setMsg(r.error ?? 'rename failed'); return }
+    setAgent({ ...agent, name: name.trim() }); setMsg('synced to the Reppo platform ✓')
+  }
+  return (
+    <>
+      <div className="sec-head"><h2>Agent identity</h2><div className="rule" /></div>
+      <div className="settings">
+        {/* Name first — it's the label the Reppo platform displays; the immutable
+            agent id is metadata, small + copyable underneath. */}
+        <div className="agent-row">
+          <input
+            type="text" value={name} maxLength={64} disabled={busy || !agent.renameable}
+            placeholder="display name on the Reppo platform"
+            onChange={(e) => { setName(e.target.value); setMsg('') }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && dirty) void save() }}
+          />
+          <button className="btn primary sm" disabled={!dirty || busy || !agent.renameable} onClick={() => void save()}>
+            {busy ? 'renaming…' : 'Rename'}
+          </button>
+          <span className={`muted ${msg.includes('✓') ? 'pos' : msg ? 'neg' : ''}`}>{msg}</span>
+        </div>
+        <div className="agent-id">
+          agent id: <span className="mono">{agent.agentId}</span>
+          <button
+            className="chip" title="copy agent id"
+            onClick={() => { void navigator.clipboard.writeText(agent.agentId) }}
+          >copy</button>
+        </div>
+        {!agent.renameable && (
+          <div className="muted" style={{ marginTop: 6 }}>
+            renaming needs the apiKey stored at registration — a manually-set REPPO_AGENT_ID can't authenticate the rename
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
 export function StrategyTab({ strategy, netNames, onReconfigure }: {
   strategy: Strategy; netNames: Record<string, string>; onReconfigure: () => void
 }) {
@@ -248,6 +301,8 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
 
   return (
     <div>
+      <AgentIdentity />
+
       <div className="sec-head"><h2>Node default model</h2><div className="rule" /></div>
       <div className="settings">
         <DefaultModelPicker candidate={candidate} edit={edit} providers={providers} />

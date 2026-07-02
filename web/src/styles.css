@@ -494,6 +494,12 @@ textarea { resize: vertical; font-family: var(--body); }
 .firstrun-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
 .firstrun p { margin: 0; color: var(--text); line-height: 1.6; }
 
+/* ── Agent identity (Strategy tab) ────────────────────────────────────── */
+.agent-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.agent-row input { min-width: 240px; flex: 0 1 320px; font-size: 15px; font-weight: 600; }
+.agent-id { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--faint); }
+.agent-id .mono { color: var(--muted); }
+
 /* ── Animations ───────────────────────────────────────────────────────── */
 @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }

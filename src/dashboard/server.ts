@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { readActivity, readActivitySince, sumClaimedReppo, sumMintReppoSpent } from './activityLog.js'
+import { readAgentStore, writeAgentStore, syncAgentName } from '../reppo/agent.js'
+import { updateAgentOnPlatform } from '../reppo/platformApi.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
 import { readEarnStatus } from './earnStatus.js'
@@ -194,7 +196,7 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
   return { ok: true, status: 'accepted', appliesNextCycle: true }
 }
 
-const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm', '/api/learn/disable', '/api/learn/veto'])
+const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm', '/api/learn/disable', '/api/learn/veto', '/api/agent/name'])
 
 async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts, session: OnboardingSession): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
@@ -244,6 +246,27 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         persistOnboarding(dataDir, buildStrategyConfig(v.answers))
         session.messages = []; session.draft = null; session.finalized = null
         json(res, 200, { saved: true })
+        return
+      }
+
+      if (url === '/api/agent/name') {
+        // Rename the platform agent from the dashboard (PATCH /agents/:id upstream).
+        // Same trust model as every other write here: localhost-bound, no auth (ADR 0002).
+        const name = String((body as { name?: unknown })?.name ?? '').trim()
+        if (!name || name.length > 64) { json(res, 400, { error: 'name required (1-64 chars)' }); return }
+        try {
+          const r = await syncAgentName({
+            desiredName: name,
+            readStored: () => readAgentStore(dataDir),
+            update: (id, n, key) => updateAgentOnPlatform(id, { name: n }, key),
+            writeStored: (c) => writeAgentStore(dataDir, c),
+          })
+          if (r === 'no-creds') { json(res, 409, { error: 'no agent registered yet — the node registers one on its first minting start' }); return }
+          if (r === 'no-apikey') { json(res, 409, { error: 'agent has no stored apiKey (REPPO_AGENT_ID set manually?) — cannot authenticate the rename' }); return }
+          json(res, 200, { name, updated: r === 'updated' })
+        } catch (e) {
+          json(res, 502, { error: `platform rename failed: ${(e as Error).message}` })
+        }
         return
       }
 
@@ -310,6 +333,12 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
     }
     if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
     if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
+    if (url === '/api/agent') {
+      // Identity only — the apiKey NEVER leaves the store (ADR 0002: dashboard holds no secrets).
+      const a = readAgentStore(dataDir)
+      json(res, 200, a ? { agentId: a.agentId, name: a.name ?? null, renameable: Boolean(a.apiKey) } : null)
+      return
+    }
     if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
     if (url === '/api/learn') {
       let ids: string[] = []

@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS config (
   id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL, updatedTs TEXT
 );
 CREATE TABLE IF NOT EXISTS agent (
-  id INTEGER PRIMARY KEY CHECK (id = 1), agentId TEXT, apiKey TEXT
+  id INTEGER PRIMARY KEY CHECK (id = 1), agentId TEXT, apiKey TEXT, name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS outcomes (
@@ -125,17 +125,23 @@ export function getDb(dataDir: string): SqliteDb {
  *  this is a safe no-op on fresh DBs (the column is already in DDL) and on already-migrated ones.
  *  Column names/types are hardcoded literals below — no external input reaches the SQL. */
 function migrate(d: SqliteDb): void {
-  const cols = (d.prepare('PRAGMA table_info(activity)').all() as { name: string }[]).map((c) => c.name)
-  const add: [string, string][] = [
+  // node:sqlite DatabaseSync.exec (DDL), not child_process — table/column names are literals.
+  const addColumns = (table: string, add: [string, string][]): void => {
+    const cols = (d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)
+    for (const [name, type] of add) {
+      if (cols.includes(name)) continue
+      d.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+    }
+  }
+  addColumns('activity', [
     ['claimedTokenSymbol', 'TEXT'],
     ['claimedTokenAmount', 'REAL'],
     ['reppoSpent', 'REAL'],
-  ]
-  for (const [name, type] of add) {
-    if (cols.includes(name)) continue
-    const ddl = 'ALTER TABLE activity ADD COLUMN ' + name + ' ' + type
-    d.exec(ddl)
-  }
+  ])
+  // agent.name: the display name last synced to the Reppo platform, so a changed
+  // REPPO_AGENT_NAME is detectable (and PATCHable) on restart. NULL on pre-migration
+  // rows → treated as "unknown", synced once on the next start.
+  addColumns('agent', [['name', 'TEXT']])
 }
 
 /** Test helper: close and forget all cached handles. */

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, type EnsureAgentDeps } from './agent.js'
+import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, syncAgentName, type EnsureAgentDeps, type SyncAgentNameDeps } from './agent.js'
 
 describe('agentDisplayName (node-unique identity)', () => {
   it('uses REPPO_AGENT_NAME when set (trimmed)', () => {
@@ -54,6 +54,10 @@ describe('agent store', () => {
   it('round-trips creds to disk', () => {
     writeAgentStore(dir, { agentId: 'ag_1', apiKey: 'sk_1' })
     expect(readAgentStore(dir)).toEqual({ agentId: 'ag_1', apiKey: 'sk_1' })
+  })
+  it('round-trips the synced display name when present', () => {
+    writeAgentStore(dir, { agentId: 'ag_1', apiKey: 'sk_1', name: 'my-node' })
+    expect(readAgentStore(dir)).toEqual({ agentId: 'ag_1', apiKey: 'sk_1', name: 'my-node' })
   })
   it('returns null when absent', () => {
     expect(readAgentStore(dir)).toBeNull()
@@ -112,6 +116,54 @@ describe('ensureAgentId (idempotent registration)', () => {
   it('throws if registration returns no agentId (do not persist a useless cred)', async () => {
     const d = deps({ register: vi.fn(async () => ({ agentId: '', apiKey: '' })) })
     await expect(ensureAgentId(d)).rejects.toThrow(/no agentId/)
+    expect(d.writeStored).not.toHaveBeenCalled()
+  })
+})
+
+describe('syncAgentName (operator-changeable display name)', () => {
+  const deps = (over: Partial<SyncAgentNameDeps> = {}): SyncAgentNameDeps => ({
+    desiredName: 'new-name',
+    readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: 'sk_1', name: 'old-name' })),
+    update: vi.fn(async () => {}),
+    writeStored: vi.fn(),
+    ...over,
+  })
+
+  it('PATCHes and persists when the desired name differs', async () => {
+    const d = deps()
+    expect(await syncAgentName(d)).toBe('updated')
+    expect(d.update).toHaveBeenCalledWith('ag_1', 'new-name', 'sk_1')
+    expect(d.writeStored).toHaveBeenCalledWith({ agentId: 'ag_1', apiKey: 'sk_1', name: 'new-name' })
+  })
+
+  it('no-ops when the stored name already matches (idempotent restarts)', async () => {
+    const d = deps({ desiredName: 'old-name' })
+    expect(await syncAgentName(d)).toBe('unchanged')
+    expect(d.update).not.toHaveBeenCalled()
+    expect(d.writeStored).not.toHaveBeenCalled()
+  })
+
+  it('treats a pre-migration row (no stored name) as different → syncs once', async () => {
+    const d = deps({ readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: 'sk_1' })) })
+    expect(await syncAgentName(d)).toBe('updated')
+    expect(d.update).toHaveBeenCalledOnce()
+  })
+
+  it('skips when no creds are stored (nothing to authenticate with)', async () => {
+    const d = deps({ readStored: vi.fn(() => null) })
+    expect(await syncAgentName(d)).toBe('no-creds')
+    expect(d.update).not.toHaveBeenCalled()
+  })
+
+  it('skips when the stored row has no apiKey (cannot authenticate the PATCH)', async () => {
+    const d = deps({ readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: '' })) })
+    expect(await syncAgentName(d)).toBe('no-apikey')
+    expect(d.update).not.toHaveBeenCalled()
+  })
+
+  it('does NOT persist the new name when the PATCH fails (retry next start)', async () => {
+    const d = deps({ update: vi.fn(async () => { throw new Error('platform updateAgent 500') }) })
+    await expect(syncAgentName(d)).rejects.toThrow(/500/)
     expect(d.writeStored).not.toHaveBeenCalled()
   })
 })

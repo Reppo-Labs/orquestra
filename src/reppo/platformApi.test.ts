@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { registerVoteOnPlatform } from './platformApi.js'
+import { registerVoteOnPlatform, updateAgentOnPlatform } from './platformApi.js'
 
 const fakeResp = (status: number, body: unknown): Response =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response
@@ -80,5 +80,30 @@ describe('registerVoteOnPlatform', () => {
     await registerVoteOnPlatform('a', 'p', '0x', 'k', fetchImpl)
     expect(capturedSignal).toBeDefined()
     expect(capturedSignal).toBeInstanceOf(AbortSignal)
+  })
+})
+
+describe('updateAgentOnPlatform', () => {
+  it('PATCHes /agents/:id with Bearer auth and the patch body', async () => {
+    const fetchImpl = vi.fn(makeFetch(200, { data: { id: 'ag_1' } }))
+    await updateAgentOnPlatform('ag_1', { name: 'my-node' }, 'key-xyz', fetchImpl)
+    const [url, opts] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toMatch(/\/agents\/ag_1$/)
+    expect(opts.method).toBe('PATCH')
+    expect(JSON.parse(opts.body as string)).toEqual({ name: 'my-node' })
+    expect((opts.headers as Record<string, string>)['Authorization']).toBe('Bearer key-xyz')
+  })
+
+  it('URL-encodes the agent id', async () => {
+    const fetchImpl = vi.fn(makeFetch(200, {}))
+    await updateAgentOnPlatform('agent/1', { name: 'n' }, 'k', fetchImpl)
+    const [url] = fetchImpl.mock.calls[0] as [string]
+    expect(url).toContain('agent%2F1')
+  })
+
+  it('throws on non-2xx with status and truncated body', async () => {
+    await expect(
+      updateAgentOnPlatform('ag_1', { name: 'n' }, 'bad-key', makeFetch(401, { error: 'unauthorized' })),
+    ).rejects.toThrow('platform updateAgent 401')
   })
 })
