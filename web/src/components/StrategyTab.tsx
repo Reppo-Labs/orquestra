@@ -249,8 +249,9 @@ function AgentIdentity() {
     <>
       <div className="sec-head"><h2>Agent identity</h2><div className="rule" /></div>
       <div className="settings">
+        {/* Name first — it's the label the Reppo platform displays; the immutable
+            agent id is metadata, small + copyable underneath. */}
         <div className="agent-row">
-          <span className="mono faint" title="Reppo platform agent id">{agent.agentId}</span>
           <input
             type="text" value={name} maxLength={64} disabled={busy || !agent.renameable}
             placeholder="display name on the Reppo platform"
@@ -261,6 +262,13 @@ function AgentIdentity() {
             {busy ? 'renaming…' : 'Rename'}
           </button>
           <span className={`muted ${msg.includes('✓') ? 'pos' : msg ? 'neg' : ''}`}>{msg}</span>
+        </div>
+        <div className="agent-id">
+          agent id: <span className="mono">{agent.agentId}</span>
+          <button
+            className="chip" title="copy agent id"
+            onClick={() => { void navigator.clipboard.writeText(agent.agentId) }}
+          >copy</button>
         </div>
         {!agent.renameable && (
           <div className="muted" style={{ marginTop: 6 }}>

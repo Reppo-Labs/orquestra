@@ -448,7 +448,9 @@ textarea { resize: vertical; font-family: var(--body); }
 
 /* ── Agent identity (Strategy tab) ────────────────────────────────────── */
 .agent-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.agent-row input { min-width: 240px; flex: 0 1 320px; }
+.agent-row input { min-width: 240px; flex: 0 1 320px; font-size: 15px; font-weight: 600; }
+.agent-id { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--faint); }
+.agent-id .mono { color: var(--muted); }
 
 /* ── Animations ───────────────────────────────────────────────────────── */
 @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
