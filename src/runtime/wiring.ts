@@ -34,6 +34,7 @@ import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, type SnapshotBudget } from '../dashboard/snapshot.js'
+import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
 import { collectOutcomes } from '../learn/collect.js'
 import { runReflection } from '../learn/reflect.js'
@@ -455,6 +456,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       }
     }
     const cycleId = new Date().toISOString()
+    // Zero the LLM usage window so the snapshot below reports THIS cycle's spend
+    // (operators asked for per-cycle LLM cost — panel scoring multiplies calls per pod).
+    resetLlmUsage()
     const report: CycleReport = await runCycle(config, cycleId, deps)
     const v = report.datanets.reduce((a, r) => a + r.votes.length, 0)
     const m = report.datanets.reduce((a, r) => a + r.mints.length, 0)
@@ -477,6 +481,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         epoch: () => queryEpochJson(),
         budget: () => budget,
       })
+      // Per-cycle LLM spend (tokens + est USD) — reset above, accumulated by the
+      // withUsageTracking middleware on every resolved model during the cycle.
+      snap.llm = snapshotLlmUsage()
       writeSnapshot(w.dataDir, snap)
     } catch (e) {
       console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)

@@ -4,6 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { wrapLanguageModel, type LanguageModel } from 'ai'
 import { z } from 'zod'
+import { withUsageTracking } from './usage.js'
 
 export type LlmProvider = 'anthropic' | 'openai' | 'google' | 'surplus' | 'virtuals' | 'usepod' | 'anthropic-oauth'
 
@@ -229,5 +230,7 @@ export function resolveModel(provider: LlmProvider, apiKey: string, model?: stri
   }
   // Strip `temperature` for ANY model that rejects it (error-driven + latched). Models
   // that accept it (Claude/GPT/Gemini) keep the deterministic temperature:0 the SDK supplies.
-  return withTemperatureFallback(built)
+  // withUsageTracking feeds the per-cycle LLM cost estimate on the dashboard — every
+  // resolved model reports token usage, so all call sites are covered here, once.
+  return withUsageTracking(withTemperatureFallback(built))
 }

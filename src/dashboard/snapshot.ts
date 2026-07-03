@@ -7,6 +7,7 @@ import type { VotingPower } from '../reppo/queryVotingPower.js'
 import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
 import type { EpochInfo } from '../reppo/queryEpoch.js'
 import type { BudgetCaps } from '../wallet/ledger.js'
+import type { LlmUsageSnapshot } from '../llm/usage.js'
 
 export interface SnapshotBudget {
   mintReppoSpent: number
@@ -24,6 +25,9 @@ export interface Snapshot {
   budget: SnapshotBudget
   /** authoritative current on-chain epoch (reppo >=0.8.0); optional for back-compat. */
   epoch?: EpochInfo
+  /** LLM token usage + estimated USD cost for THIS cycle (all calls in the cycle window).
+   *  Optional for back-compat with pre-feature rows. estCostUsd null = no priceable model. */
+  llm?: LlmUsageSnapshot
 }
 
 const LEGACY = 'snapshot.json'
