@@ -33,7 +33,7 @@ import { queryEpochJson } from '../reppo/queryEpoch.js'
 import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
-import { collectSnapshot, writeSnapshot, readSnapshot, type SnapshotBudget } from '../dashboard/snapshot.js'
+import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
 import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
 import { collectOutcomes } from '../learn/collect.js'
@@ -567,6 +567,15 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       }
     } catch (e) {
       console.error(`orquestra: earn-status / learn update failed (non-fatal): ${(e as Error).message}`)
+    }
+
+    // Final LLM-usage attach: reflection (above) makes LLM calls AFTER the snapshot was
+    // written — re-attach the full window to this cycle's row so those tokens aren't
+    // wiped unreported by the next cycle's reset. Best-effort, never throws into the loop.
+    try {
+      attachSnapshotLlm(w.dataDir, cycleId, snapshotLlmUsage())
+    } catch (e) {
+      console.error(`orquestra: llm usage attach failed (non-fatal): ${(e as Error).message}`)
     }
   }
 }

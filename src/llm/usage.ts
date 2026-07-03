@@ -27,6 +27,7 @@ const PRICING_PER_MTOK: Record<string, [number, number]> = {
   'gpt-4.1-mini': [0.4, 1.6],
   'gpt-4.1': [2, 8],
   // Google
+  'gemini-3.1-pro': [2, 12], // KNOWN_MODELS default is gemini-3.1-pro-preview — must match
   'gemini-3-pro': [2, 12],
   'gemini-3-flash': [0.3, 2.5],
   'gemini-2.5-pro': [1.25, 10],

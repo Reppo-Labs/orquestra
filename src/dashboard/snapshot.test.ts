@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeSnapshot, readSnapshot, collectSnapshot, type Snapshot } from './snapshot.js'
+import { writeSnapshot, readSnapshot, collectSnapshot, attachSnapshotLlm, type Snapshot } from './snapshot.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-snap-')) })
@@ -33,6 +33,31 @@ describe('snapshot', () => {
     writeSnapshot(dir, snap({ ts: '2026-06-04T21:38:40.000Z', balance: { eth: 2, reppo: 2, veReppo: 2, usdc: 2 } }))
     expect(readSnapshot(dir)?.balance.reppo).toBe(2)
     expect(readSnapshot(dir)?.ts).toBe('2026-06-04T21:38:40.000Z')
+  })
+
+  const usage = (calls: number) => ({
+    calls, inputTokens: 1000, outputTokens: 100, estCostUsd: 0.05, unpricedCalls: 0, byModel: {},
+  })
+
+  it('llm usage block survives the JSON round-trip', () => {
+    writeSnapshot(dir, snap({ llm: usage(3) }))
+    const r = readSnapshot(dir)
+    expect(r?.llm?.calls).toBe(3)
+    expect(r?.llm?.estCostUsd).toBeCloseTo(0.05)
+  })
+
+  it('attachSnapshotLlm updates the cycle row in place (reflection re-attach)', () => {
+    writeSnapshot(dir, snap({ cycleId: 'c9', llm: usage(3) }))
+    attachSnapshotLlm(dir, 'c9', usage(7)) // post-reflection: more calls in the same window
+    const r = readSnapshot(dir)
+    expect(r?.llm?.calls).toBe(7)          // replaced, not duplicated
+    expect(r?.balance.reppo).toBe(1850)    // rest of the row untouched
+  })
+
+  it('attachSnapshotLlm is a no-op for an unknown cycleId (never throws)', () => {
+    writeSnapshot(dir, snap({ cycleId: 'c1', llm: usage(3) }))
+    expect(() => attachSnapshotLlm(dir, 'nope', usage(9))).not.toThrow()
+    expect(readSnapshot(dir)?.llm?.calls).toBe(3) // untouched
   })
 
   it('imports a legacy snapshot.json once, then renames it .imported', () => {

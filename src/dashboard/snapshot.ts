@@ -71,6 +71,24 @@ export function readSnapshot(dataDir: string): Snapshot | null {
   try { return JSON.parse(row.data) as Snapshot } catch { return null }
 }
 
+/** Replace the llm usage block on an already-written cycle row (latest row for that
+ *  cycleId). The cycle writes its snapshot BEFORE reflection runs (earn-status reads it
+ *  immediately), but reflection makes LLM calls too — without this second attach those
+ *  tokens would be wiped by the next cycle's reset and never reported. No-op when the
+ *  cycle row is missing or its JSON is corrupt (never throws into the loop). */
+export function attachSnapshotLlm(dataDir: string, cycleId: string, llm: NonNullable<Snapshot['llm']>): void {
+  const d = conn(dataDir)
+  const row = d.prepare('SELECT id, data FROM snapshot WHERE cycleId = ? ORDER BY id DESC LIMIT 1').get(cycleId) as
+    | { id: number; data: string }
+    | undefined
+  if (!row) return
+  try {
+    const snap = JSON.parse(row.data) as Snapshot
+    snap.llm = llm
+    d.prepare('UPDATE snapshot SET data = ? WHERE id = ?').run(JSON.stringify(snap), row.id)
+  } catch { /* corrupt row — leave it; the pre-reflection llm block already stands */ }
+}
+
 export interface SnapshotReaders {
   balance(): Promise<WalletBalance>
   votingPower(): Promise<VotingPower>
