@@ -282,6 +282,19 @@ async function start(): Promise<void> {
   // Wallet address for on-chain emissions detection (the platform `emissions-due` API
   // under-reports; we read PodManager directly). Best-effort — null falls back to the CLI.
   const walletAddress = rpcUrl ? ((await queryWalletAddress().catch(() => null)) ?? undefined) : undefined
+  // Say WHICH claim-detection mode is active: the fallback is silent otherwise, and a node
+  // on the platform API quietly misses claims (it under-reports) — operators only notice
+  // when they have to claim manually.
+  if (rpcUrl && walletAddress) {
+    console.error(`orquestra: emissions claim detection: on-chain (wallet ${walletAddress})`)
+  } else if (rpcUrl) {
+    console.error(
+      'orquestra: WARNING — RPC_URL is set but the wallet address could not be resolved (reppo query balance failed); ' +
+        'falling back to the platform emissions-due API, which under-reports. Auto-claims may be missed until a restart resolves it.',
+    )
+  } else {
+    console.error('orquestra: emissions claim detection: platform API (under-reports) — set RPC_URL to detect claims on-chain.')
+  }
   // Fire-and-forget: reconcile reppoSpent for historical mints that predate the column.
   // Upgrading operators get accurate lifetime PnL without manual intervention.
   backfillMintReppoSpent(DATA_DIR, rpcUrl || undefined).catch(() => {/* already logged inside */})

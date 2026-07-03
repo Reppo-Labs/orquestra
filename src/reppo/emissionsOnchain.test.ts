@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, type PodCache } from './emissionsOnchain.js'
+import { tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, type PodCache, type EpochScanCache } from './emissionsOnchain.js'
 
 // Minimal JSON-RPC mock: routes by method + decodes the selector/args we care about.
 const SEL = { hasClaimed: '0x5b778a36', claim: '0x6dd6f4c9', currentEpoch: '0x76671808' }
@@ -113,5 +113,62 @@ describe('queryClaimableOnchain', () => {
     const f = makeFetch({ epoch: 103, claimed: new Set(['102:5', '101:5', '100:5']) })
     const out = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f })
     expect(out).toEqual([])
+  })
+})
+
+function memScanCache(initial: Record<string, number> = {}): EpochScanCache & { state: Record<string, number> } {
+  const state = { ...initial }
+  return {
+    state,
+    getThrough: (podId) => state[podId] ?? 0,
+    setThrough: (podId, epoch) => { state[podId] = epoch },
+  }
+}
+
+describe('queryClaimableOnchain with an epoch-scan watermark', () => {
+  it('first run deep-scans from floorEpoch, not just the last 3 epochs', async () => {
+    // Backlog at epoch 90 — far outside the legacy 3-epoch window at epoch 103. The
+    // operator-reported bug: the node could never see it, only a manual claim could.
+    const f = makeFetch({ epoch: 103, claimable: new Set(['5:90', '5:102']) })
+    const scan = memScanCache()
+    const out = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 80 }, scan)
+    expect(out.map((o) => `${o.podId}:${o.epoch}`).sort()).toEqual(['5:102', '5:90'])
+  })
+
+  it('advances the watermark to just before the oldest still-claimable epoch', async () => {
+    const f = makeFetch({ epoch: 103, claimable: new Set(['5:90']) })
+    const scan = memScanCache()
+    await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 80 }, scan)
+    // 90 is claimable-but-unclaimed: must stay re-checkable until hasClaimed flips true.
+    expect(scan.state['5']).toBe(89)
+  })
+
+  it('advances the watermark to the last closed epoch when nothing is due', async () => {
+    const f = makeFetch({ epoch: 103 })
+    const scan = memScanCache()
+    await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 80 }, scan)
+    expect(scan.state['5']).toBe(102)
+  })
+
+  it('resumes past the watermark instead of re-scanning old epochs', async () => {
+    const calls: string[] = []
+    const inner = makeFetch({ epoch: 103, claimable: new Set(['5:102']) })
+    const f = (async (url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_call') calls.push(params[0].data.slice(0, 10))
+      return inner(url, init as never)
+    }) as unknown as typeof fetch
+    const scan = memScanCache({ '5': 101 })
+    const out = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 1 }, scan)
+    expect(out.map((o) => `${o.podId}:${o.epoch}`)).toEqual(['5:102'])
+    // Only epoch 102 is checked: 1 hasClaimed + 1 claim probe (+ 1 currentEpoch read).
+    expect(calls.filter((s) => s === SEL.hasClaimed)).toHaveLength(1)
+  })
+
+  it('keeps the legacy lookback window when no watermark cache is given', async () => {
+    // Without a scan cache the behavior is unchanged: epoch 90 stays invisible.
+    const f = makeFetch({ epoch: 103, claimable: new Set(['5:90', '5:102']) })
+    const out = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, lookbackEpochs: 3 })
+    expect(out.map((o) => `${o.podId}:${o.epoch}`)).toEqual(['5:102'])
   })
 })

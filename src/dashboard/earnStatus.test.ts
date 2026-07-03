@@ -35,6 +35,16 @@ describe('earnSummary', () => {
     expect(earnSummary([mint()], due(0), [pod({ upVotes: 3 })]).earning).toBe(false)
   })
 
+  it('counts claimable (pod,epoch) pairs — on-chain detection knows pairs but not amounts', () => {
+    const onchainDue: EmissionsDue = { totalReppo: 0, pods: [
+      { podId: '5', datanetId: '', epoch: 90, reppo: 0 },
+      { podId: '5', datanetId: '', epoch: 102, reppo: 0 },
+    ] }
+    const s = earnSummary([mint()], onchainDue, [])
+    expect(s.claimablePairs).toBe(2)
+    expect(s.earning).toBe(true) // pending pairs count as earning even with unknown amounts
+  })
+
   it('aggregates NON-REPPO claimed tokens per symbol, kept separate from claimedReppo', () => {
     const tokenClaim = (symbol: string, amount: number): ActivityEntry => ({
       ts: 't', cycleId: 'c', kind: 'claim', datanetId: '22', podId: '1', epoch: 99,
@@ -60,6 +70,11 @@ describe('formatEarnStatus', () => {
   it('renders the "too early" verdict when nothing yet', () => {
     const out = formatEarnStatus(earnSummary([mint()], due(0), []))
     expect(out).toMatch(/too early/)
+  })
+  it('shows pending pair count when amounts are unknown (on-chain detection)', () => {
+    const onchainDue: EmissionsDue = { totalReppo: 0, pods: [{ podId: '5', datanetId: '', epoch: 90, reppo: 0 }] }
+    const out = formatEarnStatus(earnSummary([mint()], onchainDue, []))
+    expect(out).toMatch(/claimable REPPO \(now\):  0 \(1 unclaimed pod-epoch pair\)/)
   })
 })
 

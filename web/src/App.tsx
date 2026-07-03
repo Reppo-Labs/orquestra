@@ -76,7 +76,7 @@ export function App() {
             <div className="earn-banner">
               <span className={`dot ${earn?.earning ? 'on' : earn && earn.totalUpVotes > 0 ? 'warm' : 'off'}`} />
               {earn
-                ? `${earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'} · ${earn.mintedPods} pod(s) · ${fmt(earn.claimableReppo)} claimable + ${fmt(earn.claimedReppo)} claimed · ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
+                ? `${earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'} · ${earn.mintedPods} pod(s) · ${fmt(earn.claimableReppo)} claimable${(earn.claimablePairs ?? 0) > 0 ? ` (${earn.claimablePairs} pending)` : ''} + ${fmt(earn.claimedReppo)} claimed · ${earn.totalUpVotes}↑/${earn.totalDownVotes}↓`
                 : 'earn-test pending first cycle'}
             </div>
             <SecHead title="Emissions" />
