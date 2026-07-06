@@ -19,6 +19,8 @@ orquestra-data.bak-*/
 .agents/
 skills-lock.json
 session-report*.html
+# Internal AI implementation plans/specs — working notes, not public docs
+docs/superpowers/
 # OS / editor
 .DS_Store
 .idea/
