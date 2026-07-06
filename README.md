@@ -161,7 +161,7 @@ The `reppo` CLI must be on `PATH` for a locally-run node — **0.12.0 recommende
 CLIs don't surface pod descriptions). Hard minimum 0.8.0; the node warns at
 startup on a version mismatch.
 
-See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full dev loop, test
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full dev loop, test
 layout, and PR checklist.
 
 ## License
