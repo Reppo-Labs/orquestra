@@ -68,6 +68,11 @@ export interface EarnSummary {
   claimedTokens: { symbol: string; amount: number }[]
   /** still-unclaimed emissions across our pods (live query). */
   claimableReppo: number
+  /** count of still-unclaimed (pod,epoch) pairs. On-chain detection knows WHICH pairs are
+   *  claimable but not their amounts (PodManager has no pre-claim amount view), so this can
+   *  be > 0 while claimableReppo reads 0 — the pairs are real, the chain pays on claim.
+   *  Optional: rows persisted by older nodes predate the field. */
+  claimablePairs?: number
   totalUpVotes: number
   totalDownVotes: number
   pods: OwnPodVote[]
@@ -108,6 +113,7 @@ export function earnSummary(activity: ActivityEntry[], emissionsDue: EmissionsDu
   }
   const claimedTokens = [...tokenTotals.entries()].map(([symbol, amount]) => ({ symbol, amount }))
   const claimableReppo = emissionsDue.totalReppo
+  const claimablePairs = emissionsDue.pods.length
   const totalUpVotes = ownPodVotes.reduce((s, p) => s + p.upVotes, 0)
   const totalDownVotes = ownPodVotes.reduce((s, p) => s + p.downVotes, 0)
   return {
@@ -115,10 +121,11 @@ export function earnSummary(activity: ActivityEntry[], emissionsDue: EmissionsDu
     claimedReppo,
     claimedTokens,
     claimableReppo,
+    claimablePairs,
     totalUpVotes,
     totalDownVotes,
     pods: ownPodVotes,
-    earning: claimedReppo > 0 || claimableReppo > 0 || claimedTokens.length > 0,
+    earning: claimedReppo > 0 || claimableReppo > 0 || claimablePairs > 0 || claimedTokens.length > 0,
   }
 }
 
@@ -128,7 +135,9 @@ export function formatEarnStatus(s: EarnSummary): string {
   const lines = [
     '── orquestra · earn status ──',
     `minted pods (executed): ${s.mintedPods}`,
-    `claimable REPPO (now):  ${s.claimableReppo}`,
+    // Amounts are unknown pre-claim under on-chain detection, so surface the pair count —
+    // "0 claimable" with pending pairs was read by operators as "the node sees nothing".
+    `claimable REPPO (now):  ${s.claimableReppo}${(s.claimablePairs ?? 0) > 0 ? ` (${s.claimablePairs} unclaimed pod-epoch pair${s.claimablePairs === 1 ? '' : 's'})` : ''}`,
     `claimed REPPO (to date): ${s.claimedReppo}`,
     ...(s.claimedTokens.length ? [`claimed (native): ${s.claimedTokens.map((t) => `${t.amount} ${t.symbol}`).join(', ')}`] : []),
     `pod votes: ${s.totalUpVotes} up / ${s.totalDownVotes} down across ${s.pods.length} pod(s)`,

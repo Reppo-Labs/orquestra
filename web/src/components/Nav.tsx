@@ -44,7 +44,7 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
       ),
       v: snap ? fmt(snap.balance.veReppo) : '—',
     },
-    { id: 'Claimable', k: 'Claimable', v: pnl ? <span className={pnl.claimableReppo > 0 ? 'pos' : ''}>{fmt(pnl.claimableReppo)}</span> : '—' },
+    { id: 'Claimable', k: 'Claimable', v: pnl ? <span className={pnl.claimableReppo > 0 || (pnl.claimablePairs ?? 0) > 0 ? 'pos' : ''}>{(pnl.claimablePairs ?? 0) > 0 && pnl.claimableReppo === 0 ? `${pnl.claimablePairs} pending` : fmt(pnl.claimableReppo)}</span> : '—' },
     { id: 'Cadence', k: 'Cadence', v: cfg ? `${cfg.cadenceHours}h` : '—' },
   ]
   return (

@@ -4,6 +4,9 @@ import type { Snapshot } from './snapshot.js'
 export interface Pnl {
   claimedReppo: number
   claimableReppo: number
+  /** still-unclaimed (pod,epoch) pairs. Under on-chain detection the amount is unknown
+   *  pre-claim, so claimableReppo can read 0 while pairs are pending. */
+  claimablePairs: number
   earnedReppo: number
   spentReppo: number
   netReppo: number
@@ -17,8 +20,9 @@ export interface Pnl {
  *  at each horizon rollover while claimed stays lifetime. */
 export function derivePnl(snapshot: Snapshot, claimedReppo: number, mintReppoSpent: number): Pnl {
   const claimableReppo = snapshot.emissionsDue.totalReppo
+  const claimablePairs = snapshot.emissionsDue.pods.length
   const earnedReppo = claimedReppo + claimableReppo
   const spentReppo = mintReppoSpent
   const gasSpentEth = snapshot.budget.mintGasSpentEth + snapshot.budget.voteGasSpentEth + snapshot.budget.claimGasSpentEth
-  return { claimedReppo, claimableReppo, earnedReppo, spentReppo, netReppo: earnedReppo - spentReppo, gasSpentEth }
+  return { claimedReppo, claimableReppo, claimablePairs, earnedReppo, spentReppo, netReppo: earnedReppo - spentReppo, gasSpentEth }
 }

@@ -17,7 +17,12 @@ export function EmissionsSummary({ pnl, earn }: { pnl: Pnl | null; earn?: Earn |
         </div>
         <div className="card hero">
           <div className="k">Claimable now</div>
-          <div className="v"><span className={pnl.claimableReppo > 0 ? 'pos' : ''}>{fmt(pnl.claimableReppo)} REPPO</span></div>
+          <div className="v">
+            <span className={pnl.claimableReppo > 0 || (pnl.claimablePairs ?? 0) > 0 ? 'pos' : ''}>
+              {fmt(pnl.claimableReppo)} REPPO
+              {(pnl.claimablePairs ?? 0) > 0 ? ` · ${pnl.claimablePairs} pending` : ''}
+            </span>
+          </div>
         </div>
         {tokens.map((t) => (
           <div className="card" key={t.symbol}>

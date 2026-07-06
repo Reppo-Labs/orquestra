@@ -7,6 +7,9 @@ export interface Pnl {
   earnedReppo: number
   claimedReppo: number
   claimableReppo: number
+  /** still-unclaimed (pod,epoch) pairs — amounts unknown pre-claim under on-chain
+   *  detection, so this can be > 0 while claimableReppo reads 0. Absent on older nodes. */
+  claimablePairs?: number
   spentReppo: number
   gasSpentEth: number
 }
@@ -93,6 +96,8 @@ export interface Earn {
   earning: boolean
   mintedPods: number
   claimableReppo: number
+  /** still-unclaimed (pod,epoch) pairs. Absent on older nodes. */
+  claimablePairs?: number
   claimedReppo: number
   /** claimed NON-REPPO emission tokens (e.g. LBM), per symbol. Absent on older nodes. */
   claimedTokens?: { symbol: string; amount: number }[]

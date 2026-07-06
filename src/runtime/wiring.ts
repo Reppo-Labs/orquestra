@@ -19,14 +19,14 @@ import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
-import type { ClaimableEmission, ClaimToken } from '../reppo/queryEmissionsDue.js'
+import type { ClaimableEmission, ClaimToken, EmissionsDue } from '../reppo/queryEmissionsDue.js'
 import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
 import { queryEmissionsDueJson } from '../reppo/queryEmissionsDue.js'
 import { readTokenBalance } from '../reppo/tokenBalance.js'
 import { queryClaimableOnchain, queryVoterClaimableOnchain } from '../reppo/emissionsOnchain.js'
-import { makeDbPodCache, makeVoterScanCache } from '../reppo/podCacheStore.js'
+import { makeDbPodCache, makeVoterScanCache, makeOwnerScanCache } from '../reppo/podCacheStore.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
 import { queryEpochJson } from '../reppo/queryEpoch.js'
@@ -158,6 +158,14 @@ function effectiveDefaultModel(w: CycleWiring): LanguageModel | null {
     envModel: w.defaultModel,
   })
   return eff.key ? (w.resolveModel ?? resolveModel)(eff.provider, eff.key, eff.model) : null
+}
+
+/** Floor for the on-chain emissions scans: REPPO_EMISSIONS_FLOOR_EPOCH (the epoch the node
+ *  first existed) bounds the first-run deep scan so it doesn't crawl from epoch 1 and storm
+ *  the RPC. Read per call so a restart with a new value takes effect. */
+function emissionsFloorEpoch(): number | undefined {
+  const raw = Number(process.env.REPPO_EMISSIONS_FLOOR_EPOCH)
+  return Number.isFinite(raw) && raw > 0 ? raw : undefined
 }
 
 /** Build the CycleDeps that runCycle consumes. Everything stateful (dedup, ledger)
@@ -370,9 +378,12 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
     // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
-    // cycle's claim phase (it skips claiming that cycle).
+    // cycle's claim phase (it skips claiming that cycle). The owner-scan watermark makes
+    // the first run backfill history from REPPO_EMISSIONS_FLOOR_EPOCH — without it, the
+    // fixed 3-epoch window permanently hid older unclaimed emissions (operator report:
+    // "claimed once, then only manual claims worked").
     getEmissionsDue: async () => enrichTokens((w.rpcUrl && w.walletAddress)
-      ? await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir))
+      ? await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() }, makeOwnerScanCache(w.dataDir))
       : (await io.emissionsDue()).pods),
     // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod set comes
     // from our executed-vote activity (the wallet doesn't own them, so they're absent from the
@@ -385,15 +396,10 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
           .map((e) => e.podId as string),
       )]
-      // Floor the voter scan at REPPO_EMISSIONS_FLOOR_EPOCH (the epoch the node first existed)
-      // so a first-run deep scan doesn't crawl from epoch 1 and storm the RPC. The active-epoch
-      // gate inside bounds it further to epochs the wallet actually voted in.
-      const floorRaw = Number(process.env.REPPO_EMISSIONS_FLOOR_EPOCH)
-      const floorEpoch = Number.isFinite(floorRaw) && floorRaw > 0 ? floorRaw : undefined
       // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
       // describes publisher/mint emissions only). Enriching here causes readClaimedToken
       // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
-      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch })
+      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() })
     },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
@@ -474,10 +480,25 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         claimGasSpentEth: w.ledger.state.claimGasSpentEth,
         caps: config.budget,
       }
+      // Claimable for the dashboard: SAME on-chain detection the claim phase uses (when RPC +
+      // wallet are known), so "claimable" reflects what the node will actually claim. The
+      // platform CLI is the fallback only — it under-reports (returned 0 while pairs were
+      // claimable on-chain), which left operators staring at "claimable: 0" with REPPO parked.
+      // REUSE the claim phase's post-claim scan result (report.emissionsDue) instead of
+      // re-scanning PodManager a second time this cycle — the scan is the expensive RPC path,
+      // and a stuck claimable epoch pins its watermark, so a re-scan re-walks the whole tail.
+      // When claiming is disabled the claim phase never scanned, so do the one scan here.
+      const emissionsDueOnchain = async (): Promise<EmissionsDue> => {
+        if (!w.rpcUrl || !w.walletAddress) return queryEmissionsDueJson()
+        const pods = config.claimEmissions
+          ? report.emissionsDue
+          : await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() }, makeOwnerScanCache(w.dataDir))
+        return { totalReppo: pods.reduce((s, p) => s + p.reppo, 0), pods }
+      }
       const snap = await collectSnapshot(w.dataDir, cycleId, {
         balance: () => queryBalanceJson(),
         votingPower: () => queryVotingPowerJson(),
-        emissionsDue: () => queryEmissionsDueJson(),
+        emissionsDue: emissionsDueOnchain,
         epoch: () => queryEpochJson(),
         budget: () => budget,
       })

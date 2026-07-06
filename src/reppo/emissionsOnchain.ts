@@ -61,20 +61,42 @@ interface RpcDeps {
   floorEpoch?: number
 }
 
+/** A contract-level EVM revert (the JSON-RPC node executed the call and it reverted). Used as
+ *  the "nothing due" oracle for claim probes. Distinct from a transient transport failure
+ *  (HTTP 5xx, rate limit, timeout) — the latter must NOT be read as "nothing due", or a
+ *  claimable epoch gets silently skipped and, with a watermark, permanently lost. */
+export class RpcRevertError extends Error {
+  constructor(message: string) { super(message); this.name = 'RpcRevertError' }
+}
+
+/** Does this JSON-RPC error describe an EVM revert (deterministic, from the contract) rather
+ *  than a transient node failure? Revert surfaces as code 3 (eth spec) or a message the node
+ *  tags with "revert"/"execution reverted". Rate limits (-32005/-32029), timeouts and 5xx are
+ *  transient and fall through to a plain Error. */
+const isRevert = (code: number | undefined, msg: string): boolean =>
+  code === 3 || /revert|invalid opcode|out of gas|always failing/i.test(msg)
+
 async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<unknown> {
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   })
-  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`)
-  const json = (await res.json()) as { result?: unknown; error?: { message?: string } }
-  if (json?.error) throw new Error(`RPC ${method} error: ${json.error.message ?? 'unknown'}`)
+  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`) // transient (server/network)
+  const json = (await res.json()) as { result?: unknown; error?: { code?: number; message?: string } }
+  if (json?.error) {
+    const msg = json.error.message ?? 'unknown'
+    // A contract revert is a meaningful "nothing due"; anything else is transient and must
+    // propagate so the caller retries instead of treating it as an empty result.
+    if (isRevert(json.error.code, msg)) throw new RpcRevertError(`RPC ${method} reverted: ${msg}`)
+    throw new Error(`RPC ${method} error: ${msg}`)
+  }
   return json.result
 }
 
-/** eth_call; returns the raw hex result, or throws if the call reverts (used as the
- *  claimable oracle: a claim that reverts is "nothing due"). */
+/** eth_call; returns the raw hex result. Throws RpcRevertError if the call reverts (the
+ *  claimable oracle: a claim that reverts is "nothing due"); throws a plain Error on a
+ *  transient transport failure (which the caller must not read as "nothing due"). */
 async function ethCall(fetchImpl: typeof fetch, url: string, to: string, data: string, from?: string): Promise<string> {
   const call: Record<string, string> = { to, data }
   if (from) call.from = from
@@ -109,16 +131,39 @@ export interface PodCache {
   setLastBlock(b: bigint): void
 }
 
-/** Detect claimable (pod,epoch) on-chain. Enumerates new pods since the cached block,
- *  then for every owned pod checks the last `lookbackEpochs` closed epochs: unclaimed +
- *  a non-reverting claim eth_call ⇒ claimable. Returns ClaimableEmission[] (reppo amount
- *  unknown pre-claim — PodManager V2 has no amount view — so 0; the chain pays what is
- *  owed on claim). Best-effort: the caller wraps this and tolerates a throw. */
-export async function queryClaimableOnchain(rpcUrl: string, wallet: string, cache: PodCache, deps: RpcDeps = {}): Promise<ClaimableEmission[]> {
+/** Per-pod watermark: the highest CLOSED epoch already scanned for emissions, so the
+ *  first run deep-scans full history and later runs only check new epochs. Shared by the
+ *  owner-claim and voter-claim scanners (each with its own DB table). */
+export interface EpochScanCache {
+  getThrough(podId: string): number
+  setThrough(podId: string, epoch: number): void
+}
+/** Back-compat alias — the voter scanner predates the shared name. */
+export type VoterScanCache = EpochScanCache
+
+/** Detect claimable OWNER (pod,epoch) on-chain. Enumerates new pods since the cached block,
+ *  then scans each owned pod's CLOSED epochs: unclaimed + a non-reverting claim eth_call ⇒
+ *  claimable. Returns ClaimableEmission[] (reppo amount unknown pre-claim — PodManager V2
+ *  has no amount view — so 0; the chain pays what is owed on claim).
+ *
+ *  With `scanCache` (production): per-pod watermark — the FIRST run deep-scans from
+ *  `floorEpoch` (default 1) through the last closed epoch, so emissions older than the old
+ *  3-epoch window are found and claimed (operator report: the node claimed once, then old
+ *  epochs sat outside the window forever and needed manual claims). Later runs resume past
+ *  the watermark. The watermark never advances past a claimable-but-unclaimed epoch — its
+ *  claim happens after detection and may fail transiently, so it stays re-checkable until
+ *  hasPodOwnerClaimedEmissions flips true on-chain.
+ *
+ *  Without `scanCache` (legacy/tests): the fixed `lookbackEpochs` window (default 3).
+ *  Best-effort: the caller wraps this and tolerates a throw. */
+export async function queryClaimableOnchain(
+  rpcUrl: string, wallet: string, cache: PodCache, deps: RpcDeps = {}, scanCache?: EpochScanCache,
+): Promise<ClaimableEmission[]> {
   const fetchImpl = deps.fetchImpl ?? fetch
   const pm = deps.podManager ?? POD_MANAGER_MAINNET
   const ve = deps.veReppo ?? VE_REPPO_MAINNET
   const lookback = BigInt(deps.lookbackEpochs ?? 3)
+  const floor = BigInt(deps.floorEpoch ?? 1)
 
   // 1. incremental pod discovery
   const latest = BigInt((await rpcCall(fetchImpl, rpcUrl, 'eth_blockNumber', [])) as string)
@@ -132,29 +177,36 @@ export async function queryClaimableOnchain(rpcUrl: string, wallet: string, cach
 
   // 2. current epoch (veReppo is the authoritative source PodManager defers to)
   const cur = BigInt(await ethCall(fetchImpl, rpcUrl, ve, SEL.currentEpoch))
+  if (cur <= 1n) return [] // no closed epochs yet
+  const lastClosed = cur - 1n
+  const windowStart = cur > lookback ? cur - lookback : 1n
 
-  // 3. for each owned pod, scan the recent CLOSED epochs for an unclaimed, non-reverting claim
+  // 3. for each owned pod, scan CLOSED epochs for an unclaimed, non-reverting claim
   const out: ClaimableEmission[] = []
-  const start = cur > lookback ? cur - lookback : 1n
   for (const podStr of cache.getKnownPods()) {
     const podId = BigInt(podStr)
-    for (let ep = start; ep < cur; ep++) {
+    const through = scanCache ? BigInt(scanCache.getThrough(podStr)) : 0n
+    const resume = through + 1n > floor ? through + 1n : floor
+    const start = scanCache ? resume : windowStart
+    let firstClaimable: bigint | null = null
+    for (let ep = start; ep <= lastClosed; ep++) {
       const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasClaimed + word(ep) + word(podId))
       if (isTrue(claimed)) continue
       try {
-        await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet) // reverts ⇒ nothing due
-      } catch { continue }
+        await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet)
+      } catch (e) {
+        if (e instanceof RpcRevertError) continue // reverts ⇒ nothing due for this (pod,epoch)
+        throw e // transient RPC failure: abort before the watermark advances, so this epoch stays re-checkable next cycle
+      }
+      if (firstClaimable === null) firstClaimable = ep
       out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
+    }
+    if (scanCache) {
+      const newThrough = firstClaimable !== null ? firstClaimable - 1n : lastClosed
+      if (newThrough > through) scanCache.setThrough(podStr, Number(newThrough))
     }
   }
   return out
-}
-
-/** Per-pod watermark: the highest CLOSED epoch already scanned for voter emissions, so the
- *  first run deep-scans full history and later runs only check new epochs. */
-export interface VoterScanCache {
-  getThrough(podId: string): number
-  setThrough(podId: string, epoch: number): void
 }
 
 /** Detect claimable VOTER (pod,epoch) on-chain. The pod set is the pods the wallet VOTED on
@@ -224,7 +276,10 @@ export async function queryVoterClaimableOnchain(
       try {
         // claimVoterEmissions(voter, podId, epoch) — reverts ⇒ nothing due for this voter
         await ethCall(fetchImpl, rpcUrl, pm, SEL.claimVoter + w + word(podId) + word(ep), wallet)
-      } catch { continue }
+      } catch (e) {
+        if (e instanceof RpcRevertError) continue // reverts ⇒ nothing due for this voter
+        throw e // transient RPC failure: abort before the watermark advances, so this epoch stays re-checkable next cycle
+      }
       if (firstClaimable === null) firstClaimable = ep
       out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
     }

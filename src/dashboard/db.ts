@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS emit_scan (
 CREATE TABLE IF NOT EXISTS voter_scan (
   podId TEXT PRIMARY KEY, throughEpoch INTEGER NOT NULL
 );
+-- Same watermark for the OWNER-emissions scan (pods our wallet owns). Separate table:
+-- the two scans cover different (pod,epoch) grids and advance independently.
+CREATE TABLE IF NOT EXISTS owner_scan (
+  podId TEXT PRIMARY KEY, throughEpoch INTEGER NOT NULL
+);
 `
 
 /** Cached SQLite handle for this dataDir, with all tables ensured on first open. */
