@@ -142,6 +142,10 @@ export interface CycleReport {
   datanets: DatanetReport[]
   /** global emissions-claim results (one query across all our pods, not per-datanet). */
   claims: ExecResult[]
+  /** OWNER (pod,epoch) pairs still claimable AFTER this cycle's claim attempts — the claim
+   *  phase's on-chain scan minus what it just claimed. The dashboard snapshot reuses this
+   *  instead of re-scanning PodManager a second time per cycle. Empty when claiming is off. */
+  emissionsDue: ClaimableEmission[]
 }
 
 /** One swarm cycle: for each configured datanet, vote (if enabled + capable) and
@@ -499,6 +503,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // Global claim phase: emissions-due is one query across ALL our pods (not per
   // datanet). Claim every unclaimed (pod, epoch) we haven't already claimed.
   const claims: ExecResult[] = []
+  // OWNER pairs still claimable after this cycle's claims — reused by the dashboard snapshot
+  // so it doesn't re-scan PodManager a second time this cycle (see wiring.ts buildTick).
+  let emissionsDue: ClaimableEmission[] = []
   if (config.claimEmissions) {
     let due: ClaimableEmission[] = []
     try {
@@ -532,6 +539,10 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // (pod,epoch) in the same `due` list isn't re-claimed this cycle.
       if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
     }
+    // Post-claim OWNER claimable: the scan result minus every (pod,epoch) now in `seen` (either
+    // already-claimed before this cycle or claimed just now). The dashboard reads this — no
+    // second on-chain scan — so "claimable" reflects exactly what a claim attempt didn't clear.
+    emissionsDue = due.filter((em) => !seen.has(`${em.podId}:${em.epoch}`))
 
     // Voter emissions: a separate on-chain pool the wallet earns for curating OTHERS' pods
     // (claimVoterEmissions). Distinct claim path; dedup keys are prefixed `voter-` so they
@@ -563,5 +574,5 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     }
   }
 
-  return { datanets, claims }
+  return { datanets, claims, emissionsDue }
 }

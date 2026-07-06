@@ -172,3 +172,66 @@ describe('queryClaimableOnchain with an epoch-scan watermark', () => {
     expect(out.map((o) => `${o.podId}:${o.epoch}`)).toEqual(['5:102'])
   })
 })
+
+describe('queryClaimableOnchain — transient RPC error vs contract revert', () => {
+  // Wrap makeFetch so a specific claim probe fails a chosen way instead of reverting. A
+  // contract revert = "nothing due" (skip); a transient failure must NOT be read that way.
+  const withClaimFailure = (
+    base: typeof fetch,
+    failFor: Set<string>,
+    fail: () => Response,
+  ): typeof fetch => (async (url: string, init: { body: string }) => {
+    const { method, params } = JSON.parse(init.body)
+    if (method === 'eth_call') {
+      const d: string = params[0].data
+      if (d.slice(0, 10) === SEL.claim) {
+        const podId = BigInt('0x' + d.slice(10, 74)), epoch = BigInt('0x' + d.slice(74, 138))
+        if (failFor.has(`${podId}:${epoch}`)) return fail()
+      }
+    }
+    return base(url as never, init as never)
+  }) as unknown as typeof fetch
+
+  const http500 = () => new Response('upstream error', { status: 500 })
+  const rateLimited = () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'rate limit exceeded' } }))
+
+  it('propagates a transient (HTTP 5xx) claim-probe error instead of skipping the epoch', async () => {
+    // Epoch 90 is genuinely claimable but its probe hits a 5xx. Before the fix this was
+    // swallowed as "nothing due"; now it must throw so the epoch is not lost.
+    const base = makeFetch({ epoch: 103, claimable: new Set(['5:90']) })
+    const f = withClaimFailure(base, new Set(['5:90']), http500)
+    const scan = memScanCache()
+    await expect(
+      queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 80 }, scan),
+    ).rejects.toThrow()
+    // Watermark must NOT advance past the un-probed epoch — it stays re-checkable next cycle.
+    expect(scan.state['5']).toBeUndefined()
+  })
+
+  it('propagates a transient JSON-RPC error (rate limit) — not treated as nothing-due', async () => {
+    const base = makeFetch({ epoch: 103, claimable: new Set(['5:90']) })
+    const f = withClaimFailure(base, new Set(['5:90']), rateLimited)
+    const scan = memScanCache()
+    await expect(
+      queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 80 }, scan),
+    ).rejects.toThrow()
+    expect(scan.state['5']).toBeUndefined()
+  })
+
+  it('still treats a genuine contract revert as nothing-due and advances the watermark', async () => {
+    // No claim is claimable → every probe reverts → clean scan, watermark to last closed epoch.
+    const f = makeFetch({ epoch: 103 })
+    const scan = memScanCache()
+    const out = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, floorEpoch: 80 }, scan)
+    expect(out).toEqual([])
+    expect(scan.state['5']).toBe(102)
+  })
+
+  it('propagates a transient error in legacy (no-watermark) mode too', async () => {
+    const base = makeFetch({ epoch: 103, claimable: new Set(['5:102']) })
+    const f = withClaimFailure(base, new Set(['5:102']), http500)
+    await expect(
+      queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, lookbackEpochs: 3 }),
+    ).rejects.toThrow()
+  })
+})

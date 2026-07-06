@@ -480,10 +480,15 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       // wallet are known), so "claimable" reflects what the node will actually claim. The
       // platform CLI is the fallback only — it under-reports (returned 0 while pairs were
       // claimable on-chain), which left operators staring at "claimable: 0" with REPPO parked.
-      // Runs AFTER the claim phase, so pairs shown here are ones a claim attempt didn't clear.
+      // REUSE the claim phase's post-claim scan result (report.emissionsDue) instead of
+      // re-scanning PodManager a second time this cycle — the scan is the expensive RPC path,
+      // and a stuck claimable epoch pins its watermark, so a re-scan re-walks the whole tail.
+      // When claiming is disabled the claim phase never scanned, so do the one scan here.
       const emissionsDueOnchain = async (): Promise<EmissionsDue> => {
         if (!w.rpcUrl || !w.walletAddress) return queryEmissionsDueJson()
-        const pods = await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() }, makeOwnerScanCache(w.dataDir))
+        const pods = config.claimEmissions
+          ? report.emissionsDue
+          : await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() }, makeOwnerScanCache(w.dataDir))
         return { totalReppo: pods.reduce((s, p) => s + p.reppo, 0), pods }
       }
       const snap = await collectSnapshot(w.dataDir, cycleId, {

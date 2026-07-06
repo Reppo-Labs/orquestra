@@ -738,6 +738,23 @@ describe('runCycle claim phase', () => {
     const report = await runCycle(cfg, 'c2', d)
     expect(called).toBe(0)
     expect(report.claims).toEqual([])
+    expect(report.emissionsDue).toEqual([]) // no scan ran → dashboard scans on its own
+  })
+
+  it('reports post-claim OWNER emissionsDue = scan minus this-cycle claims (dashboard reuse, no re-scan)', async () => {
+    const d = deps({
+      getEmissionsDue: async () => [
+        { podId: '1', datanetId: '9', epoch: 101, reppo: 0 }, // claimed this cycle → cleared
+        { podId: '2', datanetId: '9', epoch: 101, reppo: 0 }, // already claimed before → cleared
+        { podId: '3', datanetId: '9', epoch: 101, reppo: 0 }, // claim fails → stays claimable
+      ],
+      seenClaims: async () => new Set<string>(['2:101']),
+      executor: claimExecutor(async (i) => i.podId === '3'
+        ? Promise.reject(new Error('boom'))
+        : { ok: true, status: 'executed', txHash: '0xc', gasEth: 0 }),
+    })
+    const report = await runCycle(config, 'c-due', d)
+    expect(report.emissionsDue.map((e) => `${e.podId}:${e.epoch}`)).toEqual(['3:101'])
   })
 
   it('isolates a single failing claim from the rest', async () => {

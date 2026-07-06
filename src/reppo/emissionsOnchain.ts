@@ -61,20 +61,42 @@ interface RpcDeps {
   floorEpoch?: number
 }
 
+/** A contract-level EVM revert (the JSON-RPC node executed the call and it reverted). Used as
+ *  the "nothing due" oracle for claim probes. Distinct from a transient transport failure
+ *  (HTTP 5xx, rate limit, timeout) — the latter must NOT be read as "nothing due", or a
+ *  claimable epoch gets silently skipped and, with a watermark, permanently lost. */
+export class RpcRevertError extends Error {
+  constructor(message: string) { super(message); this.name = 'RpcRevertError' }
+}
+
+/** Does this JSON-RPC error describe an EVM revert (deterministic, from the contract) rather
+ *  than a transient node failure? Revert surfaces as code 3 (eth spec) or a message the node
+ *  tags with "revert"/"execution reverted". Rate limits (-32005/-32029), timeouts and 5xx are
+ *  transient and fall through to a plain Error. */
+const isRevert = (code: number | undefined, msg: string): boolean =>
+  code === 3 || /revert|invalid opcode|out of gas|always failing/i.test(msg)
+
 async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<unknown> {
   const res = await fetchImpl(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   })
-  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`)
-  const json = (await res.json()) as { result?: unknown; error?: { message?: string } }
-  if (json?.error) throw new Error(`RPC ${method} error: ${json.error.message ?? 'unknown'}`)
+  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`) // transient (server/network)
+  const json = (await res.json()) as { result?: unknown; error?: { code?: number; message?: string } }
+  if (json?.error) {
+    const msg = json.error.message ?? 'unknown'
+    // A contract revert is a meaningful "nothing due"; anything else is transient and must
+    // propagate so the caller retries instead of treating it as an empty result.
+    if (isRevert(json.error.code, msg)) throw new RpcRevertError(`RPC ${method} reverted: ${msg}`)
+    throw new Error(`RPC ${method} error: ${msg}`)
+  }
   return json.result
 }
 
-/** eth_call; returns the raw hex result, or throws if the call reverts (used as the
- *  claimable oracle: a claim that reverts is "nothing due"). */
+/** eth_call; returns the raw hex result. Throws RpcRevertError if the call reverts (the
+ *  claimable oracle: a claim that reverts is "nothing due"); throws a plain Error on a
+ *  transient transport failure (which the caller must not read as "nothing due"). */
 async function ethCall(fetchImpl: typeof fetch, url: string, to: string, data: string, from?: string): Promise<string> {
   const call: Record<string, string> = { to, data }
   if (from) call.from = from
@@ -171,8 +193,11 @@ export async function queryClaimableOnchain(
       const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasClaimed + word(ep) + word(podId))
       if (isTrue(claimed)) continue
       try {
-        await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet) // reverts ⇒ nothing due
-      } catch { continue }
+        await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet)
+      } catch (e) {
+        if (e instanceof RpcRevertError) continue // reverts ⇒ nothing due for this (pod,epoch)
+        throw e // transient RPC failure: abort before the watermark advances, so this epoch stays re-checkable next cycle
+      }
       if (firstClaimable === null) firstClaimable = ep
       out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
     }
@@ -251,7 +276,10 @@ export async function queryVoterClaimableOnchain(
       try {
         // claimVoterEmissions(voter, podId, epoch) — reverts ⇒ nothing due for this voter
         await ethCall(fetchImpl, rpcUrl, pm, SEL.claimVoter + w + word(podId) + word(ep), wallet)
-      } catch { continue }
+      } catch (e) {
+        if (e instanceof RpcRevertError) continue // reverts ⇒ nothing due for this voter
+        throw e // transient RPC failure: abort before the watermark advances, so this epoch stays re-checkable next cycle
+      }
       if (firstClaimable === null) firstClaimable = ep
       out.push({ podId: podStr, datanetId: '', epoch: Number(ep), reppo: 0 })
     }
