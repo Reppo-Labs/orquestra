@@ -9,10 +9,18 @@ data/
 # Live node state: ledger, vote-state, snapshots, and the activity log whose
 # error lines echo CLI command output. Never commit operational data.
 orquestra-data/
+orquestra-data.bak-*/
 *.key
 # Local dashboard screenshots / browser-automation artifacts
 .playwright-mcp/
-orquestra-dashboard*.png
+*.png
+# Local agent tooling state — machine-specific, never ship
+.claude/
+.agents/
+skills-lock.json
+session-report*.html
+# Internal AI implementation plans/specs — working notes, not public docs
+docs/superpowers/
 # OS / editor
 .DS_Store
 .idea/

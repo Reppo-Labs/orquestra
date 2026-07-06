@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { readTokenBalance } from './tokenBalance.js'
 
 const TOKEN = '0xExy0000000000000000000000000000000000001'
-const OWNER = '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64'
+const OWNER = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'
 const BALANCE_OF_SELECTOR = '0x70a08231'
 
 // A fake JSON-RPC endpoint that returns `result` for eth_call. Captures the request

@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { sumReppoOutflow, sumReppoInflow, readMintReppoFee, readClaimedReppo, REPPO_TOKEN_MAINNET } from './mintFee.js'
 
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-const WALLET = '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64'
+const WALLET = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'
 const POD_MGR = '0x5c563f853eb4db33005a5c1ad9290e8560254a80'
 const OTHER_TOKEN = '0x0000000000000000000000000000000000009999'
 

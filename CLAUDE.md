@@ -38,14 +38,14 @@ A cycle (`src/runtime/cycle.ts → runCycle`) iterates configured datanets and, 
 - **`voter/` + `minter/`** — datanet-agnostic scoring + selection. `score.ts` scores candidates/pods, `select.ts` picks within caps.
 - **`panel/`** — multi-agent LLM deliberation (personas, judges, scorers) for decisions.
 - **`wallet/`** — `BudgetLedger` (`ledger.ts`) is the single source of budget truth, persisted to `DATA_DIR/budget-ledger.json`. `WalletExecutor` (`executor.ts`) reserves/records spend on the ledger and **refuses to sign before exceeding caps, not after**. On a corrupt ledger the node refuses to run rather than lose track of spend (`LedgerCorruptError`).
-- **`llm/`** — model-agnostic via the Vercel AI SDK (`@ai-sdk/anthropic | openai | google`). `resolveModel(provider, apiKey)`. Supports per-task routing (cheap model to pre-filter, strong model to judge).
+- **`llm/`** — model-agnostic via the Vercel AI SDK. Providers: `anthropic | anthropic-oauth (Claude subscription) | openai | google | surplus | virtuals | usepod`. `resolveModel(provider, apiKey)`; per-datanet + node-default model routing; `usage.ts` tracks per-cycle token cost for the dashboard.
 - **`onboarding/`** — conversational interview (LLM-driven, `agent.ts`) that produces a declarative strategy config (`build.ts` → `persist.ts`). Re-runnable. `configure` subcommand runs it in the terminal as a headless/CI fallback.
 - **`dashboard/`** — Node HTTP server (`server.ts`) serving the built `web/` SPA + JSON endpoints (pnl, snapshot, activity log, earn status, health) and hosting the strategy chat. Activity is SQLite-backed (`node:sqlite`).
 - **`config/`** — `StrategyConfig` Zod schema (`schema.ts`). Strictness levels (`conservative | balanced | aggressive`) map to `STRICTNESS_THRESHOLDS`.
 
 ## Key invariants
 
-- **Budget caps are the real security boundary** (the wallet key sits in `.env` in plaintext). The ledger refuses before signing; never weaken this. Enabling a datanet is the consent to pay its one-time subnet access grant — grants are cached per subnet and capped by `budget.grantReppoMax`.
+- **Budget caps are the real security boundary** (the wallet key sits in `.env` in plaintext). The ledger refuses before signing; never weaken this. Enabling a datanet is the consent to pay its one-time subnet access grant — grants are cached per subnet and are NOT budget-capped (`budget.grantReppoMax` was retired; `config/load.ts` strips it with a warning).
 - **The dashboard is unauthenticated and localhost-bound on purpose** (ADR 0002). It is reached over an SSH tunnel. Never add a default that binds it to a public interface.
 - Setup steps (veREPPO lock, Reppo agent-id registration) are **idempotent** — they run every start and must no-op when already done, or restarts error.
 - Secrets are read from the environment only, never from the dashboard, never logged. `src/util/redact.ts` redacts before logging.

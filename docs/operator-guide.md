@@ -175,7 +175,8 @@ make the config file the source of truth:
 3. **Validate in CI before deploy** so a malformed config never reaches a pod (where it
    fails at boot — fail-fast, exit non-zero, not a silent default):
    ```sh
-   orquestra validate-config path/to/strategy.config.json   # exit 0 = valid, 1 = invalid
+   # from a source checkout (npm run build first), or inside the container:
+   node dist/index.js validate-config path/to/strategy.config.json   # exit 0 = valid, 1 = invalid
    ```
    The trackable JSON Schema is [docs/strategy.config.schema.json](strategy.config.schema.json)
    (generated from the code via `npm run gen:schema`) — wire it into your editor or a CI
@@ -214,7 +215,8 @@ You can re-run onboarding anytime from **Strategy → ↻ reconfigure with assis
 
 ## 5. The dashboard
 
-Four tabs:
+Five tabs (the fifth, **Learning**, surfaces per-datanet lessons the node inferred
+from vote outcomes as proposals you approve or veto):
 
 ### Overview
 Your at-a-glance state: net REPPO, earned/claimed/claimable, mint spend, gas,
@@ -224,7 +226,9 @@ balances, current epoch. Below that:
   (the node claims them automatically).
 
 ### Strategy
-The control surface. Each datanet is a card:
+The control surface. **To go beyond the knobs — writing a real custom strategy
+(score anchors per datanet, evidence rules, skip discipline) — read the
+[Strategy Guide](strategy-guide.md).** Each datanet is a card:
 - **vote / mint** chips toggle what the node does there.
 - **adapter** — the data source for minting (`gdelt`, `hyperliquid`, `sports`); a
   datanet with no adapter is vote-only.
@@ -303,9 +307,10 @@ datanets curators score the pinned dataset, not just the link.
 For close calls (and every mint), the node can convene a panel — **bull**, **bear**,
 and a **rubric-purist** each argue a score, and a **judge** rules. It catches
 borderline mistakes a single scorer would make. Toggle it in **Strategy →
-deliberation**; the `voteBand` controls how close to a threshold a vote must be to
-trigger the panel (`0` = panel on mints only). Every panel decision is inspectable
-in the Activity debate drawer.
+deliberation**: `enabled` turns the panel on/off entirely; `votePanel` controls
+whether VOTES also go to the panel (`false` = panel on mints only; mints always
+use the panel while enabled). Every panel decision is inspectable in the Activity
+debate drawer.
 
 Cost note: a panel decision is ~4 LLM calls vs 1. Tiering keeps clear-cut votes
 cheap; only ambiguous votes and mints pay the full cost.
@@ -372,7 +377,9 @@ Save; it applies next cycle, no restart.
 main cost; gas on Base is negligible. Start small.
 
 **What's "deliberation" costing me?** Extra LLM API calls on ambiguous votes and
-mints. If your LLM bill matters, set the panel off or `voteBand: 0` (mints only).
+mints — the dashboard's **LLM cost / cycle** card (Overview) shows the estimated
+per-cycle bill. If it's too high, set `deliberation.votePanel: false` (panel on
+mints only) or turn the panel off.
 
 **Why is net REPPO negative at first?** You pay mint fees up front; emissions lag.
 The whole point of a small beta run is to see whether your minted pods earn back
