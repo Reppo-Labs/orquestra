@@ -6,6 +6,9 @@
 services:
   orquestra:
     image: ghcr.io/reppo-labs/orquestra:latest   # pin a version (e.g. :0.1.0) in production
+    # Fallback: if the image can't be pulled (e.g. registry hiccup), compose builds it
+    # from this repo's Dockerfile instead — `docker compose up -d --build` forces it.
+    build: .
     container_name: orquestra
     env_file: .env
     # The image defaults the dashboard bind to 127.0.0.1; inside this bridge-networked

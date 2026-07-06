@@ -5,7 +5,10 @@ Reppo's official agentic swarm node. Run a node on your machine: it curates
 budget you set in an LLM onboarding interview, signing with your own wallet.
 
 **New operator? Read the [Operator Guide](docs/operator-guide.md)** — install,
-onboarding, the dashboard, earning, and troubleshooting, end to end.
+onboarding, the dashboard, earning, and troubleshooting, end to end. Once your
+node runs, the **[Strategy Guide](docs/strategy-guide.md)** shows how to make its
+voting/minting behavior yours. Operating the node with an AI agent (Claude Code
+etc.)? Point it at **[SKILL.md](SKILL.md)** — a ready-made operator skill.
 
 See `docs/adr/` for key architectural decisions. The original design notes
 (`docs/design/`) are internal engineering history — useful for contributors, but
@@ -15,8 +18,8 @@ current source of truth.
 ## Run a node
 
 Prerequisites: Docker (with Compose), a **dedicated** wallet funded with ETH
-(Base) and REPPO, and an LLM API key (Anthropic, OpenAI, Google, Surplus, or
-Virtuals).
+(Base) and REPPO, and an LLM API key (Anthropic, OpenAI, Google, Surplus,
+Virtuals, or usepod — or a Claude subscription via `anthropic-oauth`, see below).
 
 1. **Configure secrets** — copy [.env.example](.env.example) to `.env` and fill
    it in. Every variable is documented inline; minimum: `REPPO_PRIVATE_KEY`,
@@ -60,7 +63,8 @@ Virtuals).
 - The node can never spend beyond the budget caps in your strategy config; the
   budget ledger refuses before signing, not after.
 - Enabling a datanet (vote/mint) is the consent to pay its one-time subnet
-  access grant; set `budget.grantReppoMax` to cap or disable grants.
+  access grant (and, for minting, a per-mint publishing fee — check both with
+  `reppo query datanet <id>`). Only enable datanets you intend to pay for.
 - Use a dedicated wallet. The private key sits in `.env` in plaintext.
 - The dashboard is **unauthenticated** and bound to localhost on purpose
   ([ADR 0002](docs/adr/0002-dashboard-unauthenticated-localhost-bind.md)). Reach
@@ -88,21 +92,15 @@ It produces a strategy like
 
 Want to use a Claude Pro/Max subscription instead of a metered Anthropic API key? The token
 must be minted by the first-party Claude CLI (Anthropic rejects a hand-rolled OAuth flow). The
-Docker image does **not** include the `claude` CLI, so `login-anthropic` must run on the host —
-but `orquestra` and `claude` both need to be on the host PATH. Use whichever option fits:
+Docker image does **not** include the `claude` CLI. Use whichever option fits:
 
-**Option A — `npx` (no global install needed, just `claude` CLI on PATH):**
+**Option A — from a source checkout (needs `claude` CLI on PATH):**
 ```sh
-ORQUESTRA_DATA_DIR=./orquestra-data npx orquestra login-anthropic
+npm install && npm run build
+ORQUESTRA_DATA_DIR=./orquestra-data node dist/index.js login-anthropic
 ```
 
-**Option B — global install:**
-```sh
-npm i -g orquestra
-ORQUESTRA_DATA_DIR=./orquestra-data orquestra login-anthropic
-```
-
-**Option C — manual token file (no `orquestra` install at all):**
+**Option B — manual token file (no build at all):**
 ```sh
 claude setup-token   # opens browser auth, prints sk-ant-oat01-… token
 echo '{"access_token":"sk-ant-oat01-PASTE_TOKEN_HERE"}' \
@@ -110,7 +108,7 @@ echo '{"access_token":"sk-ant-oat01-PASTE_TOKEN_HERE"}' \
 chmod 600 ./orquestra-data/anthropic-oauth.json
 ```
 
-**Option D — Docker only (no Node.js and no `claude` CLI on the host):**
+**Option C — Docker only (no Node.js and no `claude` CLI on the host):**
 
 Mint the token in a throwaway container — `setup-token` prints an auth URL you can open in
 any browser (even on another machine) and paste the code back:
@@ -151,13 +149,17 @@ panels are empty until then.
 
 ## Develop
 
-- `npm install`
+Requires Node ≥ 22.5 (`node:sqlite`).
+
+- `npm install && npm --prefix web install`
 - `npm test` — unit + integration suite (vitest)
 - `npm run typecheck`
-- `npm run build`
+- `npm run build` — backend + the web dashboard
 
-The `reppo` CLI ≥ 0.8.0 must be on `PATH` for a locally-run node (the Docker
-image pins it). The node checks at startup and warns on a version mismatch.
+The `reppo` CLI must be on `PATH` for a locally-run node — **0.12.0 recommended**
+(what the Docker image pins; voting quality degrades below 0.12 because older
+CLIs don't surface pod descriptions). Hard minimum 0.8.0; the node warns at
+startup on a version mismatch.
 
 See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full dev loop, test
 layout, and PR checklist.

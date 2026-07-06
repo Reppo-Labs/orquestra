@@ -2,6 +2,12 @@
   "name": "orquestra",
   "version": "0.1.0",
   "private": true,
+  "description": "Reppo's official self-hosted agentic swarm node — votes and mints across Reppo datanets, bounded by operator-set budgets.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Reppo-Labs/orquestra.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.5"

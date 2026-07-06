@@ -22,10 +22,11 @@ For running a node (not developing it), see the
 
 ```sh
 npm install
+npm --prefix web install   # dashboard frontend deps — required before `npm run build`
 ```
 
-That's it for the TypeScript package. The dashboard frontend lives in `web/` and
-builds via the root `build` script (`npm --prefix web run build`).
+The dashboard frontend lives in `web/` (its own package) and builds via the root
+`build` script (`npm --prefix web run build`).
 
 <!-- AUTO-GENERATED: scripts — regenerate from package.json, do not hand-edit -->
 ## Scripts
