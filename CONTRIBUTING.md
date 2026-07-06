@@ -87,7 +87,7 @@ npm run build
 - [ ] `npm test` green (add/adjust fixtures for new CLI/network shapes)
 - [ ] `npm run build` succeeds (TS + dashboard)
 - [ ] Terminology matches [`CONTEXT.md`](CONTEXT.md)
-- [ ] Behavior-changing decisions captured in an ADR under [`docs/adr/`](docs/adr/) if architectural
+- [ ] Behavior-changing decisions explained in the PR description if architectural
 <!-- END AUTO-GENERATED -->
 
 ## Where things are documented
@@ -95,8 +95,5 @@ npm run build
 | Topic | Location |
 |-------|----------|
 | Running / operating a node | [`docs/operator-guide.md`](docs/operator-guide.md) |
-| Architecture | [`docs/design/2026-06-02-orquestra-design.md`](docs/design/2026-06-02-orquestra-design.md) |
-| Key decisions | [`docs/adr/`](docs/adr/) |
-| Feature specs | `docs/superpowers/specs/` |
-| Operational runbooks | [`docs/runbooks/`](runbooks/) |
+| Writing a custom strategy | [`docs/strategy-guide.md`](docs/strategy-guide.md) |
 | Bootstrap secrets / env | [`.env.example`](.env.example) (documented inline) |

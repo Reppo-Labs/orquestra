@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Orquestra is Reppo's official self-hosted **agentic swarm node**. An operator runs one node on their own machine; each cycle it **votes** (curates) across any Reppo datanet and **mints** (publishes data pods) where it has a data adapter — bounded by a budget set during an LLM onboarding interview, signing with the operator's own wallet. It earns $REPPO only through voting + minting (there is no compute/inference earning path).
 
-Read `CONTEXT.md` for the project's controlled vocabulary — the distinctions between **node / agent**, **onboarding / bootstrap secrets**, and **strategy / config** are deliberate and load-bearing. Match that language in code and docs. Architecture lives in `docs/design/2026-06-02-orquestra-design.md`; key decisions in `docs/adr/`.
+Read `CONTEXT.md` for the project's controlled vocabulary — the distinctions between **node / agent**, **onboarding / bootstrap secrets**, and **strategy / config** are deliberate and load-bearing. Match that language in code and docs.
 
 ## Commands
 
@@ -46,7 +46,7 @@ A cycle (`src/runtime/cycle.ts → runCycle`) iterates configured datanets and, 
 ## Key invariants
 
 - **Budget caps are the real security boundary** (the wallet key sits in `.env` in plaintext). The ledger refuses before signing; never weaken this. Enabling a datanet is the consent to pay its one-time subnet access grant — grants are cached per subnet and are NOT budget-capped (`budget.grantReppoMax` was retired; `config/load.ts` strips it with a warning).
-- **The dashboard is unauthenticated and localhost-bound on purpose** (ADR 0002). It is reached over an SSH tunnel. Never add a default that binds it to a public interface.
+- **The dashboard is unauthenticated and localhost-bound on purpose** — it has no login, so exposure equals full control of strategy + budget. It is reached over an SSH tunnel. Never add a default that binds it to a public interface.
 - Setup steps (veREPPO lock, Reppo agent-id registration) are **idempotent** — they run every start and must no-op when already done, or restarts error.
 - Secrets are read from the environment only, never from the dashboard, never logged. `src/util/redact.ts` redacts before logging.
 

@@ -10,11 +10,6 @@ node runs, the **[Strategy Guide](docs/strategy-guide.md)** shows how to make it
 voting/minting behavior yours. Operating the node with an AI agent (Claude Code
 etc.)? Point it at **[SKILL.md](SKILL.md)** — a ready-made operator skill.
 
-See `docs/adr/` for key architectural decisions. The original design notes
-(`docs/design/`) are internal engineering history — useful for contributors, but
-they predate the shipped code and may not match it; the Operator Guide above is the
-current source of truth.
-
 ## Run a node
 
 Prerequisites: Docker (with Compose), a **dedicated** wallet funded with ETH
@@ -66,10 +61,10 @@ Virtuals, or usepod — or a Claude subscription via `anthropic-oauth`, see belo
   access grant (and, for minting, a per-mint publishing fee — check both with
   `reppo query datanet <id>`). Only enable datanets you intend to pay for.
 - Use a dedicated wallet. The private key sits in `.env` in plaintext.
-- The dashboard is **unauthenticated** and bound to localhost on purpose
-  ([ADR 0002](docs/adr/0002-dashboard-unauthenticated-localhost-bind.md)). Reach
-  it via the SSH tunnel above — never publish port 7070 to the internet, or
-  anyone could rewrite your strategy and spend your budget.
+- The dashboard is **unauthenticated by design** — it has no login, so anyone who
+  can reach it can rewrite your strategy and spend your budget. It binds to
+  localhost only; reach it via the SSH tunnel above and never publish port 7070
+  to the internet.
 
 ### Build from source / audit
 

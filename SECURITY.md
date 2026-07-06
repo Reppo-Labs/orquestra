@@ -26,10 +26,11 @@ Pin a version tag in production and update promptly when a fix ships.
 - **Budget caps are the real spend boundary.** The wallet key sits in `.env` in
   plaintext, so use a **dedicated** wallet. The budget ledger refuses to sign
   before a cap would be exceeded (`src/wallet/`); never weaken this.
-- **The dashboard is unauthenticated and localhost-bound by design** (ADR 0002).
-  Outside Docker it binds `127.0.0.1`; the published image binds `0.0.0.0` and
-  relies on the compose `127.0.0.1:7070:7070` mapping. Reach it over an SSH
-  tunnel — never expose port 7070 to a network without adding authentication.
+- **The dashboard is unauthenticated and localhost-bound by design** — it has no
+  login, so reachability equals full control of strategy and budget. Outside
+  Docker it binds `127.0.0.1`; the published image binds `0.0.0.0` and relies
+  on the compose `127.0.0.1:7070:7070` mapping. Reach it over an SSH tunnel —
+  never expose port 7070 to a network without adding authentication.
 - **Secrets come from the environment only**, are never read from the dashboard,
   and are redacted before logging (`src/util/redact.ts`).
 - **Datanet rubric/pod text is untrusted** third-party input and is fenced from

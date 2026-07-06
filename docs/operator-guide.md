@@ -358,9 +358,9 @@ Logs: `docker compose logs -f`.
   grant fee (cached, charged once on first use). There is no separate grant
   budget cap — don't enable a datanet whose access fee you don't want to pay.
 - The private key sits in `.env` in plaintext — **use a dedicated wallet**.
-- The dashboard is unauthenticated and localhost-bound on purpose (see
-  [ADR 0002](adr/0002-dashboard-unauthenticated-localhost-bind.md)). Never publish
-  port 7070; anyone who reaches it can rewrite your strategy and spend your budget.
+- The dashboard is unauthenticated and localhost-bound on purpose — it has no
+  login. Never publish port 7070; anyone who reaches it can rewrite your
+  strategy and spend your budget.
 
 ---
 
