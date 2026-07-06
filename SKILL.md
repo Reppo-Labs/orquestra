@@ -19,9 +19,10 @@ You (the agent) operate it on the human's behalf. Ground rules before anything e
 - **Never print, log, or echo `.env` contents.** It holds the wallet private key.
 - **Budget caps are the security boundary.** Never suggest raising them casually; the
   ledger refuses over-budget actions *before* signing — that is load-bearing.
-- The dashboard is **unauthenticated and localhost-bound by design**. Never expose port
-  7070 publicly, never suggest `DASHBOARD_HOST=0.0.0.0` outside the provided
-  docker-compose mapping (see `docs/adr/0002-*`).
+- The dashboard is **unauthenticated and localhost-bound by design** — it has no login,
+  so reachability equals full control of strategy and budget. Never expose port 7070
+  publicly, never suggest `DASHBOARD_HOST=0.0.0.0` outside the provided docker-compose
+  mapping.
 - Real funds are involved. Confirm with the human before: enabling a new datanet
   (pays an access fee), enabling minting (pays a per-mint publishing fee), or raising
   `mintReppoMax` / `lockReppo`.
@@ -120,4 +121,4 @@ explicitly accepting that spend tracking resets.
 
 `CLAUDE.md` at the repo root is the code orientation (architecture, invariants,
 commands). `CONTEXT.md` defines the controlled vocabulary (node vs agent, strategy vs
-config). `docs/adr/` records the decisions you should not casually reverse.
+config).

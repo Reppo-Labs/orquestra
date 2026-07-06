@@ -5,14 +5,14 @@ setup, and what CI checks before a PR can merge.
 
 > Terminology in this repo is deliberate — **operator**, **node**, **strategy**,
 > **bootstrap secrets**, **onboarding** all have reserved meanings. Read
-> [`CONTEXT.md`](../CONTEXT.md) before naming things in code or docs.
+> [`CONTEXT.md`](CONTEXT.md) before naming things in code or docs.
 
 For running a node (not developing it), see the
-[Operator Guide](operator-guide.md) instead.
+[Operator Guide](docs/operator-guide.md) instead.
 
 ## Prerequisites
 
-- **Node.js ≥ 22.5** (`engines` in [`package.json`](../package.json); CI runs on 22).
+- **Node.js ≥ 22.5** (`engines` in [`package.json`](package.json); CI runs on 22).
 - **`reppo` CLI ≥ 0.8.0** on `PATH` for a locally-run node — the node checks at
   startup and warns on a version mismatch. The Docker image pins `@reppo/cli@0.8.4`.
 - An **LLM API key** (Anthropic, OpenAI, Google, Surplus, or Virtuals) if you run
@@ -42,11 +42,11 @@ The dashboard frontend lives in `web/` (its own package) and builds via the root
 
 ## Tests
 
-Vitest, Node environment. Config in [`vitest.config.ts`](../vitest.config.ts).
+Vitest, Node environment. Config in [`vitest.config.ts`](vitest.config.ts).
 
 - **Discovery**: `src/**/*.test.ts` (unit, colocated) and `test/**/*.test.ts`
   (integration).
-- **Integration**: [`test/integration/cliBoundary.test.ts`](../test/integration/cliBoundary.test.ts)
+- **Integration**: [`test/integration/cliBoundary.test.ts`](test/integration/cliBoundary.test.ts)
   exercises the boundary against the `reppo` CLI; fixtures live in
   `test/fixtures/` (recorded CLI JSON, RSS, leaderboard samples).
 - **Writing new tests**: colocate unit tests next to the source
@@ -64,7 +64,7 @@ npm run test:watch  # while iterating
 ## Code style
 
 - TypeScript `strict` mode, ES2022, NodeNext modules (see
-  [`tsconfig.json`](../tsconfig.json)). `rootDir` is `src/`.
+  [`tsconfig.json`](tsconfig.json)). `rootDir` is `src/`.
 - Match the surrounding code — comment density, naming, idiom. Source is
   organized by concern under `src/` (`adapter`, `voter`, `minter`, `panel`,
   `rubric`, `onboarding`, `dashboard`, `reppo`, `wallet`, `runtime`, ...).
@@ -86,17 +86,14 @@ npm run build
 - [ ] `npm run typecheck` clean
 - [ ] `npm test` green (add/adjust fixtures for new CLI/network shapes)
 - [ ] `npm run build` succeeds (TS + dashboard)
-- [ ] Terminology matches [`CONTEXT.md`](../CONTEXT.md)
-- [ ] Behavior-changing decisions captured in an ADR under [`docs/adr/`](adr/) if architectural
+- [ ] Terminology matches [`CONTEXT.md`](CONTEXT.md)
+- [ ] Behavior-changing decisions explained in the PR description if architectural
 <!-- END AUTO-GENERATED -->
 
 ## Where things are documented
 
 | Topic | Location |
 |-------|----------|
-| Running / operating a node | [`docs/operator-guide.md`](operator-guide.md) |
-| Architecture | [`docs/design/2026-06-02-orquestra-design.md`](design/2026-06-02-orquestra-design.md) |
-| Key decisions | [`docs/adr/`](adr/) |
-| Feature specs | `docs/superpowers/specs/` |
-| Operational runbooks | [`docs/runbooks/`](runbooks/) |
-| Bootstrap secrets / env | [`.env.example`](../.env.example) (documented inline) |
+| Running / operating a node | [`docs/operator-guide.md`](docs/operator-guide.md) |
+| Writing a custom strategy | [`docs/strategy-guide.md`](docs/strategy-guide.md) |
+| Bootstrap secrets / env | [`.env.example`](.env.example) (documented inline) |
