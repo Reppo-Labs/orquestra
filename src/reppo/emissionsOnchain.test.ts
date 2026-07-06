@@ -45,7 +45,7 @@ function memCache(initial: string[] = [], lastBlock: bigint | null = null): PodC
   }
 }
 
-const WALLET = '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64'
+const WALLET = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'
 const log = (tokenId: number) => ({ topics: ['0xtransfer', '0x' + w(0), '0x' + w(0), '0x' + w(tokenId)], data: '0x' })
 
 describe('tokenIdFromLog', () => {

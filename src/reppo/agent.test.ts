@@ -7,13 +7,13 @@ import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, write
 
 describe('agentDisplayName (node-unique identity)', () => {
   it('uses REPPO_AGENT_NAME when set (trimmed)', () => {
-    expect(agentDisplayName('  Ana node  ', '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64')).toBe('Ana node')
+    expect(agentDisplayName('  My node  ', '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266')).toBe('My node')
   })
   it('defaults to orquestra-<8 hex of wallet> so nodes are distinguishable', () => {
-    expect(agentDisplayName(undefined, '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64')).toBe('orquestra-b4ec41c9')
+    expect(agentDisplayName(undefined, '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266')).toBe('orquestra-f39fd6e5')
   })
   it('lowercases the wallet slice deterministically', () => {
-    expect(agentDisplayName('', '0xB4EC41C93CF2F573F82D8F023B01637EB5DB4C64')).toBe('orquestra-b4ec41c9')
+    expect(agentDisplayName('', '0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266')).toBe('orquestra-f39fd6e5')
   })
   it('falls back to bare orquestra when no name and no wallet', () => {
     expect(agentDisplayName(undefined, undefined)).toBe('orquestra')
