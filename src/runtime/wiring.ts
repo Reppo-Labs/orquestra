@@ -349,6 +349,12 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           }
           continue
         }
+        // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
+        // When we already have that real writeup (description differs from the bare title),
+        // do NOT fetch the url — for SPA-backed datanets (e.g. ArAIstotle) a server-side
+        // fetch returns the app-shell HTML, which would CLOBBER good content with junk and
+        // produce bad votes. Only fetch to enrich when we have title-only (no writeup).
+        if (p.description.trim() !== p.name.trim()) continue
         const c = await io.fetchContent(p.url)
         if (c) p.description = `${p.name}\n\n${c}`
       }
