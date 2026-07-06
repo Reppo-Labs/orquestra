@@ -13,8 +13,10 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.11.0
-# @reppo/cli@0.11.0: query datanet surfaces the per-mint publishing fee
+ && npm i -g @reppo/cli@0.12.0
+# @reppo/cli@0.12.0: `list pods --all` surfaces the pod's full description + media url —
+# lets the voter score the real writeup instead of a client-rendered SPA shell (the node
+# reads this in parsePods). 0.11.0: query datanet surfaces the per-mint publishing fee
 # (publishingFeeREPPO/publishingFeePrimaryToken) — separate from and additional to
 # the one-time access fee; lets the node pre-flight mint balance instead of eating a
 # TransferAmountExceedsBalance revert. Also adds query voter-emissions-due (claimability
