@@ -33,7 +33,8 @@ import { queryEpochJson } from '../reppo/queryEpoch.js'
 import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
-import { collectSnapshot, writeSnapshot, readSnapshot, type SnapshotBudget } from '../dashboard/snapshot.js'
+import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
+import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
 import { collectOutcomes } from '../learn/collect.js'
 import { runReflection } from '../learn/reflect.js'
@@ -455,6 +456,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       }
     }
     const cycleId = new Date().toISOString()
+    // Zero the LLM usage window so the snapshot below reports THIS cycle's spend
+    // (operators asked for per-cycle LLM cost — panel scoring multiplies calls per pod).
+    resetLlmUsage()
     const report: CycleReport = await runCycle(config, cycleId, deps)
     const v = report.datanets.reduce((a, r) => a + r.votes.length, 0)
     const m = report.datanets.reduce((a, r) => a + r.mints.length, 0)
@@ -477,6 +481,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         epoch: () => queryEpochJson(),
         budget: () => budget,
       })
+      // Per-cycle LLM spend (tokens + est USD) — reset above, accumulated by the
+      // withUsageTracking middleware on every resolved model during the cycle.
+      snap.llm = snapshotLlmUsage()
       writeSnapshot(w.dataDir, snap)
     } catch (e) {
       console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)
@@ -560,6 +567,15 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       }
     } catch (e) {
       console.error(`orquestra: earn-status / learn update failed (non-fatal): ${(e as Error).message}`)
+    }
+
+    // Final LLM-usage attach: reflection (above) makes LLM calls AFTER the snapshot was
+    // written — re-attach the full window to this cycle's row so those tokens aren't
+    // wiped unreported by the next cycle's reset. Best-effort, never throws into the loop.
+    try {
+      attachSnapshotLlm(w.dataDir, cycleId, snapshotLlmUsage())
+    } catch (e) {
+      console.error(`orquestra: llm usage attach failed (non-fatal): ${(e as Error).message}`)
     }
   }
 }

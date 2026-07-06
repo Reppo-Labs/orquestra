@@ -30,6 +30,16 @@ export interface SnapshotBudget {
 
 export interface EmissionPod { podId: string; datanetId: string; epoch: string | number; reppo: number }
 
+export interface LlmUsage {
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  /** null = no priceable model this cycle (tokens still counted). */
+  estCostUsd: number | null
+  unpricedCalls: number
+  byModel: Record<string, { calls: number; inputTokens: number; outputTokens: number; estCostUsd: number | null }>
+}
+
 export interface Snapshot {
   ts: string | number
   epoch?: EpochInfo | null
@@ -37,6 +47,8 @@ export interface Snapshot {
   votingPower?: { power: number; lockupCount: number }
   budget?: SnapshotBudget
   emissionsDue: { pods: EmissionPod[] }
+  /** per-cycle LLM usage + estimated cost; absent on pre-feature snapshots. */
+  llm?: LlmUsage
 }
 
 export interface PanelTranscript {

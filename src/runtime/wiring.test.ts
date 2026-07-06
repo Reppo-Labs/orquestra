@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   resolveModel: vi.fn((provider: string, _key: string, model?: string) => ({ provider, model } as unknown)),
   // Stub the scorer's LLM call so the mint-default test never hits the network; returns a fixed score.
   generateObjectWithRetry: vi.fn(async () => ({ score: 5, reason: 'r' })),
+  writeSnapshot: vi.fn(),
+  attachSnapshotLlm: vi.fn(),
   snap: { ts: 't', cycleId: 'c', balance: {}, votingPower: {}, emissionsDue: { totalReppo: 0, pods: [] }, budget: {}, epoch: { epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 } },
 }))
 // Stub the datanet catalog so discovery + token-enrichment never spawn the real `reppo`
@@ -32,8 +34,9 @@ vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
 vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))
 vi.mock('../dashboard/snapshot.js', () => ({
   collectSnapshot: vi.fn(async () => h.snap),
-  writeSnapshot: vi.fn(),
+  writeSnapshot: h.writeSnapshot,
   readSnapshot: vi.fn(() => h.snap),
+  attachSnapshotLlm: h.attachSnapshotLlm,
 }))
 // Preserve the rest of llm/model.js (DEFAULT_MODEL, LlmProviderEnum, KNOWN_MODELS used by the
 // schema + by resolveScoringModel) and only spy resolveModel. resolveScoringModel imports
@@ -443,6 +446,24 @@ describe('buildTick self-learning (reporting path)', () => {
     await tick()
     expect(h.collectOutcomes).toHaveBeenCalled()
     expect(h.runReflection).not.toHaveBeenCalled()
+  })
+
+  it('attaches per-cycle LLM usage to the snapshot AND re-attaches after reflection', async () => {
+    h.writeSnapshot.mockClear()
+    h.attachSnapshotLlm.mockClear()
+    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await tick()
+    // The snapshot written mid-tick carries the llm usage block (cycle-window spend)…
+    const written = h.writeSnapshot.mock.calls[0]?.[1] as { llm?: { calls: number } } | undefined
+    expect(written?.llm).toBeDefined()
+    expect(written!.llm!.calls).toBeGreaterThanOrEqual(0)
+    // …and the end-of-tick attach re-writes it so reflection's LLM calls (which run
+    // AFTER writeSnapshot) are not wiped unreported by the next cycle's reset.
+    expect(h.attachSnapshotLlm).toHaveBeenCalledTimes(1)
+    const [, attachCycleId, usage] = h.attachSnapshotLlm.mock.calls[0] as [string, string, { calls: number }]
+    expect(typeof attachCycleId).toBe('string')
+    expect(usage.calls).toBeGreaterThanOrEqual(0)
   })
 
   it('a thrown collectOutcomes never aborts the tick (best-effort)', async () => {
