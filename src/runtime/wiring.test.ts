@@ -59,8 +59,11 @@ const config = StrategyConfigSchema.parse({
   notes: 'the brief',
 })
 
+// Default description === name (title-only), matching parsePods when the CLI provides no
+// writeup — so the url-fetch enrichment runs. A test that wants the "already has writeup"
+// path passes a distinct `description` override.
 const pod = (id: string, over: Partial<VoterPod> = {}): VoterPod =>
-  ({ podId: id, validityEpoch: '100', name: `pod-${id}`, description: 'd', ...over })
+  ({ podId: id, validityEpoch: '100', name: `pod-${id}`, description: `pod-${id}`, ...over })
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-wire-')) })
@@ -102,6 +105,26 @@ describe('buildCycleDeps', () => {
     expect(filter.ownPodIds).toEqual(['own1'])
     expect(filter.votedPodIds).toEqual(['voted1'])
     expect(filter.currentEpoch).toBe('100')
+  })
+
+  it('does NOT fetch the url when the pod already has a real writeup (avoids clobbering with SPA-shell HTML)', async () => {
+    const w = wiring()
+    const fetchContent = vi.fn(async () => '<!doctype html> app shell junk')
+    const deps = buildCycleDeps({
+      ...w,
+      io: {
+        listPods: async (_id, opts) => opts.all
+          ? [pod('withWriteup', { url: 'https://araistotle/spa/1', description: 'ArAIstotle YES 0.45 | full analysis + sources' }),
+             pod('titleOnly', { url: 'https://x/2' })]
+          : [],
+        fetchContent,
+      },
+    })
+    const { pods } = await deps.getPodsAndFilter('2')
+    // Only the title-only pod is fetched; the one with a writeup keeps its CLI description.
+    expect(fetchContent).toHaveBeenCalledTimes(1)
+    expect(fetchContent).toHaveBeenCalledWith('https://x/2')
+    expect(pods.find((p) => p.podId === 'withWriteup')!.description).toBe('ArAIstotle YES 0.45 | full analysis + sources')
   })
 
   it('excludes pods whose NAME matches one of our executed mints (creator field is unreliable)', async () => {

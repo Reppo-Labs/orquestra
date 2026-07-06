@@ -20,4 +20,13 @@ describe('parsePods / deriveCurrentEpoch', () => {
     expect(parsePods({})).toEqual([])
     expect(deriveCurrentEpoch([])).toBeNull()
   })
+  it('uses the CLI description (full writeup) when present, not the title', () => {
+    const [p] = parsePods({ pods: [{ podId: '1', validityEpoch: '5', name: 'Netanyahu out by 2026?', description: 'ArAIstotle YES 0.45 | full analysis + sources…', url: 'https://araistotle.facticity.ai/terminal/market/1', mediaUrl: 'https://cdn/x.png' }] })
+    expect(p.description).toBe('ArAIstotle YES 0.45 | full analysis + sources…')
+    expect(p.mediaUrl).toBe('https://cdn/x.png')
+  })
+  it('falls back to the title when description is absent or blank (older CLI / no writeup)', () => {
+    expect(parsePods({ pods: [{ podId: '1', name: 'Title only', validityEpoch: '5' }] })[0].description).toBe('Title only')
+    expect(parsePods({ pods: [{ podId: '2', name: 'Title', description: '   ', validityEpoch: '5' }] })[0].description).toBe('Title')
+  })
 })
