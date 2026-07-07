@@ -23,7 +23,10 @@ describe('parsePods / deriveCurrentEpoch', () => {
   it('uses the CLI description (full writeup) when present, not the title', () => {
     const [p] = parsePods({ pods: [{ podId: '1', validityEpoch: '5', name: 'Netanyahu out by 2026?', description: 'ArAIstotle YES 0.45 | full analysis + sources…', url: 'https://araistotle.facticity.ai/terminal/market/1', mediaUrl: 'https://cdn/x.png' }] })
     expect(p.description).toBe('ArAIstotle YES 0.45 | full analysis + sources…')
-    expect(p.mediaUrl).toBe('https://cdn/x.png')
+    // The CLI's mediaUrl (a thumbnail IMAGE) must NOT land on VoterPod.mediaUrl —
+    // that field means "detected video" and routes the pod to Gemini video ingest
+    // (score.ts: isVideo = !!pod.mediaUrl). Regression guard.
+    expect(p.mediaUrl).toBeUndefined()
   })
   it('falls back to the title when description is absent or blank (older CLI / no writeup)', () => {
     expect(parsePods({ pods: [{ podId: '1', name: 'Title only', validityEpoch: '5' }] })[0].description).toBe('Title only')
