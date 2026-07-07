@@ -21,7 +21,11 @@ export function parsePods(raw: unknown): VoterPod[] {
       // Real writeup when the CLI provides one; else the title (enrichment may extend it).
       description: desc || name,
       url: typeof p.url === 'string' ? p.url : undefined,
-      ...(typeof p.mediaUrl === 'string' && p.mediaUrl ? { mediaUrl: p.mediaUrl } : {}),
+      // NOTE: the CLI row's `mediaUrl` (thumbnail/image pointer) is deliberately NOT
+      // mapped. VoterPod.mediaUrl means "detected VIDEO to ingest via Gemini" (set by
+      // the enrichment loop's Content-Type probe) — mapping image thumbnails into it
+      // routed every thumbnail-bearing pod to video ingest, which then failed scoring
+      // trying to ingest JPEGs (regression in the pod-description change).
     }
   }).filter((p) => p.podId !== '')
 }
