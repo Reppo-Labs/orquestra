@@ -201,7 +201,7 @@ function DefaultModelPicker({ candidate, edit, providers }: {
   return (
     <div className="net-row">
       <label className="field">
-        <span>node default model <Tip label="what the node default model does">The LLM the node uses wherever a datanet has no per-datanet override, and for the assistant chat. Blank = the node's env default (LLM_PROVIDER). Only providers whose API key is set on the node appear here (keys are never entered in the dashboard). Changing it applies with no restart.</Tip></span>
+        <span>provider <Tip label="what the node default model does">The LLM the node uses wherever a datanet has no per-datanet override, and for the assistant chat. Blank = the node's env default (LLM_PROVIDER). Only providers whose API key is set on the node appear here (keys are never entered in the dashboard). Changing it applies with no restart.</Tip></span>
         <select value={curProvider} onChange={(e) => selectProvider(e.target.value)}>
           <option value="">node default (env)</option>
           {providers.map((p) => <option key={p.provider} value={p.provider}>{p.provider}</option>)}
@@ -390,7 +390,8 @@ export function SaveBar({ strategy }: { strategy: Strategy }) {
   const { diff, save, saveMsg } = strategy
   return (
     <div className="savebar">
-      <button className="btn primary" onClick={() => void save()}>Save — applies next cycle</button>
+      <button className="btn primary" onClick={() => void save()}>Save changes</button>
+      <span className="muted" style={{ fontSize: 12 }}>applies next cycle</span>
       <span className={`diff-line ${diff.length ? 'dirty' : ''}`}>
         {diff.length ? `${diff.length} unsaved change${diff.length > 1 ? 's' : ''}: ${diff.join(' · ')}` : 'no changes since last save'}
       </span>

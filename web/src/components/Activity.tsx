@@ -71,7 +71,9 @@ export function Activity({ activity, netNames, onOpenPanel }: {
                     </button>
                   )}
                 </td>
-                <td>{r.datanetId ? netLabel(r.datanetId, netNames) : ''}</td>
+                <td className="net-cell" title={r.datanetId ? netLabel(r.datanetId, netNames) : undefined}>
+                  {r.datanetId ? netLabel(r.datanetId, netNames) : ''}
+                </td>
                 <td>{podLabel(r)}</td>
                 <td>{detail(r)}</td>
                 <td className={r.status === 'executed' ? 'pos' : 'neg'}>{r.status}</td>

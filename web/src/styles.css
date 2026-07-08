@@ -36,6 +36,8 @@
   --r-lg: 16px;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
+  /* One easing for every interactive transition — fast start, soft settle. */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * { box-sizing: border-box; }
@@ -132,14 +134,19 @@ button { font-family: var(--body); }
 .sec-head .rule { flex: 1; height: 1px; background: var(--border); }
 
 /* ── Cards / stat grid ────────────────────────────────────────────────── */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+/* Composed grid: 7 stat cards + a 2-span hero = 8 units = clean 2×4. auto-fit left
+   orphans on the last row; fixed tracks keep the block rectangular. */
+.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .cards { grid-template-columns: 1fr; } .card.hero { grid-column: auto; } }
 .card {
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
-  border: 1px solid var(--border); border-radius: var(--r-md); padding: 15px 16px;
+  border: 1px solid var(--border); border-radius: var(--r-md); padding: 18px 20px;
   position: relative;
 }
 .card .k { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; }
-.card .v { font-family: var(--mono); font-size: 21px; font-weight: 500; margin-top: 7px; letter-spacing: -0.01em; }
+.card .v { font-family: var(--mono); font-size: 21px; font-weight: 500; margin-top: 7px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.card .sub { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
 .card.hero { grid-column: span 2; }
 .card.hero .v { font-size: 30px; }
 
@@ -149,6 +156,8 @@ button { font-family: var(--body); }
 .bar.hot > div { background: linear-gradient(90deg, #a23b46, var(--neg)); }
 
 /* ── Tables ───────────────────────────────────────────────────────────── */
+/* Datanet column: one line, truncated — full label lives in the title attr. */
+td.net-cell { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 14px; font-variant-numeric: tabular-nums; }
@@ -175,36 +184,49 @@ td { font-size: 13px; }
 
 /* ── Buttons ──────────────────────────────────────────────────────────── */
 .btn {
-  appearance: none; cursor: pointer; font-size: 13px; font-weight: 600;
-  border-radius: var(--r-sm); padding: 9px 16px; border: 1px solid var(--border-2);
-  background: var(--panel-2); color: var(--text); transition: all 0.15s;
+  appearance: none; cursor: pointer; font-size: 14px; font-weight: 600;
+  border-radius: var(--r-sm); padding: 10px 18px; min-height: 42px; border: 1px solid var(--border-2);
+  background: var(--panel-2); color: var(--text);
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease),
+    color 0.18s var(--ease), transform 0.12s var(--ease), box-shadow 0.18s var(--ease);
 }
 .btn:hover { background: var(--panel-hi); border-color: var(--faint); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.4; cursor: default; }
 .btn.primary {
   background: linear-gradient(180deg, var(--accent-hi), var(--accent)); color: #1a0d04;
   border-color: transparent; box-shadow: 0 4px 16px rgba(240, 136, 62, 0.25);
 }
-.btn.primary:hover { filter: brightness(1.06); }
+.btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px rgba(240, 136, 62, 0.34);
+}
+.btn.primary:active:not(:disabled) { transform: translateY(0); box-shadow: 0 2px 10px rgba(240, 136, 62, 0.22); }
 .btn.ghost { background: none; border: 1px solid var(--border-2); color: var(--muted); }
 .btn.ghost:hover { color: var(--text); border-color: var(--accent-line); }
-.btn.sm { padding: 5px 11px; font-size: 12px; }
+.btn.sm { padding: 6px 12px; font-size: 12px; min-height: 0; }
 .row { display: flex; gap: 10px; align-items: center; }
 .row.wrap { flex-wrap: wrap; }
 
 /* ── Form controls ────────────────────────────────────────────────────── */
 input[type="text"], input[type="number"], input[type="password"], select, textarea {
   background: var(--bg); color: var(--text); border: 1px solid var(--border-2);
-  border-radius: var(--r-sm); padding: 8px 10px; font-family: var(--body); font-size: 13px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  border-radius: var(--r-sm); padding: 10px 13px; font-family: var(--body); font-size: 14px;
+  min-height: 42px;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
+/* Fields own their column — fill it. Free-standing inputs (chat compose rows) keep flex sizing. */
+.field input, .field select, .field textarea { width: 100%; }
+.row > input, .row > textarea { flex: 1; min-width: 0; }
+input:hover, select:hover, textarea:hover { border-color: var(--faint); }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--panel);
 }
 select { cursor: pointer; }
-textarea { resize: vertical; font-family: var(--body); }
-.field { display: flex; flex-direction: column; gap: 6px; }
-.field > span, .field-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+textarea { resize: vertical; font-family: var(--body); min-height: 0; }
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field > span, .field-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* toggle switch */
 .switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
@@ -261,7 +283,7 @@ textarea { resize: vertical; font-family: var(--body); }
 .net-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
 .net {
   background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid var(--border);
-  border-radius: var(--r-md); padding: 15px; transition: border-color 0.15s, transform 0.15s;
+  border-radius: var(--r-md); padding: 18px; transition: border-color 0.15s, transform 0.15s;
 }
 .net:hover { border-color: var(--border-2); }
 .net.active-mint { border-color: var(--accent-line); }
@@ -516,3 +538,72 @@ textarea { resize: vertical; font-family: var(--body); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 999px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+/* ── Interaction polish (taste pass) ─────────────────────────────────── */
+/* Keyboard focus: one visible ring for every interactive element. Mouse
+   clicks don't trigger it (:focus-visible), so pointer users see nothing new. */
+.btn:focus-visible, .chip:focus-visible, .chip-toggle:focus-visible,
+.x-btn:focus-visible, .panel-badge:focus-visible, a:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+.seg label:focus-within {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* Tactile press on every small interactive chip/toggle (buttons handled above). */
+.chip:active:not(:disabled), .chip-toggle:active, .panel-badge:active { transform: translateY(1px); }
+.chip, .chip-toggle, .panel-badge { transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.1s var(--ease); }
+
+/* Earn banner as segmented strip: hairline separators instead of ·-chains. */
+.earn-banner .bseg { display: inline-flex; align-items: center; gap: 6px; }
+.earn-banner .bseg + .bseg { border-left: 1px solid var(--border-2); padding-left: 10px; margin-left: 4px; }
+
+/* Loading skeletons: shape-matched shimmer for stat cards on first paint. */
+.skel {
+  display: inline-block; height: 1em; width: 5.5ch; border-radius: 4px;
+  background: linear-gradient(90deg, var(--panel-hi) 25%, var(--border-2) 50%, var(--panel-hi) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skel-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ── Responsive (redesign pass) ───────────────────────────────────────── */
+/* Tabs: scroll horizontally instead of wrapping/overflowing on narrow screens. */
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { white-space: nowrap; }
+
+/* Tables: the activity grid is wide by nature — let it scroll inside its panel
+   instead of crushing columns. */
+.panel-box { overflow-x: auto; }
+.panel-box table { min-width: 640px; }
+
+@media (max-width: 760px) {
+  .shell, .nav-inner, .ticker-inner, .tabs-wrap { padding-left: 16px; padding-right: 16px; }
+  .shell { padding-bottom: 56px; }
+  .sec-head { margin: 24px 0 12px; }
+  .card { padding: 15px 16px; }
+  .card.hero .v { font-size: 26px; }
+  .net-grid { grid-template-columns: 1fr; }
+  .settings { grid-template-columns: 1fr 1fr; }
+  .earn-banner { flex-wrap: wrap; row-gap: 6px; }
+  .savebar { position: static; }
+  .drawer { width: 100vw; }
+  .ob-wrap { padding: 32px 16px; }
+  .ob-title { font-size: 36px; }
+}
+@media (max-width: 480px) {
+  .settings { grid-template-columns: 1fr; }
+  .nav-asof { display: none; }
+}
+
+/* Reduced motion: collapse every entrance/looping animation to static. */
+@media (prefers-reduced-motion: reduce) {
+  .stagger > *, .ob-hero, .ob-chat, .ob-sheet, .proposal-banner, .agent,
+  .drawer, .modal, .scrim, .firstrun, .ob-pulse, .ob-net, .ob-field .v.set {
+    animation: none !important;
+  }
+  .skel { animation: none; background: var(--panel-hi); }
+  * { transition-duration: 0.01ms !important; }
+}

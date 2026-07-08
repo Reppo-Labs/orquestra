@@ -32,7 +32,7 @@ export function EmissionsSummary({ pnl, earn }: { pnl: Pnl | null; earn?: Earn |
         ))}
       </div>
       <div className="muted" style={{ marginTop: '0.5rem' }}>
-        Earned total: {fmt(pnl.earnedReppo)} REPPO{tokens.length ? ' (+ native tokens shown separately)' : ''} · claims run automatically each cycle
+        Earned total: {fmt(pnl.earnedReppo)} REPPO{tokens.length ? ' (+ native tokens shown separately)' : ''}. Claims run automatically each cycle.
       </div>
     </div>
   )

@@ -7,9 +7,9 @@ export const STRICT = ['conservative', 'balanced', 'aggressive'] as const
 
 /** Option label that surfaces the up-threshold inline so the picker is self-explaining. */
 export const STRICT_LABEL: Record<string, string> = {
-  conservative: 'conservative — up ≥8',
-  balanced: 'balanced — up ≥7',
-  aggressive: 'aggressive — up ≥6',
+  conservative: 'conservative (up ≥8)',
+  balanced: 'balanced (up ≥7)',
+  aggressive: 'aggressive (up ≥6)',
 }
 
 /** Tooltip body explaining how a 1-10 score becomes an action. */
