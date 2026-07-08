@@ -76,6 +76,10 @@ export const StrategyConfigSchema = z
     // Absent ⇒ the env LLM_PROVIDER default. `provider` must be a known LlmProvider.
     defaultModel: z.object({ provider: LlmProviderEnum, model: z.string().min(1) }).optional(),
     notes: z.string().default(''),
+    // Platform display name for the node's agent, chosen at onboarding. Used at FIRST
+    // registration only (env REPPO_AGENT_NAME wins; later renames via dashboard/env —
+    // this field never re-syncs, so it can't clobber a dashboard rename on restart).
+    nodeName: z.string().trim().max(64).optional(),
   })
   .transform((cfg) => ({
     ...cfg,

@@ -25,6 +25,9 @@ export const OnboardingAnswersSchema = z.object({
   horizonDays: z.number().int().positive(),
   cadenceHours: z.number().min(0.1), // fractional ok (0.5 = 30 min); floor matches config schema
   notes: z.string().default(''),
+  // Display name the node registers on the Reppo platform (leaderboard, stats).
+  // Optional: absent/blank → orquestra-<wallet slice> default at registration.
+  nodeName: z.string().trim().max(64).optional(),
 })
 
 export type ValidateResult = { ok: true; answers: OnboardingAnswers } | { ok: false; error: string }

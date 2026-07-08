@@ -324,7 +324,11 @@ async function start(): Promise<void> {
 
   // Node-unique agent name so each operator is distinguishable on the Reppo platform
   // (REPPO_AGENT_NAME override, else orquestra-<wallet slice>) instead of all sharing "orquestra".
-  await setupNode(config, executor, agentDisplayName(process.env.REPPO_AGENT_NAME, walletAddress))
+  // Name precedence: env REPPO_AGENT_NAME → onboarding-chosen config.nodeName →
+  // wallet-derived default. config.nodeName only matters at FIRST registration
+  // (and env-driven sync) — it never re-syncs on its own, so a dashboard rename
+  // (POST /api/agent/name) survives restarts.
+  await setupNode(config, executor, agentDisplayName(process.env.REPPO_AGENT_NAME || config.nodeName, walletAddress))
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)

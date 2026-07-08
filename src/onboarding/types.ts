@@ -26,6 +26,8 @@ export interface OnboardingAnswers {
   horizonDays: number
   cadenceHours: number
   notes: string
+  /** Platform display name for the node's agent; absent → orquestra-<wallet slice>. */
+  nodeName?: string
 }
 
 /** Abstracts the interview I/O. Production: interactive/LLM terminal; tests: scripted. */
