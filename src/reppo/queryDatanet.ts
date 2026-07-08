@@ -20,9 +20,26 @@ export async function queryDatanetJson(datanetId: string): Promise<unknown> {
     }
     const hasId = o['datanetId'] != null || o['tokenId'] != null
     const meta = o['metadata']
-    const metaEmpty = meta == null || (typeof meta === 'object' && Object.keys(meta as object).length === 0)
+    const metaObj = meta != null && typeof meta === 'object' ? (meta as Record<string, unknown>) : {}
+    const metaEmpty = Object.keys(metaObj).length === 0
     if (hasId && metaEmpty && o['subnetDescription'] == null && o['onboardingVoters'] == null) {
       throw new Error(`INTERNAL_ERROR: datanet ${datanetId} metadata absent from CLI response (transient RPC?)`)
+    }
+    // Partial multicall: a `metadata` object comes back with SOME keys, but every content
+    // field is empty (a degraded read that resolved the id + shape but not the strings). This
+    // slips past the metaEmpty check above yet still throws a PERMANENT-looking "carries no
+    // goal…" downstream. A real datanet always carries at least a description/goal, so treat
+    // all-empty content as transient. Fields are checked in BOTH shapes (nested wins for 0.7.0+,
+    // flat for older platforms) to mirror parseDatanetRubric's merge.
+    const content = (k: string, legacy?: string): boolean => {
+      const v = metaObj[k] ?? o[legacy ?? k]
+      return typeof v === 'string' && v.trim() !== ''
+    }
+    if (!metaEmpty && hasId
+      && !content('description', 'subnetDescription')
+      && !content('onboardingVoters')
+      && !content('onboardingPublishers')) {
+      throw new Error(`INTERNAL_ERROR: datanet ${datanetId} metadata content empty in CLI response (transient RPC?)`)
     }
   }
   return parsed
