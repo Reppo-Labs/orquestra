@@ -134,7 +134,11 @@ button { font-family: var(--body); }
 .sec-head .rule { flex: 1; height: 1px; background: var(--border); }
 
 /* ── Cards / stat grid ────────────────────────────────────────────────── */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+/* Composed grid: 7 stat cards + a 2-span hero = 8 units = clean 2×4. auto-fit left
+   orphans on the last row; fixed tracks keep the block rectangular. */
+.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .cards { grid-template-columns: 1fr; } .card.hero { grid-column: auto; } }
 .card {
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   border: 1px solid var(--border); border-radius: var(--r-md); padding: 15px 16px;
@@ -142,6 +146,7 @@ button { font-family: var(--body); }
 }
 .card .k { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; }
 .card .v { font-family: var(--mono); font-size: 21px; font-weight: 500; margin-top: 7px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.card .sub { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
 .card.hero { grid-column: span 2; }
 .card.hero .v { font-size: 30px; }
 
@@ -151,6 +156,8 @@ button { font-family: var(--body); }
 .bar.hot > div { background: linear-gradient(90deg, #a23b46, var(--neg)); }
 
 /* ── Tables ───────────────────────────────────────────────────────────── */
+/* Datanet column: one line, truncated — full label lives in the title attr. */
+td.net-cell { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 14px; font-variant-numeric: tabular-nums; }
