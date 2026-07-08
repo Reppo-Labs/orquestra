@@ -30,4 +30,22 @@ describe('queryDatanetJson degraded-response guard', () => {
     const r = (await queryDatanetJson('9')) as Record<string, unknown>
     expect(r['onboardingVoters']).toBe('rubric text')
   })
+
+  it('throws transient when metadata has keys but all content fields are empty (partial multicall)', async () => {
+    // Degraded read: shape/id resolved, strings did not. Empty strings + non-content keys
+    // present, so the metaEmpty guard misses it — must still classify transient.
+    run(JSON.stringify({
+      datanetId: '22', valid: true,
+      metadata: { subnetUuid: 'u', status: 'ACTIVE', description: '', onboardingVoters: '', onboardingPublishers: '' },
+    }))
+    const err = (await queryDatanetJson('22').catch((e) => e)) as Error
+    expect(err.message).toMatch(/INTERNAL_ERROR/)
+    expect(exec.isTransientReppoError(err.message)).toBe(true)
+  })
+
+  it('accepts a nested response carrying only a description (mint-capable, no rubric)', async () => {
+    run(JSON.stringify({ datanetId: '22', metadata: { description: 'real goal', onboardingPublishers: 'spec' } }))
+    const r = (await queryDatanetJson('22')) as Record<string, unknown>
+    expect(r['datanetId']).toBe('22')
+  })
 })
