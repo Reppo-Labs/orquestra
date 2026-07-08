@@ -184,13 +184,22 @@ export const KNOWN_MODELS: Record<LlmProvider, string[]> = {
 export interface ResolveModelOpts {
   /** Required for `anthropic-oauth`: yields a fresh subscription access token per request. */
   tokenProvider?: () => Promise<string>
+  /** Override the API base URL — point a provider at your own LLM gateway (LiteLLM,
+   *  OpenRouter, Cloudflare AI Gateway, etc). Applied to the generic first-party providers
+   *  (`openai`, `anthropic`, `google`) ONLY. Ignored for the marketplace providers with a
+   *  fixed endpoint (`surplus`, `virtuals`, `usepod`) and for `anthropic-oauth` (subscription
+   *  tokens are Anthropic-gated). Env-sourced only (LLM_BASE_URL / LLM_BASE_URL_<PROVIDER>). */
+  baseURL?: string
 }
 
 export function resolveModel(provider: LlmProvider, apiKey: string, model?: string, opts?: ResolveModelOpts): LanguageModel {
+  // Gateway override for the generic first-party providers only. `?? undefined` keeps the
+  // SDK default when unset (never pass an empty baseURL, which would break resolution).
+  const gateway = opts?.baseURL || undefined
   let built: LanguageModel
   switch (provider) {
     case 'anthropic':
-      built = createAnthropic({ apiKey })(model ?? DEFAULT_MODEL.anthropic)
+      built = createAnthropic({ apiKey, ...(gateway ? { baseURL: gateway } : {}) })(model ?? DEFAULT_MODEL.anthropic)
       break
     case 'anthropic-oauth': {
       // Subscription auth: no API key. A custom fetch swaps `x-api-key` for a fresh
@@ -203,10 +212,10 @@ export function resolveModel(provider: LlmProvider, apiKey: string, model?: stri
       break
     }
     case 'openai':
-      built = createOpenAI({ apiKey })(model ?? DEFAULT_MODEL.openai)
+      built = createOpenAI({ apiKey, ...(gateway ? { baseURL: gateway } : {}) })(model ?? DEFAULT_MODEL.openai)
       break
     case 'google':
-      built = createGoogleGenerativeAI({ apiKey })(model ?? DEFAULT_MODEL.google)
+      built = createGoogleGenerativeAI({ apiKey, ...(gateway ? { baseURL: gateway } : {}) })(model ?? DEFAULT_MODEL.google)
       break
     case 'surplus':
       built = createOpenAI({ apiKey, baseURL: SURPLUS_BASE_URL })(model ?? DEFAULT_MODEL.surplus)

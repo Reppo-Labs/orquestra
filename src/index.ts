@@ -26,7 +26,7 @@ import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { createSportsAdapter } from './adapter/sports/index.js'
 import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
 import { effectiveDefault } from './llm/effectiveDefault.js'
-import { buildProviderKeyRegistry } from './llm/registry.js'
+import { buildProviderKeyRegistry, resolveLlmBaseUrl } from './llm/registry.js'
 import { spawn } from 'node:child_process'
 import { loadCredential, saveCredential, hasOAuthCredential } from './llm/oauth/anthropic/store.js'
 import { createTokenManager } from './llm/oauth/anthropic/tokenManager.js'
@@ -61,7 +61,7 @@ async function onboard(): Promise<void> {
     process.exitCode = 1
     return
   }
-  const model = resolveModel(provider, apiKey)
+  const model = resolveModel(provider, apiKey, undefined, { baseURL: resolveLlmBaseUrl(provider, process.env) })
   const p = terminalPrompter()
   try {
     const answers = await runConversationalOnboarding({
@@ -186,7 +186,14 @@ async function start(): Promise<void> {
   // it is also threaded into the cycle wiring below.
   const oauthTokens = createTokenManager({ load: () => loadCredential(DATA_DIR) })
   if (hasOAuthCredential(DATA_DIR)) providerKeyRegistry.set('anthropic-oauth', OAUTH_KEY_SENTINEL)
-  const resolve = oauthAwareResolver(() => oauthTokens.getAccessToken())
+  // Gateway override (LLM_BASE_URL / LLM_BASE_URL_<PROVIDER>) injected per provider here, so
+  // EVERY model use — default, chat, mint/panel/learn, per-datanet scoring — routes through it
+  // (resolveModel applies it only to openai/anthropic/google; other providers ignore it).
+  const resolve = oauthAwareResolver(
+    () => oauthTokens.getAccessToken(),
+    (provider, apiKey, model, opts) =>
+      resolveModel(provider, apiKey, model, { ...opts, baseURL: resolveLlmBaseUrl(provider, process.env) }),
+  )
   const envProvider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
   const envModel = DEFAULT_MODEL[envProvider]
   // Non-chat default model (mint/panel/learn/adapters): env default at startup.

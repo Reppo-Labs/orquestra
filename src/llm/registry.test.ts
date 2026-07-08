@@ -1,6 +1,6 @@
 // src/llm/registry.test.ts
 import { describe, it, expect } from 'vitest'
-import { buildProviderKeyRegistry } from './registry.js'
+import { buildProviderKeyRegistry, resolveLlmBaseUrl } from './registry.js'
 
 describe('buildProviderKeyRegistry', () => {
   it('reads per-provider LLM_KEY_* vars into the registry', () => {
@@ -53,5 +53,35 @@ describe('buildProviderKeyRegistry', () => {
     const r = buildProviderKeyRegistry({ LLM_PROVIDER: 'anthropic-oauth', LLM_API_KEY: 'whatever' })
     expect(r.has('anthropic-oauth')).toBe(false)
     expect(r.size).toBe(0)
+  })
+})
+
+describe('resolveLlmBaseUrl', () => {
+  it('undefined when nothing is set (SDK default)', () => {
+    expect(resolveLlmBaseUrl('openai', {})).toBeUndefined()
+  })
+
+  it('global LLM_BASE_URL applies to every overridable provider', () => {
+    const env = { LLM_BASE_URL: 'https://gw/v1' }
+    expect(resolveLlmBaseUrl('openai', env)).toBe('https://gw/v1')
+    expect(resolveLlmBaseUrl('anthropic', env)).toBe('https://gw/v1')
+    expect(resolveLlmBaseUrl('google', env)).toBe('https://gw/v1')
+  })
+
+  it('per-provider LLM_BASE_URL_<PROVIDER> wins over the global', () => {
+    const env = { LLM_BASE_URL: 'https://global/v1', LLM_BASE_URL_OPENAI: 'https://openai-gw/v1' }
+    expect(resolveLlmBaseUrl('openai', env)).toBe('https://openai-gw/v1')
+    expect(resolveLlmBaseUrl('anthropic', env)).toBe('https://global/v1') // no anthropic-specific → global
+  })
+
+  it('treats blank/whitespace as unset', () => {
+    expect(resolveLlmBaseUrl('openai', { LLM_BASE_URL: '   ' })).toBeUndefined()
+    expect(resolveLlmBaseUrl('openai', { LLM_BASE_URL_OPENAI: '', LLM_BASE_URL: 'https://gw/v1' })).toBe('https://gw/v1')
+  })
+
+  it('still returns the global for a provider with no per-provider var (marketplaces filtered downstream)', () => {
+    // resolveLlmBaseUrl is provider-agnostic for the global; resolveModel decides which
+    // providers actually apply it (usepod/virtuals/surplus/anthropic-oauth ignore it).
+    expect(resolveLlmBaseUrl('usepod', { LLM_BASE_URL: 'https://gw/v1' })).toBe('https://gw/v1')
   })
 })
