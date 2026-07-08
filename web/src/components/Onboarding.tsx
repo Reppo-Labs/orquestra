@@ -32,6 +32,8 @@ function DraftSheet({ draft, names }: { draft: OnboardingDraft; names: Record<st
   const nets = draft.datanets ?? []
   return (
     <>
+      <div className="ob-section">node</div>
+      <Field label="name" value={draft.nodeName} />
       <div className="ob-section">datanets</div>
       {nets.length === 0 && <div className="muted">none chosen yet — they appear as you decide</div>}
       {nets.map((d) => (

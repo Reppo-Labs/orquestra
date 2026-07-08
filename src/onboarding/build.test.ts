@@ -27,6 +27,12 @@ describe('buildStrategyConfig', () => {
   it('throws on an invalid answer (e.g. negative horizon) via schema validation', () => {
     expect(() => buildStrategyConfig({ ...answers(), horizonDays: -1 })).toThrow()
   })
+
+  it('maps nodeName into the config (trimmed); omits it when absent or blank', () => {
+    expect(buildStrategyConfig({ ...answers(), nodeName: '  My Node  ' }).nodeName).toBe('My Node')
+    expect(buildStrategyConfig(answers()).nodeName).toBeUndefined()
+    expect(buildStrategyConfig({ ...answers(), nodeName: '   ' }).nodeName).toBeUndefined()
+  })
 })
 
 describe('buildStrategyConfig adapterParams', () => {

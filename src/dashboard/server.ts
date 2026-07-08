@@ -66,8 +66,10 @@ function safeConfig(dataDir: string): Record<string, unknown> {
     // stake are NOT secrets (caps already surface via the snapshot).
     const parsed = StrategyConfigSchema.safeParse(c)
     if (parsed.success) {
-      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel } = parsed.data
-      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel }
+      // nodeName included so the dashboard's save round-trip (GET → edit → POST full
+      // candidate) doesn't silently drop the onboarding-chosen name from the config.
+      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel, nodeName } = parsed.data
+      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel, nodeName }
     }
     // tolerant fallback for a file the schema rejects (node likely won't run on it either).
     // deliberation falls back to the schema default so the editor reflects real behavior.
@@ -75,7 +77,7 @@ function safeConfig(dataDir: string): Record<string, unknown> {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
       budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, votePanel: true },
-      defaultModel: c.defaultModel,
+      defaultModel: c.defaultModel, nodeName: c.nodeName,
     }
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config

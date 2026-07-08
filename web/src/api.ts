@@ -245,6 +245,8 @@ export interface OnboardingAnswers {
   horizonDays: number
   cadenceHours: number
   notes: string
+  /** Platform display name for the node (leaderboard); absent → orquestra-<wallet>. */
+  nodeName?: string
 }
 
 export type OnboardingDraft = Partial<OnboardingAnswers>

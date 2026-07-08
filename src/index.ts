@@ -116,13 +116,14 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
     }
   }
 
-  // Reppo agent identity for minting (reppo >=0.8.0 `mint-pod` requires REPPO_AGENT_ID).
-  // Idempotent like the lock: env wins, else persisted agent.json, else register once.
-  // Non-fatal on failure — voting still runs; mints error visibly until an id exists.
-  const mintingEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
+  // Reppo agent identity — EVERY node registers one (not just minting nodes): the
+  // agent is the node's platform identity. mint-pod requires it (reppo >=0.8.0), and
+  // vote registration (registerVoteOnPlatform) needs its id+apiKey — a vote-only node
+  // without an agent casts votes the platform can't attribute or count. Registration
+  // is a free platform API call. Idempotent like the lock: env wins, else persisted
+  // store, else register once. Non-fatal on failure — voting still runs on-chain.
   try {
     const res = await ensureAgentId({
-      mintingEnabled,
       envAgentId: process.env.REPPO_AGENT_ID,
       readStored: () => readAgentStore(DATA_DIR),
       register: () => registerAgentJson(agentName, 'Reppo Orquestra swarm node — publishes data pods'),
@@ -137,7 +138,7 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
       },
     })
     if (res.source === 'registered') console.error(`orquestra: registered Reppo agent ${res.agentId} — persisted to ${DATA_DIR}/activity.db`)
-    else if (res.source !== 'skipped') console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
+    else console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
     // Keep the platform display name in step with REPPO_AGENT_NAME: registration is
     // one-time, so without this a name change after first start was silently ignored.
     // ONLY when the env var is explicitly set — the wallet-derived default must not
@@ -323,7 +324,11 @@ async function start(): Promise<void> {
 
   // Node-unique agent name so each operator is distinguishable on the Reppo platform
   // (REPPO_AGENT_NAME override, else orquestra-<wallet slice>) instead of all sharing "orquestra".
-  await setupNode(config, executor, agentDisplayName(process.env.REPPO_AGENT_NAME, walletAddress))
+  // Name precedence: env REPPO_AGENT_NAME → onboarding-chosen config.nodeName →
+  // wallet-derived default. config.nodeName only matters at FIRST registration
+  // (and env-driven sync) — it never re-syncs on its own, so a dashboard rename
+  // (POST /api/agent/name) survives restarts.
+  await setupNode(config, executor, agentDisplayName(process.env.REPPO_AGENT_NAME || config.nodeName, walletAddress))
 
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)

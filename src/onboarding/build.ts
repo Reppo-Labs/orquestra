@@ -24,5 +24,6 @@ export function buildStrategyConfig(a: OnboardingAnswers): StrategyConfig {
     claimEmissions: true,
     datanets,
     notes: a.notes,
+    ...(a.nodeName?.trim() ? { nodeName: a.nodeName.trim() } : {}),
   })
 }
