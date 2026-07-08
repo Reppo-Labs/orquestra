@@ -123,6 +123,31 @@ describe('write layer (unauthenticated — localhost-bound by default)', () => {
   })
 })
 
+describe('POST /api/run-now', () => {
+  it('503 when no triggerCycle is wired (scheduler not up yet)', async () => {
+    // The default handle (this file's beforeEach) has no triggerCycle.
+    expect((await post('/api/run-now', {})).status).toBe(503)
+  })
+
+  it('200 { started:true } when the trigger starts a cycle', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'orq-run-'))
+    const h = await startDashboard(d, 0, { triggerCycle: () => ({ started: true }) })
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/run-now`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).started).toBe(true)
+    await h.close(); rmSync(d, { recursive: true, force: true })
+  })
+
+  it('409 { started:false, reason } when a cycle is already running', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'orq-run-'))
+    const h = await startDashboard(d, 0, { triggerCycle: () => ({ started: false, reason: 'a cycle is already running' }) })
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/run-now`, { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).reason).toMatch(/already running/)
+    await h.close(); rmSync(d, { recursive: true, force: true })
+  })
+})
+
 describe('POST /api/strategy/chat', () => {
   it('503 when the server has no chat model (this test server passes none)', async () => {
     const r = await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] })

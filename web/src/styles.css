@@ -90,6 +90,8 @@ button { font-family: var(--body); }
 .brand-name .dim { color: var(--faint); font-weight: 600; }
 .nav-spacer { flex: 1; }
 .nav-asof { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.run-now { display: inline-flex; align-items: center; gap: 10px; margin-left: 14px; }
+.run-now-msg { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
 
 /* ── Ticker stat strip ────────────────────────────────────────────────── */
 .ticker {

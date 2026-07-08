@@ -14,7 +14,7 @@ import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName, syncAgentName } from './reppo/agent.js'
 import { updateAgentOnPlatform } from './reppo/platformApi.js'
 import { terminalPrompter } from './runtime/prompter.js'
-import { startScheduler } from './runtime/scheduler.js'
+import { startScheduler, type SchedulerHandle } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
 import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
 import { planStakeTopUp, stakeTopUpKey, markStakeTargetAttempted } from './wallet/stakeTopUp.js'
@@ -223,7 +223,14 @@ async function start(): Promise<void> {
   // the scheduler starts only once a strategy config exists.
   const dashEnabled = (process.env.DASHBOARD_ENABLED ?? 'true') !== 'false'
   const dashPort = Number(process.env.DASHBOARD_PORT ?? 7070)
-  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, { resolveChatModel, availableProviders: [...providerKeyRegistry.keys()] }) : null
+  // Lazily resolved so the dashboard (started here, before the scheduler exists) can still
+  // wire the "run now" button — the closure reads schedulerHandle at click time, not now.
+  let schedulerHandle: SchedulerHandle | null = null
+  const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, {
+    resolveChatModel,
+    availableProviders: [...providerKeyRegistry.keys()],
+    triggerCycle: () => schedulerHandle?.runNow() ?? { started: false, reason: 'node still starting' },
+  }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
   // Declarative deploy (CONFIG_SOURCE=file): treat strategy.config.json in DATA_DIR as the
@@ -334,6 +341,7 @@ async function start(): Promise<void> {
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
   // reloadConfig: dashboard saves apply at the next cycle (validated; last-good on failure)
   const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), { reloadConfig: () => loadConfig(DATA_DIR) }))
+  schedulerHandle = handle // now the dashboard "run now" button can trigger an off-schedule cycle
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
   // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler, drain any

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { DashData } from '../api'
 import { fmt, epochLabel, sign } from '../lib/format'
 import { Tip } from './Tip'
+import { RunNowButton } from './RunNowButton'
 
 export type TabId = 'overview' | 'strategy' | 'chat' | 'activity' | 'learning'
 
@@ -13,12 +14,14 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'learning', label: 'Learning' },
 ]
 
-export function Nav({ data, asof, tab, onTab, activityCount }: {
+export function Nav({ data, asof, tab, onTab, activityCount, onRefresh }: {
   data: DashData | null
   asof: string
   tab: TabId
   onTab: (t: TabId) => void
   activityCount: number
+  /** Refresh the dashboard after a manual "run now" trigger. */
+  onRefresh: () => void
 }) {
   const snap = data?.snapshot
   const pnl = data?.pnl
@@ -57,6 +60,7 @@ export function Nav({ data, asof, tab, onTab, activityCount }: {
           </div>
           <div className="nav-spacer" />
           <span className="nav-asof">{asof}</span>
+          <RunNowButton onRefresh={onRefresh} />
         </div>
       </div>
       <div className="ticker">

@@ -4,6 +4,11 @@ export interface SchedulerHandle {
   /** The in-flight tick's promise, or null when idle. Lets the shutdown handler
    *  drain a running cycle before the process exits. */
   current(): Promise<void> | null
+  /** Trigger an off-schedule tick now (the dashboard "run now" button). Respects the
+   *  no-overlap guard: if a cycle is already running (or the scheduler is stopped), it
+   *  does NOT queue a second one — returns { started: false } with the reason instead.
+   *  The interval timer is unchanged; the next scheduled fire still happens on cadence. */
+  runNow(): { started: boolean; reason?: string }
 }
 
 /** Run `tick` immediately, then every `cadenceHours`. Never overlaps: if a tick
@@ -38,6 +43,14 @@ export function startScheduler(cadenceHours: number, tick: () => Promise<void>):
     },
     current() {
       return running
+    },
+    runNow() {
+      if (stopped) return { started: false, reason: 'scheduler stopped' }
+      // busy is set synchronously inside runGuarded before its first await, so this
+      // check and the call below can't interleave — a concurrent cycle is never double-run.
+      if (busy) return { started: false, reason: 'a cycle is already running' }
+      void runGuarded()
+      return { started: true }
     },
   }
 }

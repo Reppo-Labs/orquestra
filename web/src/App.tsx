@@ -63,7 +63,7 @@ export function App() {
 
   return (
     <div className="app">
-      <Nav data={data} asof={asof} tab={tab} onTab={setTab} activityCount={data?.activity.length ?? 0} />
+      <Nav data={data} asof={asof} tab={tab} onTab={setTab} activityCount={data?.activity.length ?? 0} onRefresh={() => void refresh()} />
       <main className="shell">
         {tab === 'overview' && (
           <div key="ov">

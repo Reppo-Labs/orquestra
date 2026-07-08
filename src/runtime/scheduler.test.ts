@@ -33,4 +33,38 @@ describe('startScheduler', () => {
     h.stop()
     await vi.advanceTimersByTimeAsync(20 * 3600_000)
   })
+
+  it('runNow triggers an off-schedule tick between scheduled fires', async () => {
+    const tick = vi.fn(async () => {})
+    const h = startScheduler(6, tick)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(tick).toHaveBeenCalledTimes(1) // immediate run
+    const r = h.runNow()
+    expect(r.started).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(tick).toHaveBeenCalledTimes(2) // off-schedule run
+    h.stop()
+  })
+
+  it('runNow is a no-op while a cycle is already running (no double-run)', async () => {
+    const tick = vi.fn(async () => { await new Promise((r) => setTimeout(r, 5 * 3600_000)) })
+    const h = startScheduler(6, tick)
+    await vi.advanceTimersByTimeAsync(0) // immediate run in-flight (busy)
+    const r = h.runNow()
+    expect(r.started).toBe(false)
+    expect(r.reason).toMatch(/already running/)
+    expect(tick).toHaveBeenCalledTimes(1)
+    h.stop()
+    await vi.advanceTimersByTimeAsync(6 * 3600_000)
+  })
+
+  it('runNow refuses once stopped', async () => {
+    const tick = vi.fn(async () => {})
+    const h = startScheduler(6, tick)
+    await vi.advanceTimersByTimeAsync(0)
+    h.stop()
+    const r = h.runNow()
+    expect(r.started).toBe(false)
+    expect(r.reason).toMatch(/stopped/)
+  })
 })

@@ -148,7 +148,11 @@ function readBody(req: IncomingMessage): Promise<unknown> {
       chunks.push(c)
     })
     req.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))) } catch { reject(new Error('invalid JSON body')) }
+      const text = Buffer.concat(chunks).toString('utf-8').trim()
+      // An empty body is valid for bodyless triggers (e.g. POST /api/run-now); resolve {}
+      // so the route's own validator decides. Non-empty bodies must still be valid JSON.
+      if (text === '') { resolve({}); return }
+      try { resolve(JSON.parse(text)) } catch { reject(new Error('invalid JSON body')) }
     })
     req.on('error', reject)
   })
@@ -198,7 +202,7 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
   return { ok: true, status: 'accepted', appliesNextCycle: true }
 }
 
-const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm', '/api/learn/disable', '/api/learn/veto', '/api/agent/name'])
+const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm', '/api/learn/disable', '/api/learn/veto', '/api/agent/name', '/api/run-now'])
 
 async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts, session: OnboardingSession): Promise<void> {
   const url = (req.url ?? '/').split('?')[0]
@@ -300,6 +304,17 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
         if (!b?.datanetId || typeof b.enabled !== 'boolean') { json(res, 400, { error: 'datanetId and enabled required' }); return }
         setLearnEnabled(dataDir, b.datanetId, b.enabled)
         json(res, 200, { ok: true }); return
+      }
+
+      if (url === '/api/run-now') {
+        // Off-schedule cycle trigger. The scheduler owns the no-overlap guard, so a
+        // double-click or a click during a running cycle is a no-op (started:false).
+        // 409 when it didn't start so the client shows why without treating it as an error.
+        const trigger = opts.triggerCycle
+        if (!trigger) { json(res, 503, { error: 'node still starting — no scheduler yet' }); return }
+        const r = trigger()
+        json(res, r.started ? 200 : 409, r)
+        return
       }
 
       if (url === '/api/learn/veto') {
@@ -419,6 +434,10 @@ export interface DashboardOpts {
   publicDir?: string
   /** Override the onboarding turn-runner (tests); defaults to the live model runner. */
   onboardingTurn?: (messages: CoreMessage[]) => Promise<OnboardingTurnResult>
+  /** Trigger an off-schedule cycle NOW (the "run now" button). Resolved per request so
+   *  it works even though the dashboard starts before the scheduler exists — index.ts wires
+   *  a lazy closure. Absent (or returns { started:false }) before the scheduler is up. */
+  triggerCycle?: () => { started: boolean; reason?: string }
 }
 
 export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
