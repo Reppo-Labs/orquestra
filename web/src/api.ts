@@ -206,6 +206,15 @@ export async function renameAgent(name: string): Promise<{ ok: boolean; error?: 
   return r.ok ? { ok: true } : { ok: false, error: out.error ?? `HTTP ${r.status}` }
 }
 
+/** Trigger an off-schedule cycle. started:false (HTTP 409) means a cycle is already
+ *  running or the node is still starting — not an error, surfaced as `reason`. */
+export async function runNow(): Promise<{ started: boolean; reason?: string; error?: string }> {
+  const r = await fetch('/api/run-now', { method: 'POST' })
+  const out = (await r.json().catch(() => ({}))) as { started?: boolean; reason?: string; error?: string }
+  if (r.ok) return { started: true }
+  return { started: false, reason: out.reason, error: out.error }
+}
+
 export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {
   const r = await fetch('/api/strategy', {
     method: 'POST',
