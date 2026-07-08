@@ -19,6 +19,24 @@ const ENV_BY_PROVIDER: Partial<Record<LlmProvider, string>> = {
 
 type Env = Record<string, string | undefined>
 
+/** Per-provider base-URL override env names. Same suffixes as LLM_KEY_<PROVIDER>. Only the
+ *  generic first-party providers are overridable (resolveModel ignores baseURL for the
+ *  fixed-endpoint marketplaces and for anthropic-oauth). */
+const BASE_URL_ENV_BY_PROVIDER: Partial<Record<LlmProvider, string>> = {
+  anthropic: 'LLM_BASE_URL_ANTHROPIC',
+  openai: 'LLM_BASE_URL_OPENAI',
+  google: 'LLM_BASE_URL_GOOGLE',
+}
+
+/** Resolve the base-URL override for a provider: the per-provider var wins, else the global
+ *  `LLM_BASE_URL`, else undefined (SDK default). Blank/whitespace is treated as unset.
+ *  Env-only — never read from the dashboard or config (same trust model as API keys). */
+export function resolveLlmBaseUrl(provider: LlmProvider, env: Env): string | undefined {
+  const specific = BASE_URL_ENV_BY_PROVIDER[provider]
+  const perProvider = specific ? env[specific]?.trim() : undefined
+  return perProvider || env.LLM_BASE_URL?.trim() || undefined
+}
+
 /** Map<provider, apiKey> from env. Blank/whitespace values are ignored. */
 export function buildProviderKeyRegistry(env: Env): Map<LlmProvider, string> {
   const reg = new Map<LlmProvider, string>()

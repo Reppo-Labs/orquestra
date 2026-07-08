@@ -52,6 +52,21 @@ describe('resolveModel', () => {
     expect(resolveModel('usepod', 'TOKHERE', 'deepseek-v3.2')).toBeTruthy()
   })
 
+  it('accepts a baseURL override for the generic providers (gateway) — resolves without throwing', () => {
+    // config.url isn't inspectable through the wrappers, so this is a construction smoke test:
+    // the override must flow into createOpenAI/createAnthropic/createGoogleGenerativeAI cleanly.
+    for (const p of ['openai', 'anthropic', 'google'] as LlmProvider[]) {
+      expect(resolveModel(p, 'test-key', undefined, { baseURL: 'https://my-gateway/v1' })).toBeTruthy()
+    }
+  })
+
+  it('ignores a baseURL override for fixed-endpoint providers (still resolves)', () => {
+    // usepod/surplus/virtuals keep their own endpoint; passing baseURL is a harmless no-op.
+    for (const p of ['surplus', 'virtuals', 'usepod'] as LlmProvider[]) {
+      expect(resolveModel(p, 'k', undefined, { baseURL: 'https://ignored/v1' })).toBeTruthy()
+    }
+  })
+
   it('throws on an unknown provider', () => {
     expect(() => resolveModel('bogus' as LlmProvider, 'k')).toThrow(/unknown LLM provider/)
   })
