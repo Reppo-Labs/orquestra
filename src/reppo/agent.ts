@@ -104,8 +104,6 @@ export async function registerAgentJson(name: string, description: string): Prom
 }
 
 export interface EnsureAgentDeps {
-  /** true when any datanet has mint enabled — voting-only nodes need no agent. */
-  mintingEnabled: boolean
   /** REPPO_AGENT_ID from the environment, if the operator set it manually. */
   envAgentId?: string
   readStored(): AgentCreds | null
@@ -115,14 +113,16 @@ export interface EnsureAgentDeps {
   setEnv(creds: AgentCreds): void
 }
 
-export type EnsureAgentResult = { source: 'skipped' | 'env' | 'stored' | 'registered'; agentId?: string }
+export type EnsureAgentResult = { source: 'env' | 'stored' | 'registered'; agentId?: string }
 
-/** Ensure a REPPO_AGENT_ID is available before minting. Idempotent, mirroring the
- *  one-time veREPPO lock: register once, persist to the data volume, reuse after.
+/** Ensure a REPPO_AGENT_ID is available. Every node registers an agent — not just
+ *  minting nodes: the agent is the node's platform identity, and vote registration
+ *  (registerVoteOnPlatform) needs its id+apiKey, so a vote-only node without one is
+ *  invisible to the platform (uncountable, unattributed votes). Registration is a
+ *  free platform API call (no chain tx). Idempotent, mirroring the one-time veREPPO
+ *  lock: register once, persist to the data volume, reuse after.
  *  Precedence: operator-set env → persisted store → fresh registration. */
 export async function ensureAgentId(deps: EnsureAgentDeps): Promise<EnsureAgentResult> {
-  if (!deps.mintingEnabled) return { source: 'skipped' }
-
   if (deps.envAgentId && deps.envAgentId.trim() !== '') {
     return { source: 'env', agentId: deps.envAgentId.trim() }
   }

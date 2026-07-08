@@ -70,7 +70,6 @@ describe('agent store', () => {
 
 describe('ensureAgentId (idempotent registration)', () => {
   const deps = (over: Partial<EnsureAgentDeps> = {}): EnsureAgentDeps => ({
-    mintingEnabled: true,
     envAgentId: undefined,
     readStored: vi.fn(() => null),
     register: vi.fn(async () => ({ agentId: 'ag_new', apiKey: 'sk_new' })),
@@ -79,12 +78,11 @@ describe('ensureAgentId (idempotent registration)', () => {
     ...over,
   })
 
-  it('skips entirely when minting is disabled (voting-only node needs no agent)', async () => {
-    const d = deps({ mintingEnabled: false })
+  it('registers for EVERY node — vote-only included (the agent is the platform identity; without it registerVoteOnPlatform silently no-ops and the node is uncountable)', async () => {
+    const d = deps() // no minting context at all — registration is unconditional
     const r = await ensureAgentId(d)
-    expect(r.source).toBe('skipped')
-    expect(d.register).not.toHaveBeenCalled()
-    expect(d.readStored).not.toHaveBeenCalled()
+    expect(r.source).toBe('registered')
+    expect(d.register).toHaveBeenCalledOnce()
   })
 
   it('uses an operator-set env agent id without registering or reading the store', async () => {

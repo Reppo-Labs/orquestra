@@ -116,13 +116,14 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
     }
   }
 
-  // Reppo agent identity for minting (reppo >=0.8.0 `mint-pod` requires REPPO_AGENT_ID).
-  // Idempotent like the lock: env wins, else persisted agent.json, else register once.
-  // Non-fatal on failure — voting still runs; mints error visibly until an id exists.
-  const mintingEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
+  // Reppo agent identity — EVERY node registers one (not just minting nodes): the
+  // agent is the node's platform identity. mint-pod requires it (reppo >=0.8.0), and
+  // vote registration (registerVoteOnPlatform) needs its id+apiKey — a vote-only node
+  // without an agent casts votes the platform can't attribute or count. Registration
+  // is a free platform API call. Idempotent like the lock: env wins, else persisted
+  // store, else register once. Non-fatal on failure — voting still runs on-chain.
   try {
     const res = await ensureAgentId({
-      mintingEnabled,
       envAgentId: process.env.REPPO_AGENT_ID,
       readStored: () => readAgentStore(DATA_DIR),
       register: () => registerAgentJson(agentName, 'Reppo Orquestra swarm node — publishes data pods'),
@@ -137,7 +138,7 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
       },
     })
     if (res.source === 'registered') console.error(`orquestra: registered Reppo agent ${res.agentId} — persisted to ${DATA_DIR}/activity.db`)
-    else if (res.source !== 'skipped') console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
+    else console.error(`orquestra: using Reppo agent ${res.agentId} (${res.source})`)
     // Keep the platform display name in step with REPPO_AGENT_NAME: registration is
     // one-time, so without this a name change after first start was silently ignored.
     // ONLY when the env var is explicitly set — the wallet-derived default must not
