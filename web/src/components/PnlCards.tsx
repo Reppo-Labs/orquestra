@@ -10,7 +10,7 @@ function VeReppoLabel() {
       <Tip label="veREPPO explained">
         <b>veREPPO ≠ locked REPPO</b>
         <p style={{ margin: '6px 0 0' }}>
-          The protocol applies a duration-based multiplier — longer locks earn
+          The protocol applies a duration-based multiplier: longer locks earn
           proportionally more voting power. The result can exceed the amount
           of REPPO you locked.
         </p>
@@ -27,7 +27,7 @@ function LlmCostLabel() {
         <b>Estimate of last cycle's LLM bill</b>
         <p style={{ margin: '6px 0 0' }}>
           All LLM calls made during the cycle (vote scoring, panel deliberation,
-          mint scoring, dedup, learning), priced from list rates per model — an
+          mint scoring, dedup, learning), priced from list rates per model. It is an
           estimate, not your provider invoice. Panel scoring calls the model several
           times per pod, so this scales with pods scored, not just votes cast.
         </p>
@@ -46,6 +46,23 @@ function llmCostValue(s: Snapshot): ReactNode {
 }
 
 export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapshot | null }) {
+  // First paint (nothing loaded yet): shape-matched shimmer instead of a wall of
+  // dashes, so the layout reads as "loading", not "empty node".
+  const loading = pnl === null && snapshot === null
+  const skel = <span className="skel" aria-hidden="true" />
+  if (loading) {
+    const labels: ReactNode[] = ['Net REPPO', 'Spent (mint)', 'Gas (ETH)', <LlmCostLabel key="llm" />, 'REPPO balance', <VeReppoLabel key="ve" />, 'Epoch']
+    return (
+      <div className="cards stagger">
+        {labels.map((k, i) => (
+          <div className={`card ${i === 0 ? 'hero' : ''}`} key={i}>
+            <div className="k">{k}</div>
+            <div className="v">{skel}</div>
+          </div>
+        ))}
+      </div>
+    )
+  }
   const cards: [ReactNode, ReactNode, boolean?][] = [
     ['Net REPPO', pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—', true],
     ['Spent (mint)', pnl ? fmt(pnl.spentReppo) : '—'],

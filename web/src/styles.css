@@ -36,6 +36,8 @@
   --r-lg: 16px;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.55);
+  /* One easing for every interactive transition — fast start, soft settle. */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * { box-sizing: border-box; }
@@ -139,7 +141,7 @@ button { font-family: var(--body); }
   position: relative;
 }
 .card .k { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; }
-.card .v { font-family: var(--mono); font-size: 21px; font-weight: 500; margin-top: 7px; letter-spacing: -0.01em; }
+.card .v { font-family: var(--mono); font-size: 21px; font-weight: 500; margin-top: 7px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .card.hero { grid-column: span 2; }
 .card.hero .v { font-size: 30px; }
 
@@ -177,15 +179,22 @@ td { font-size: 13px; }
 .btn {
   appearance: none; cursor: pointer; font-size: 13px; font-weight: 600;
   border-radius: var(--r-sm); padding: 9px 16px; border: 1px solid var(--border-2);
-  background: var(--panel-2); color: var(--text); transition: all 0.15s;
+  background: var(--panel-2); color: var(--text);
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease),
+    color 0.18s var(--ease), transform 0.12s var(--ease), box-shadow 0.18s var(--ease);
 }
 .btn:hover { background: var(--panel-hi); border-color: var(--faint); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.4; cursor: default; }
 .btn.primary {
   background: linear-gradient(180deg, var(--accent-hi), var(--accent)); color: #1a0d04;
   border-color: transparent; box-shadow: 0 4px 16px rgba(240, 136, 62, 0.25);
 }
-.btn.primary:hover { filter: brightness(1.06); }
+.btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px rgba(240, 136, 62, 0.34);
+}
+.btn.primary:active:not(:disabled) { transform: translateY(0); box-shadow: 0 2px 10px rgba(240, 136, 62, 0.22); }
 .btn.ghost { background: none; border: 1px solid var(--border-2); color: var(--muted); }
 .btn.ghost:hover { color: var(--text); border-color: var(--accent-line); }
 .btn.sm { padding: 5px 11px; font-size: 12px; }
@@ -516,3 +525,42 @@ textarea { resize: vertical; font-family: var(--body); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 999px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+/* ── Interaction polish (taste pass) ─────────────────────────────────── */
+/* Keyboard focus: one visible ring for every interactive element. Mouse
+   clicks don't trigger it (:focus-visible), so pointer users see nothing new. */
+.btn:focus-visible, .chip:focus-visible, .chip-toggle:focus-visible,
+.x-btn:focus-visible, .panel-badge:focus-visible, a:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+.seg label:focus-within {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* Tactile press on every small interactive chip/toggle (buttons handled above). */
+.chip:active:not(:disabled), .chip-toggle:active, .panel-badge:active { transform: translateY(1px); }
+.chip, .chip-toggle, .panel-badge { transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.1s var(--ease); }
+
+/* Earn banner as segmented strip: hairline separators instead of ·-chains. */
+.earn-banner .bseg { display: inline-flex; align-items: center; gap: 6px; }
+.earn-banner .bseg + .bseg { border-left: 1px solid var(--border-2); padding-left: 10px; margin-left: 4px; }
+
+/* Loading skeletons: shape-matched shimmer for stat cards on first paint. */
+.skel {
+  display: inline-block; height: 1em; width: 5.5ch; border-radius: 4px;
+  background: linear-gradient(90deg, var(--panel-hi) 25%, var(--border-2) 50%, var(--panel-hi) 75%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skel-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* Reduced motion: collapse every entrance/looping animation to static. */
+@media (prefers-reduced-motion: reduce) {
+  .stagger > *, .ob-hero, .ob-chat, .ob-sheet, .proposal-banner, .agent,
+  .drawer, .modal, .scrim, .firstrun, .ob-pulse, .ob-net, .ob-field .v.set {
+    animation: none !important;
+  }
+  .skel { animation: none; background: var(--panel-hi); }
+  * { transition-duration: 0.01ms !important; }
+}
