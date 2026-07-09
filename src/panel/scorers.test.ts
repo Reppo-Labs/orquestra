@@ -6,7 +6,10 @@ import type { CandidateScorer, CandidatePod } from '../adapter/types.js'
 import { createPanelPodScorer, createPanelCandidateScorer, type PanelScorerOpts } from './scorers.js'
 import type { PanelGenerate } from './deliberate.js'
 
-const rubric = { name: 'D', goal: 'g', voterRubric: 'v', canVote: true, canMint: true } as DatanetRubric
+const rubric = {
+  name: 'D', goal: 'g', voterRubric: 'v', canVote: true, canMint: true,
+  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+} as DatanetRubric
 const pod = { podId: '1', validityEpoch: '1', name: 'p', description: 'd' }
 const model = null as never
 

@@ -69,6 +69,18 @@ describe('persona prompts', () => {
     const { system, prompt } = buildPersonaPrompt(PERSONAS[0], input)
     expect(`${system}${prompt}`).not.toContain('Operator strategy')
   })
+  it('appends the economics block when input.economics is set (vote path)', () => {
+    const { prompt } = buildPersonaPrompt(PERSONAS[0], {
+      ...input,
+      economics: '\n## Datanet economics\nThis datanet emits 500 REPPO per epoch.\n',
+    })
+    expect(prompt).toContain('## Datanet economics')
+    expect(prompt.indexOf('## Datanet economics')).toBeLessThan(prompt.indexOf('# Pod under review'))
+  })
+  it('no economics block when absent (mint path)', () => {
+    const { prompt } = buildPersonaPrompt(PERSONAS[0], input)
+    expect(prompt).not.toContain('## Datanet economics')
+  })
 })
 
 describe('judge prompt', () => {
@@ -87,5 +99,17 @@ describe('judge prompt', () => {
     expect(prompt).toContain('bull (score 9)')
     expect(prompt).toMatch(/Missing voices/)
     expect(prompt).toContain('bear')
+  })
+  it('appends the economics block when input.economics is set (vote path)', () => {
+    const { prompt } = buildJudgePrompt(
+      { ...input, economics: '\n## Datanet economics\nThis datanet emits 500 REPPO per epoch.\n' },
+      [],
+    )
+    expect(prompt).toContain('## Datanet economics')
+    expect(prompt.indexOf('## Datanet economics')).toBeLessThan(prompt.indexOf('# Pod under review'))
+  })
+  it('no economics block when absent (mint path)', () => {
+    const { prompt } = buildJudgePrompt(input, [])
+    expect(prompt).not.toContain('## Datanet economics')
   })
 })

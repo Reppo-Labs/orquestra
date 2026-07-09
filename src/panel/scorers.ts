@@ -12,6 +12,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { runPanel, type PanelGenerate } from './deliberate.js'
 import { redactSecrets } from '../util/redact.js'
+import { buildEconomicsBlock } from '../llm/prompt.js'
 
 export interface PanelScorerOpts {
   model: LanguageModel
@@ -43,7 +44,11 @@ export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): Po
       const { enabled, votePanel } = opts.getDeliberation()
       if (!enabled || !votePanel) return base.scorePod(pod, rubric, thresholds)
       try {
-        const r = await runPanel(opts.model, { name: pod.name, description: pod.description, rubric }, { brief: opts.getBrief?.(), lessons: opts.getLessons?.(rubric.datanetId), generate: opts.generate })
+        const r = await runPanel(
+          opts.model,
+          { name: pod.name, description: pod.description, rubric, economics: buildEconomicsBlock(rubric.economics.currentYield) },
+          { brief: opts.getBrief?.(), lessons: opts.getLessons?.(rubric.datanetId), generate: opts.generate },
+        )
         return { score: r.score, reason: r.reason, panel: r.transcript }
       } catch (e) {
         // Panel failed entirely — fall back to the single scorer (never more fragile).

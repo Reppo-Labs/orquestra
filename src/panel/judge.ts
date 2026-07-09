@@ -17,7 +17,7 @@ export const JudgeSchema = z.object({
  *  applies it. `missing` names personas whose call failed, so the judge knows the
  *  panel is partial. */
 export function buildJudgePrompt(
-  input: { name: string; description: string; rubric: DatanetRubric; brief?: string; lessons?: string },
+  input: { name: string; description: string; rubric: DatanetRubric; brief?: string; lessons?: string; economics?: string },
   panelists: PanelistVerdict[],
   missing: string[] = [],
 ): { system: string; prompt: string } {
@@ -35,7 +35,7 @@ export function buildJudgePrompt(
     .join('\n')
   const missingBlock = missing.length ? `\n## Missing voices\nThese panelists failed to respond: ${missing.join(', ')}. Judge on the available arguments.\n` : ''
   const prompt =
-    `${buildRubricBlock(input.rubric)}\n` +
+    `${buildRubricBlock(input.rubric)}${input.economics ?? ''}\n` +
     `${briefBlock}${lessonsBlock}\n# Pod under review (untrusted)\n## Name\n${input.name}\n## Description\n${input.description}\n\n` +
     `# Panel arguments\n${panel}\n${missingBlock}\n` +
     `Return your final 1-10 score and a one-line reason citing the rubric and the decisive argument(s).`
