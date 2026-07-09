@@ -31,6 +31,7 @@ import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
 import { queryEpochJson } from '../reppo/queryEpoch.js'
 import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
+import { queryEpochVoteVolume } from '../reppo/epochVotes.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
@@ -446,6 +447,11 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           readTokenBalance: (token: string, owner: string) => readTokenBalance(w.rpcUrl as string, token, owner),
         }
       : {}),
+    // Per-datanet emission-yield volume reader — a read-only call, so only rpcUrl is
+    // needed (no wallet address required, unlike the balance reader above).
+    ...(w.rpcUrl
+      ? { getEpochVoteVolume: (podIds: string[]) => queryEpochVoteVolume(w.rpcUrl as string, podIds) }
+      : {}),
   }
 }
 
@@ -519,6 +525,8 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       // Per-cycle LLM spend (tokens + est USD) — reset above, accumulated by the
       // withUsageTracking middleware on every resolved model during the cycle.
       snap.llm = snapshotLlmUsage()
+      // Per-datanet economics: fresh each cycle from the report (see Snapshot doc).
+      snap.datanetEconomics = report.datanetEconomics
       writeSnapshot(w.dataDir, snap)
     } catch (e) {
       console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)

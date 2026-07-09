@@ -8,6 +8,7 @@ import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
 import type { EpochInfo } from '../reppo/queryEpoch.js'
 import type { BudgetCaps } from '../wallet/ledger.js'
 import type { LlmUsageSnapshot } from '../llm/usage.js'
+import type { DatanetYield } from '../voter/yield.js'
 
 export interface SnapshotBudget {
   mintReppoSpent: number
@@ -28,6 +29,11 @@ export interface Snapshot {
   /** LLM token usage + estimated USD cost for THIS cycle (all calls in the cycle window).
    *  Optional for back-compat with pre-feature rows. estCostUsd null = no priceable model. */
   llm?: LlmUsageSnapshot
+  /** Per-datanet emission economics from THIS cycle (rate, epoch vote volume, yield).
+   *  Copied verbatim from the cycle report — fresh each cycle, deliberately NOT merged
+   *  over the previous snapshot (a stale yield is worse than an absent one). Optional
+   *  for back-compat with pre-feature rows. */
+  datanetEconomics?: DatanetYield[]
 }
 
 const LEGACY = 'snapshot.json'
