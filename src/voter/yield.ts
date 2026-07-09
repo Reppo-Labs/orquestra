@@ -21,7 +21,10 @@ export interface DatanetYield {
   yieldPerVote: number | null
   /** true when the epoch-volume read succeeded and is 0 — nobody has voted yet this epoch. */
   uncontested: boolean
-  /** set when the datanet emits a non-REPPO token: rate is 0 but it still pays. */
+  /** set when the datanet emits a non-REPPO token: rate is 0 but it still pays.
+   *  (Assumed data invariant from the catalog — src/reppo/listDatanets.ts documents
+   *  that emissionsPerEpochREPPO is 0 whenever nativeToken is set; not enforced here,
+   *  so a datanet reporting BOTH would display only its REPPO rate.) */
   nativeTokenSymbol?: string
 }
 
