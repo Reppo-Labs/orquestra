@@ -57,4 +57,24 @@ describe('queryEpochVoteVolume', () => {
     const f = (async () => ({ ok: false, status: 502, json: async () => ({}) })) as unknown as typeof fetch
     await expect(queryEpochVoteVolume('http://rpc', ['5'], { fetchImpl: f })).rejects.toThrow(/HTTP 502/)
   })
+
+  it('JSON-RPC error body throws with the node message', async () => {
+    const f = (async () => ({
+      ok: true,
+      json: async () => ({ jsonrpc: '2.0', id: 1, error: { message: 'boom' } }),
+    })) as unknown as typeof fetch
+    await expect(queryEpochVoteVolume('http://rpc', ['5'], { fetchImpl: f })).rejects.toThrow(
+      /RPC eth_call error: boom/,
+    )
+  })
+
+  it('malformed 200 (no result, no error) throws — never a silent zero', async () => {
+    const f = (async () => ({
+      ok: true,
+      json: async () => ({ jsonrpc: '2.0', id: 1 }),
+    })) as unknown as typeof fetch
+    await expect(queryEpochVoteVolume('http://rpc', ['5'], { fetchImpl: f })).rejects.toThrow(
+      /malformed response/,
+    )
+  })
 })

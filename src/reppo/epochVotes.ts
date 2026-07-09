@@ -17,7 +17,9 @@ const word = (v: bigint): string => v.toString(16).padStart(64, '0')
 
 /** eth_call returning a uint word. Throws on transport/RPC failure — the caller must
  *  treat a throw as "volume unavailable this cycle", NEVER as zero volume (a zero would
- *  fabricate an "uncontested" datanet out of an RPC blip). */
+ *  fabricate an "uncontested" datanet out of an RPC blip). Unlike emissionsOnchain's
+ *  claim probes, these are plain view getters with no legitimate revert path, so no
+ *  revert/transient split is needed — every failure is a plain throw. */
 async function ethCallUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
   const res = await fetchImpl(url, {
     method: 'POST',
@@ -28,7 +30,11 @@ async function ethCallUint(fetchImpl: typeof fetch, url: string, to: string, dat
   const json = (await res.json()) as { result?: string; error?: { message?: string } }
   if (json?.error) throw new Error(`RPC eth_call error: ${json.error.message ?? 'unknown'}`)
   const r = json.result
-  return r && r !== '0x' ? BigInt(r) : 0n
+  // A 200 body with no `result` is a degraded/malformed response, NOT a zero — treat it
+  // like a transport failure so the caller reports "yield unavailable" instead of
+  // fabricating an uncontested datanet. Only literal '0x' (empty returndata) is 0n.
+  if (typeof r !== 'string' || r === '') throw new Error('RPC eth_call malformed response (no result)')
+  return r === '0x' ? 0n : BigInt(r)
 }
 
 export interface EpochVoteVolume { epoch: number; totalRaw: bigint }
