@@ -5,7 +5,12 @@ import type { DatanetRubric } from '../rubric/types.js'
 import { buildVotePrompt } from './score.js'
 
 describe('buildVotePrompt', () => {
-  const r = { name: 'D', goal: 'g', voterRubric: 'v' } as DatanetRubric
+  const r = {
+    name: 'D',
+    goal: 'g',
+    voterRubric: 'v',
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  } as DatanetRubric
   const pod = { podId: '1', validityEpoch: '1', name: 'p', description: 'd' }
   it('includes the operator strategy brief when provided', () => {
     const out = buildVotePrompt(pod, r, 'be contrarian on ceasefires')
@@ -17,8 +22,46 @@ describe('buildVotePrompt', () => {
   })
 })
 
+describe('buildVotePrompt datanet economics', () => {
+  const baseRubric = {
+    name: 'D',
+    goal: 'g',
+    voterRubric: 'v',
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  } as DatanetRubric
+  const pod = { podId: '1', validityEpoch: '1', name: 'p', description: 'd' }
+
+  it('renders the economics block when rubric.economics.currentYield is set', () => {
+    // Clone economics so this mutation never leaks into other tests sharing baseRubric.
+    const rubric = { ...baseRubric, economics: { ...baseRubric.economics } }
+    rubric.economics.currentYield = {
+      datanetId: 'D',
+      emissionsPerEpochReppo: 500,
+      epoch: 42,
+      epochVoteVolume: 2_000_000,
+      yieldPerVote: 500 / 2_000_000,
+      uncontested: false,
+    }
+    const built = buildVotePrompt(pod, rubric) as { system: string; prompt: string }
+    expect(built.prompt).toContain('## Datanet economics')
+    expect(built.prompt).toContain('500 REPPO per epoch')
+    // economics sit ABOVE the untrusted pod block
+    expect(built.prompt.indexOf('## Datanet economics')).toBeLessThan(built.prompt.indexOf('# Pod under review'))
+  })
+
+  it('omits the block when currentYield is absent (back-compat)', () => {
+    const built = buildVotePrompt(pod, baseRubric) as { prompt: string }
+    expect(built.prompt).not.toContain('## Datanet economics')
+  })
+})
+
 describe('buildVotePrompt — multimodal video pods', () => {
-  const r = { name: 'D', goal: 'g', voterRubric: 'v' } as DatanetRubric
+  const r = {
+    name: 'D',
+    goal: 'g',
+    voterRubric: 'v',
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  } as DatanetRubric
   const videoPart: FilePart = { type: 'file', data: 'BASE64', mimeType: 'video/mp4' }
 
   it('returns messages (rubric text + video FilePart + instruction) for a video pod', () => {

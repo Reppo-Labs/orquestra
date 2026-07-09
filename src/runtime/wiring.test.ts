@@ -605,7 +605,10 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
     h.resolveModel.mockClear()
     h.generateObjectWithRetry.mockClear()
     const deps = buildCycleDeps(w)
-    const rubric = { datanetId: '9', subnetUuid: 'u', canVote: false, canMint: true, voteRubric: '', mintSpec: 'spec', subnetDescription: '' } as unknown as DatanetRubric
+    const rubric = {
+      datanetId: '9', subnetUuid: 'u', canVote: false, canMint: true, voteRubric: '', mintSpec: 'spec', subnetDescription: '',
+      economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+    } as unknown as DatanetRubric
     const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
     await deps.candidateScorer.scoreCandidate(candidate, rubric)
     // resolveModel was driven by the LIVE effective default (config.defaultModel = usepod),
