@@ -2,6 +2,7 @@
 // single voter scorer and the multi-agent panel stay in lockstep (a guard
 // hardening or rubric-format change happens in ONE place).
 import type { DatanetRubric } from '../rubric/types.js'
+import type { DatanetYield } from '../voter/yield.js'
 
 /** Untrusted-input guard injected into every scorer/persona/judge system prompt.
  *  The scored pod text is third-party data and must never be followed as instructions. */
@@ -32,4 +33,30 @@ export function buildRubricBlock(rubric: DatanetRubric): string {
     `## Voter rubric (datanet-provided scoring guide)\n${rubric.voterRubric}\n` +
     `## Using the rubric\n${RUBRIC_GUARD}`
   )
+}
+
+/** Datanet-economics block for VOTE prompts (single scorer + the panel's vote path;
+ *  mint prompts never render it). Built from NUMERICS ONLY — the native-token symbol
+ *  is creator-controlled text and must not enter the prompt outside the guarded rubric
+ *  region. Empty string when no yield was computed (RPC-less node, mint path, tests).
+ *  Plain context by explicit operator decision: the scorer MAY weigh it (an accepted
+ *  deviation from "score STRICTLY by the rubric"). */
+export function buildEconomicsBlock(y?: DatanetYield): string {
+  if (!y) return ''
+  const parts = [
+    y.emissionsPerEpochReppo > 0
+      ? `This datanet emits ${y.emissionsPerEpochReppo} REPPO per epoch.`
+      : y.nativeTokenSymbol
+        ? 'This datanet emits 0 REPPO per epoch (it pays a non-REPPO native token instead).'
+        : 'This datanet emits 0 REPPO per epoch — it pays nothing this epoch.',
+  ]
+  if (y.epochVoteVolume !== null) {
+    parts.push(y.uncontested
+      ? `No votes have been cast yet in epoch ${y.epoch} — it is uncontested.`
+      : `Current epoch (${y.epoch}) vote volume: ${y.epochVoteVolume.toLocaleString('en-US', { maximumFractionDigits: 0 })}.`)
+    if (y.yieldPerVote !== null) {
+      parts.push(`Yield: ${y.yieldPerVote.toExponential(2)} REPPO per unit of vote weight.`)
+    }
+  }
+  return `\n## Datanet economics\n${parts.join(' ')}\n`
 }

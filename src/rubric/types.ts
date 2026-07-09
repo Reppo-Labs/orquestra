@@ -1,3 +1,5 @@
+import type { DatanetYield } from '../voter/yield.js'
+
 export class RubricUnavailableError extends Error {}
 
 /** A datanet's machine-readable policy, derived from its Reppo metadata. */
@@ -31,5 +33,10 @@ export interface DatanetRubric {
     upVoteVolume: number
     downVoteVolume: number
     nativeTokenSymbol: string
+    /** Live per-epoch yield, attached by the CYCLE after reading this epoch's vote
+     *  volume on-chain (src/voter/yield.ts) — NOT parsed from CLI metadata. Present
+     *  only once a cycle has scored votes for this datanet; prompts render it via
+     *  buildEconomicsBlock. */
+    currentYield?: DatanetYield
   }
 }
