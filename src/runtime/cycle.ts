@@ -372,19 +372,27 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // NEVER zero (a zero would fabricate "uncontested" from an RPC blip) — and never
         // aborts the datanet.
         let epochVotes: { epoch: number; totalRaw: bigint } | null = null
+        let volumeReadError: string | undefined
         try {
           epochVotes = (await deps.getEpochVoteVolume?.(pods.map((p) => p.podId))) ?? null
         } catch (e) {
-          console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${e instanceof Error ? e.message : String(e)}`)
+          volumeReadError = e instanceof Error ? e.message : String(e)
+          console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
         const yld = computeYield(datanetId, rubric.economics, epochVotes)
         rubric.economics.currentYield = yld
         datanetEconomics.push(yld)
+        // Discriminate the two "unavailable" causes in the dashboard-visible reason: an
+        // RPC failure carries its error, a node with no RPC wired shows the plain
+        // "unavailable" line — the operator on the SSH-tunneled dashboard can't read stderr.
         const yieldLine = formatYieldLine(yld)
+          + (volumeReadError ? ` — read failed: ${volumeReadError}` : '')
         console.error(`orquestra: datanet ${datanetId} — ${yieldLine}`)
         deps.recordActivity({
           ts: new Date().toISOString(), cycleId, kind: 'info', datanetId,
           reason: yieldLine, status: 'executed',
+          // structured epoch (mirrors claim rows) so dashboard consumers don't regex the reason
+          ...(yld.epoch !== null ? { epoch: yld.epoch } : {}),
         })
 
         // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
