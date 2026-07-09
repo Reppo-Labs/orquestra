@@ -33,10 +33,11 @@ export interface DatanetRubric {
     upVoteVolume: number
     downVoteVolume: number
     nativeTokenSymbol: string
-    /** Live per-epoch yield, attached by the CYCLE after reading this epoch's vote
-     *  volume on-chain (src/voter/yield.ts) — NOT parsed from CLI metadata. Present
-     *  only once a cycle has scored votes for this datanet; prompts render it via
-     *  buildEconomicsBlock. */
+    /** Live per-epoch yield, attached by the CYCLE — NOT parsed from CLI metadata.
+     *  Timing: attached right BEFORE this cycle's vote scoring (after the pod fetch,
+     *  before selectVotes), so the scorer prompt sees THIS cycle's on-chain read.
+     *  Absent until a datanet's first scoring pass; on the process-lifetime cached
+     *  rubric it is overwritten each cycle (src/voter/yield.ts, buildEconomicsBlock). */
     currentYield?: DatanetYield
   }
 }
