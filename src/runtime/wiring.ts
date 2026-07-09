@@ -248,6 +248,14 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     scoreCandidate: (cand, rub) => {
       const model = effectiveDefaultModel(w)
       if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
+      // Mint prompts must NEVER render the vote-economics block (yield is a where-to-vote
+      // signal). The cycle attaches economics.currentYield onto the process-cached rubric
+      // before VOTE scoring, and this mint screen runs later in the same datanet iteration
+      // with the SAME object — so strip it here, at the mint boundary, instead of trusting
+      // the cycle to clean up. Shallow clone: the rubric itself must stay untouched.
+      const mintRubric = rub.economics.currentYield
+        ? { ...rub, economics: { ...rub.economics, currentYield: undefined } }
+        : rub
       const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
       const candidateBase: CandidateScorer = {
         scoreCandidate: (c, r) => {
@@ -256,7 +264,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         },
       }
       const panel = createPanelCandidateScorer(candidateBase, { model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      return panel.scoreCandidate(cand, rub)
+      return panel.scoreCandidate(cand, mintRubric)
     },
   }
   // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a

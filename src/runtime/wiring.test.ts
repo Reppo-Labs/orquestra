@@ -617,4 +617,44 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
     expect(h.resolveModel).not.toHaveBeenCalledWith('virtuals', expect.anything(), expect.anything())
     expect(h.generateObjectWithRetry).toHaveBeenCalled() // a model WAS resolved + scored
   })
+
+  it('mint screen prompts never render the vote-economics block even when currentYield is attached', async () => {
+    // The cycle attaches economics.currentYield onto the PROCESS-CACHED rubric object before
+    // vote scoring; mint scoring runs later in the same datanet iteration with the SAME object.
+    // Yield is a where-to-vote signal — the mint prompt must never render it.
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: { '9': { vote: false, mint: true, strictness: 'balanced' } },
+      defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
+      deliberation: { enabled: false, votePanel: false },
+      notes: '',
+    })
+    const w = wiring({
+      config: cfg,
+      providerKeyRegistry: new Map<LlmProvider, string>([['usepod', 'tok']]),
+      defaultProvider: 'virtuals',
+      defaultModel: 'claude-opus-4-8',
+    })
+    h.generateObjectWithRetry.mockClear()
+    const deps = buildCycleDeps(w)
+    const rubric = {
+      datanetId: '9', subnetUuid: 'u', canVote: false, canMint: true, voteRubric: '', mintSpec: 'spec', subnetDescription: '',
+      economics: {
+        accessFeeReppo: 0, emissionsPerEpochReppo: 500, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO',
+        currentYield: { datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42, epochVoteVolume: 2_000_000, yieldPerVote: 0.00025, uncontested: false },
+      },
+    } as unknown as DatanetRubric
+    const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
+    await deps.candidateScorer.scoreCandidate(candidate, rubric)
+    expect(h.generateObjectWithRetry).toHaveBeenCalled()
+    // generateObjectWithRetry(model, schema, system, { prompt }) — the block must appear nowhere.
+    const [, , system, gen] = h.generateObjectWithRetry.mock.calls[0] as unknown as [unknown, unknown, string, { prompt?: string }]
+    expect(system).not.toContain('## Datanet economics')
+    expect(gen.prompt ?? '').not.toContain('## Datanet economics')
+    // The strip must be a clone at the mint boundary — the shared rubric object stays intact
+    // for the vote path.
+    expect(rubric.economics.currentYield).toBeDefined()
+  })
 })
