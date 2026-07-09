@@ -5,6 +5,7 @@ import { Nav, type TabId } from './components/Nav'
 import { PnlCards } from './components/PnlCards'
 import { EmissionsSummary } from './components/EmissionsSummary'
 import { BudgetBurn } from './components/BudgetBurn'
+import { DatanetEconomics } from './components/DatanetEconomics'
 import { StrategyTab } from './components/StrategyTab'
 import { ChatTab } from './components/ChatTab'
 import { Activity } from './components/Activity'
@@ -90,6 +91,7 @@ export function App() {
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
+            <DatanetEconomics snapshot={snap} netNames={netNames} />
           </div>
         )}
         {tab === 'strategy' && (

@@ -33,6 +33,18 @@ export interface SnapshotBudget {
 
 export interface EmissionPod { podId: string; datanetId: string; epoch: string | number; reppo: number }
 
+/** Per-datanet emission yield: REPPO emitted per unit of current-epoch vote weight.
+ *  Mirrors src/voter/yield.ts exactly. */
+export interface DatanetYield {
+  datanetId: string
+  emissionsPerEpochReppo: number
+  epoch: number | null
+  epochVoteVolume: number | null
+  yieldPerVote: number | null
+  uncontested: boolean
+  nativeTokenSymbol?: string
+}
+
 export interface LlmUsage {
   calls: number
   inputTokens: number
@@ -52,6 +64,8 @@ export interface Snapshot {
   emissionsDue: { pods: EmissionPod[] }
   /** per-cycle LLM usage + estimated cost; absent on pre-feature snapshots. */
   llm?: LlmUsage
+  /** Fresh per cycle; absent on pre-feature snapshots. */
+  datanetEconomics?: DatanetYield[]
 }
 
 export interface PanelTranscript {
@@ -62,7 +76,7 @@ export interface PanelTranscript {
 
 export interface ActivityRow {
   ts: string | number
-  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant' | 'stake'
+  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant' | 'stake' | 'info'
   datanetId?: string
   podId?: string
   canonicalKey?: string
