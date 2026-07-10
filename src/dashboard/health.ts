@@ -62,6 +62,13 @@ export function buildHealth(entries: ActivityEntry[], opts: HealthOpts = {}): He
     // Wallet-global breadcrumbs (a veREPPO 'stake' top-up) carry no datanetId — they are not
     // per-datanet activity, so they must not register a phantom datanet row or flip its idle.
     if (!e.datanetId) continue
+    // 'info' is a per-cycle economics breadcrumb (datanet yield), not activity. It is
+    // skipped BEFORE the newest-entry idle check — one info row lands per datanet per
+    // cycle, so it would otherwise always be the newest entry and mask a genuinely idle
+    // datanet. (grant/stake are excluded later: they are rare setup events.) Without
+    // this, the else-bucket below would also count info rows as executed CLAIMS and
+    // inflate txRate.
+    if (e.kind === 'info') continue
     const n = net(e.datanetId)
     // entries are newest-first: the first entry seen per datanet is its current state.
     if (!seen.has(e.datanetId)) { seen.add(e.datanetId); n.idle = e.kind === 'skip' }

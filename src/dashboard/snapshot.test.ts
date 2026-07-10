@@ -67,6 +67,15 @@ describe('snapshot', () => {
     expect(existsSync(join(dir, 'snapshot.json.imported'))).toBe(true)
   })
 
+  it('round-trips datanetEconomics', () => {
+    const s = { ...snap(), datanetEconomics: [{
+      datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
+      epochVoteVolume: 2_000_000, yieldPerVote: 0.00025, uncontested: false,
+    }] }
+    writeSnapshot(dir, s)
+    expect(readSnapshot(dir)?.datanetEconomics?.[0].yieldPerVote).toBe(0.00025)
+  })
+
   it('collectSnapshot merges over the last snapshot when a sub-call fails', async () => {
     writeSnapshot(dir, snap({ balance: { eth: 9, reppo: 9, veReppo: 9, usdc: 9 } }))
     const result = await collectSnapshot(dir, 'c2', {

@@ -31,6 +31,7 @@ import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
 import { queryEpochJson } from '../reppo/queryEpoch.js'
 import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
+import { queryEpochVoteVolume } from '../reppo/epochVotes.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
@@ -248,6 +249,14 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     scoreCandidate: (cand, rub) => {
       const model = effectiveDefaultModel(w)
       if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
+      // Mint prompts must NEVER render the vote-economics block (yield is a where-to-vote
+      // signal). The cycle attaches economics.currentYield onto the process-cached rubric
+      // before VOTE scoring, and this mint screen runs later in the same datanet iteration
+      // with the SAME object — so strip it here, at the mint boundary, instead of trusting
+      // the cycle to clean up. Shallow clone: the rubric itself must stay untouched.
+      const mintRubric = rub.economics.currentYield
+        ? { ...rub, economics: { ...rub.economics, currentYield: undefined } }
+        : rub
       const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
       const candidateBase: CandidateScorer = {
         scoreCandidate: (c, r) => {
@@ -256,7 +265,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         },
       }
       const panel = createPanelCandidateScorer(candidateBase, { model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      return panel.scoreCandidate(cand, rub)
+      return panel.scoreCandidate(cand, mintRubric)
     },
   }
   // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
@@ -438,6 +447,11 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
           readTokenBalance: (token: string, owner: string) => readTokenBalance(w.rpcUrl as string, token, owner),
         }
       : {}),
+    // Per-datanet emission-yield volume reader — a read-only call, so only rpcUrl is
+    // needed (no wallet address required, unlike the balance reader above).
+    ...(w.rpcUrl
+      ? { getEpochVoteVolume: (podIds: string[]) => queryEpochVoteVolume(w.rpcUrl as string, podIds) }
+      : {}),
   }
 }
 
@@ -511,6 +525,8 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       // Per-cycle LLM spend (tokens + est USD) — reset above, accumulated by the
       // withUsageTracking middleware on every resolved model during the cycle.
       snap.llm = snapshotLlmUsage()
+      // Per-datanet economics: fresh each cycle from the report (see Snapshot doc).
+      snap.datanetEconomics = report.datanetEconomics
       writeSnapshot(w.dataDir, snap)
     } catch (e) {
       console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)

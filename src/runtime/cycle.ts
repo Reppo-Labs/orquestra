@@ -10,6 +10,7 @@ import type { ExecResult, VoteIntent } from '../wallet/intents.js'
 import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { redactSecrets } from '../util/redact.js'
+import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
 import { selectVotes } from '../voter/select.js'
 import { allocateVoteSlots } from '../voter/allocate.js'
 import { selectMints } from '../minter/select.js'
@@ -85,6 +86,10 @@ export interface CycleDeps {
   /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
    *  top-up rather than coercing to 0 (which would over-lock the full target). */
   getVeReppo(): Promise<number | null>
+  /** Σ current-epoch vote weight across the given pods (raw 18-dec) + the epoch read.
+   *  Optional: wirings without RPC omit it. A throw or absence ⇒ yield is reported as
+   *  unavailable — never treated as zero volume, never aborts the datanet. */
+  getEpochVoteVolume?(podIds: string[]): Promise<{ epoch: number; totalRaw: bigint }>
   executor: WalletExecutor
   ledger: BudgetLedger
   recordVote(datanetId: string, podId: string): void
@@ -146,6 +151,9 @@ export interface CycleReport {
    *  phase's on-chain scan minus what it just claimed. The dashboard snapshot reuses this
    *  instead of re-scanning PodManager a second time per cycle. Empty when claiming is off. */
   emissionsDue: ClaimableEmission[]
+  /** Per-datanet emission economics computed this cycle (vote-scoring datanets only).
+   *  Fresh each cycle — the dashboard snapshot copies it verbatim, no merge-over-previous. */
+  datanetEconomics: DatanetYield[]
 }
 
 /** One swarm cycle: for each configured datanet, vote (if enabled + capable) and
@@ -158,6 +166,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // Arm the per-cycle video-pod budget once (global across datanets, not per-datanet).
   deps.resetVideoBudget?.()
   const datanets: DatanetReport[] = []
+  const datanetEconomics: DatanetYield[] = []
 
   // Per-datanet vote-slot allocation: split the per-cycle vote cap across vote-enabled
   // datanets by voteShare (largest-remainder; the '*' wildcard is excluded). Each datanet
@@ -355,6 +364,37 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           recordSkip(`vote skipped — ${scorerResult.skip}`, { activity: votes.length === 0 })
         } else {
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
+
+        // Datanet economics: this epoch's REAL vote volume on-chain (the catalog's
+        // upVoteVolume is lifetime-cumulative — useless for yield). Attached to the
+        // rubric so the scorer prompt renders it (buildEconomicsBlock), surfaced as an
+        // info breadcrumb + snapshot row. A failed/absent read ⇒ yield unavailable,
+        // NEVER zero (a zero would fabricate "uncontested" from an RPC blip) — and never
+        // aborts the datanet.
+        let epochVotes: { epoch: number; totalRaw: bigint } | null = null
+        let volumeReadError: string | undefined
+        try {
+          epochVotes = (await deps.getEpochVoteVolume?.(pods.map((p) => p.podId))) ?? null
+        } catch (e) {
+          volumeReadError = e instanceof Error ? e.message : String(e)
+          console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
+        }
+        const yld = computeYield(datanetId, rubric.economics, epochVotes)
+        rubric.economics.currentYield = yld
+        datanetEconomics.push(yld)
+        // Discriminate the two "unavailable" causes in the dashboard-visible reason: an
+        // RPC failure carries its error, a node with no RPC wired shows the plain
+        // "unavailable" line — the operator on the SSH-tunneled dashboard can't read stderr.
+        const yieldLine = formatYieldLine(yld)
+          + (volumeReadError ? ` — read failed: ${volumeReadError}` : '')
+        console.error(`orquestra: datanet ${datanetId} — ${yieldLine}`)
+        deps.recordActivity({
+          ts: new Date().toISOString(), cycleId, kind: 'info', datanetId,
+          reason: yieldLine, status: 'executed',
+          // structured epoch (mirrors claim rows) so dashboard consumers don't regex the reason
+          ...(yld.epoch !== null ? { epoch: yld.epoch } : {}),
+        })
+
         // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
         // dashboard activity here so an idle datanet explains why a pod produced no vote —
         // before this they were swallowed with only a stderr line. The reason is already
@@ -574,5 +614,5 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     }
   }
 
-  return { datanets, claims, emissionsDue }
+  return { datanets, claims, emissionsDue, datanetEconomics }
 }

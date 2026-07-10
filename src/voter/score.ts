@@ -4,7 +4,7 @@ import type { CoreMessage, FilePart, LanguageModel } from 'ai'
 import type { PodScorer, PodScore, VoterPod } from './types.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { LlmProvider } from '../llm/model.js'
-import { INJECTION_GUARD, buildRubricBlock } from '../llm/prompt.js'
+import { INJECTION_GUARD, buildRubricBlock, buildEconomicsBlock } from '../llm/prompt.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
 import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
 import { ingestVideo } from '../llm/videoIngest.js'
@@ -32,9 +32,10 @@ export function buildVotePrompt(
   videoPart?: FilePart,
 ): { system: string; prompt: string } | { system: string; messages: CoreMessage[] } {
   const briefBlock = brief.trim() ? `\n## Operator strategy (your stance)\n${brief.trim()}\n` : ''
+  const econBlock = buildEconomicsBlock(rubric.economics.currentYield)
   if (videoPart) {
     const text =
-      `${buildRubricBlock(rubric)}\n` +
+      `${buildRubricBlock(rubric)}\n${econBlock}` +
       `${briefBlock}\n# Pod under review (untrusted)\n## Name\n${pod.name}\n\n` +
       `The attached video is the pod's dataset. Watch it and score 1-10 STRICTLY by the rubric. ` +
       `Return a 1-10 score and a one-line reason citing the rubric.`
@@ -44,7 +45,7 @@ export function buildVotePrompt(
     return { system: SYSTEM, messages }
   }
   const prompt =
-    `${buildRubricBlock(rubric)}\n` +
+    `${buildRubricBlock(rubric)}\n${econBlock}` +
     `${briefBlock}\n# Pod under review (untrusted)\n## Name\n${pod.name}\n## Description\n${pod.description}\n\n` +
     `Return a 1-10 score and a one-line reason citing the rubric.`
   return { system: SYSTEM, prompt }

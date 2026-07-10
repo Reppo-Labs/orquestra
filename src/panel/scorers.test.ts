@@ -6,7 +6,10 @@ import type { CandidateScorer, CandidatePod } from '../adapter/types.js'
 import { createPanelPodScorer, createPanelCandidateScorer, type PanelScorerOpts } from './scorers.js'
 import type { PanelGenerate } from './deliberate.js'
 
-const rubric = { name: 'D', goal: 'g', voterRubric: 'v', canVote: true, canMint: true } as DatanetRubric
+const rubric = {
+  name: 'D', goal: 'g', voterRubric: 'v', canVote: true, canMint: true,
+  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+} as DatanetRubric
 const pod = { podId: '1', validityEpoch: '1', name: 'p', description: 'd' }
 const model = null as never
 
@@ -81,6 +84,34 @@ describe('createPanelPodScorer (votes, all-or-none)', () => {
     expect(judgePrompt).toContain('Learned lessons')
     expect(judgePrompt).toContain('tighten the unsourced read')
     expect(personaPrompt).not.toContain('Learned lessons')
+  })
+
+  it('threads a real DatanetYield through buildEconomicsBlock into BOTH persona and judge prompts', async () => {
+    let judgePrompt = ''
+    let personaPrompt = ''
+    const capGen: PanelGenerate = (async ({ system, prompt }) => {
+      if (system.includes('You are the JUDGE')) { judgePrompt = prompt; return { score: 6, reason: 'r' } }
+      personaPrompt = prompt
+      return { score: 6, argument: 'a' }
+    }) as PanelGenerate
+    // Clone the shared fixture — don't pollute it for the other tests.
+    const rub = {
+      ...rubric,
+      datanetId: '9',
+      economics: {
+        ...rubric.economics,
+        currentYield: {
+          datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
+          epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false,
+        },
+      },
+    } as DatanetRubric
+    const o: PanelScorerOpts = { model, getDeliberation: () => ({ enabled: true, votePanel: true }), generate: capGen }
+    await createPanelPodScorer(basePod(8), o).scorePod(pod, rub, { like: 7, dislike: 3 })
+    for (const p of [personaPrompt, judgePrompt]) {
+      expect(p).toContain('## Datanet economics')
+      expect(p).toContain('500 REPPO per epoch')
+    }
   })
 })
 

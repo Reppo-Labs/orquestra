@@ -12,6 +12,10 @@ export interface PanelInput {
   name: string
   description: string
   rubric: DatanetRubric
+  /** Pre-built datanet-economics block (llm/prompt.ts buildEconomicsBlock). Set ONLY by
+   *  the VOTE panel path — runPanel is shared with mint deliberation, where yield is
+   *  irrelevant, so this must never be derived from the rubric inside the builders. */
+  economics?: string
 }
 
 export interface Persona {
@@ -55,7 +59,7 @@ export function buildPersonaPrompt(persona: Persona, input: PanelInput): { syste
     `You are one member of a Reppo datanet voting panel. ${persona.stance} ${INJECTION_GUARD} ` +
     'Return a 1-10 score and a one-line argument (≤400 chars) citing the rubric.'
   const prompt =
-    `${buildRubricBlock(input.rubric)}\n\n` +
+    `${buildRubricBlock(input.rubric)}${input.economics ?? ''}\n\n` +
     `# Pod under review (untrusted)\n## Name\n${input.name}\n## Description\n${input.description}\n\n` +
     `Score 1-10 from your assigned stance and give a one-line argument citing the rubric.`
   return { system, prompt }

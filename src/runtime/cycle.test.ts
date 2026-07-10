@@ -873,3 +873,60 @@ describe('runCycle per-datanet vote scorer', () => {
     expect(skipReasons(d.recordActivity as any).some((r) => /no API key for google/.test(r))).toBe(true)
   })
 })
+
+describe('datanet yield', () => {
+  // Single vote-enabled datanet (mirrors the simplest passing vote test's arrangement:
+  // rubric canVote true, getPodsAndFilter returns ≥1 pod via the deps() factory default)
+  // so datanetEconomics has exactly one entry per assertion below.
+  const yieldCfg = StrategyConfigSchema.parse({
+    horizonDays: 30, cadenceHours: 6,
+    stake: { lockReppo: 0, lockDurationDays: 30 },
+    budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+    datanets: { '9': { vote: true, mint: false, strictness: 'aggressive' } },
+  })
+
+  it('computes yield, attaches to rubric, records an info row, reports economics', async () => {
+    const recordActivity = vi.fn()
+    let capturedRubric: DatanetRubric | undefined
+    const d = deps({
+      recordActivity,
+      // Capture the exact rubric object handed to the scorer so we can assert
+      // currentYield was attached to it (not to some other copy).
+      getRubric: vi.fn(async (id: string) => {
+        capturedRubric = rubric({ datanetId: id })
+        return capturedRubric
+      }),
+      getEpochVoteVolume: vi.fn(async (podIds: string[]) => {
+        expect(podIds.length).toBeGreaterThan(0) // called with the fetched pods
+        return { epoch: 7, totalRaw: 2n * 10n ** 18n }
+      }),
+    })
+    const report = await runCycle(yieldCfg, 'c1', d)
+    expect(report.datanetEconomics).toHaveLength(1)
+    expect(report.datanetEconomics[0]).toMatchObject({ epoch: 7, epochVoteVolume: 2 })
+    const info = recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')
+    expect(info).toBeDefined()
+    expect(info.status).toBe('executed')
+    expect(info.reason).toContain('epoch 7')
+    expect(capturedRubric?.economics.currentYield?.epoch).toBe(7)
+  })
+
+  it('volume read throws: yield unavailable, datanet still votes, cycle unaffected', async () => {
+    const recordActivity = vi.fn()
+    const d = deps({
+      recordActivity,
+      getEpochVoteVolume: vi.fn(async () => { throw new Error('rpc down') }),
+    })
+    const report = await runCycle(yieldCfg, 'c1', d)
+    expect(report.datanets[0].error).toBeUndefined()      // per-datanet isolation held
+    expect(report.datanetEconomics[0].yieldPerVote).toBeNull()
+    const info = recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')
+    expect(info.reason).toContain('yield unavailable')
+  })
+
+  it('dep absent (no RPC): yield row still emitted as unavailable', async () => {
+    const recordActivity = vi.fn()
+    const report = await runCycle(yieldCfg, 'c1', deps({ recordActivity }))
+    expect(report.datanetEconomics[0].epochVoteVolume).toBeNull()
+  })
+})

@@ -100,6 +100,21 @@ describe('buildHealth', () => {
     expect(report.txRate).toEqual({ executed: 0, failed: 0, rate: null })
   })
 
+  it('info rows are invisible to health: not counted, and never mask idleness', () => {
+    const report = buildHealth([
+      // newest: this cycle's economics breadcrumb
+      { ts: '2026-07-09T12:00:02Z', cycleId: 'c2', kind: 'info', datanetId: '9', reason: '500 REPPO/epoch · epoch 42 vote volume 0 — uncontested', status: 'executed' },
+      // next-newest REAL entry is a skip → the datanet IS idle
+      { ts: '2026-07-09T12:00:01Z', cycleId: 'c2', kind: 'skip', datanetId: '9', reason: 'no votable pods', status: 'skipped' },
+      { ts: '2026-07-09T11:00:00Z', cycleId: 'c1', kind: 'vote', datanetId: '9', status: 'executed' },
+    ] as ActivityEntry[])
+    const n = report.datanets.find((d) => d.datanetId === '9')!
+    expect(n.idle).toBe(true)                                       // info did NOT mask the skip
+    expect(n.claims).toEqual({ executed: 0, refused: 0, error: 0 }) // info NOT bucketed as a claim
+    expect(n.txRate.executed).toBe(1)                               // only the real vote counts
+    expect(n.skips).toBe(1)
+  })
+
   it('windowing: ignores entries older than sinceMs while keeping newer ones', () => {
     const now = Date.parse('2026-06-09T12:00:00.000Z')
     const report = buildHealth([

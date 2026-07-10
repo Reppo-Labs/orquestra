@@ -183,6 +183,7 @@ td { font-size: 13px; }
 .pill.skip { background: var(--panel-hi); color: var(--warn); }
 .pill.grant { background: var(--accent-soft); color: var(--accent-hi); }
 .pill.stake { background: rgba(179, 154, 229, 0.14); color: var(--claim); }
+.pill.info { background: var(--panel-hi); color: var(--muted); }
 
 /* ── Buttons ──────────────────────────────────────────────────────────── */
 .btn {
