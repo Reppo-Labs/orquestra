@@ -98,13 +98,15 @@ export interface HealthDatanet {
   datanetId: string
   votes: HealthCounts
   mints: HealthCounts
+  /** emission-claim outcomes; absent on older nodes. */
+  claims?: HealthCounts
   txRate?: TxRate
   skips?: number
   topErrors: { code: string; count: number }[]
   idle?: boolean
   lastSkipReason?: string
 }
-export interface Health { datanets: HealthDatanet[]; txRate?: TxRate }
+export interface Health { datanets: HealthDatanet[]; txRate?: TxRate; entriesScanned?: number }
 
 export interface Earn {
   earning: boolean
@@ -201,6 +203,13 @@ export async function loadAll(): Promise<DashData> {
     earn,
     netNames: netNames || {},
   }
+}
+
+/** 7-day reliability view (mirrors GET /api/health → src/dashboard/health.ts buildHealth).
+ *  Degrades to null on any error — the Health tab shows an unavailable state, and a
+ *  transiently failing poll never wipes an already-rendered panel with a crash. */
+export async function loadHealth(): Promise<Health | null> {
+  return getJson<Health | null>('/api/health', null)
 }
 
 /** Platform agent identity as served by /api/agent — never includes the apiKey. */

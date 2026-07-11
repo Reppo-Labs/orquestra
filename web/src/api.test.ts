@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { loadAll, loadModels } from './api'
+import { loadAll, loadHealth, loadModels } from './api'
 
 const res = (status: number, body: unknown) =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response
@@ -58,6 +58,39 @@ describe('loadAll resilience', () => {
     expect(data.activity).toHaveLength(1)
     expect(data.config).toEqual({ horizonDays: 7 })
     expect(data.netNames).toEqual({ '9': 'Hyperliquid' })
+  })
+})
+
+describe('loadHealth', () => {
+  const report = {
+    entriesScanned: 12,
+    datanets: [{
+      datanetId: '9',
+      votes: { executed: 3, refused: 1, error: 1 },
+      mints: { executed: 1, refused: 0, error: 0 },
+      claims: { executed: 0, refused: 0, error: 0 },
+      skips: 2,
+      topErrors: [{ code: 'TX_REVERTED', count: 1 }],
+      lastSkipReason: 'no rubric',
+      idle: false,
+      txRate: { executed: 4, failed: 1, rate: 0.8 },
+    }],
+    txRate: { executed: 4, failed: 1, rate: 0.8 },
+  }
+  it('passes through a 200 health report', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res(200, report)))
+    const out = await loadHealth()
+    expect(out?.datanets[0].datanetId).toBe('9')
+    expect(out?.datanets[0].txRate?.rate).toBe(0.8)
+    expect(out?.datanets[0].topErrors).toEqual([{ code: 'TX_REVERTED', count: 1 }])
+  })
+  it('degrades to null on an HTTP error — the Health tab shows unavailable, never crashes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res(500, { error: 'boom' })))
+    expect(await loadHealth()).toBeNull()
+  })
+  it('degrades to null on a network failure', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    expect(await loadHealth()).toBeNull()
   })
 })
 

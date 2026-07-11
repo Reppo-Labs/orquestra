@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { Pnl, Snapshot } from '../api'
 import { fmt, sign } from '../lib/format'
 import { Tip } from './Tip'
@@ -46,6 +46,7 @@ function llmCost(s: Snapshot): { v: ReactNode; sub?: string } {
 }
 
 export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapshot | null }) {
+  const [showModels, setShowModels] = useState(false) // hooks run unconditionally — before the loading return
   // First paint (nothing loaded yet): shape-matched shimmer instead of a wall of
   // dashes, so the layout reads as "loading", not "empty node".
   const loading = pnl === null && snapshot === null
@@ -75,15 +76,54 @@ export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapsho
     [<VeReppoLabel key="ve" />, snapshot ? fmt(snapshot.balance.veReppo) : '—'],
     ['Epoch', ep ? String(ep.epoch) : '—', false, ep ? `${Math.max(0, Math.round(ep.secondsRemaining / 3600))}h left` : undefined],
   ]
+  // Cost-by-model drilldown: costliest first, unpriced models last (still counted).
+  const byModel = Object.entries(snapshot?.llm?.byModel ?? {})
+    .sort(([, a], [, b]) => (b.estCostUsd ?? -1) - (a.estCostUsd ?? -1) || b.calls - a.calls)
   return (
-    <div className="cards stagger">
-      {cards.map(([k, v, hero, sub], i) => (
-        <div className={`card ${hero ? 'hero' : ''}`} key={i}>
-          <div className="k">{k}</div>
-          <div className="v">{v}</div>
-          {sub && <div className="sub">{sub}</div>}
+    <>
+      <div className="cards stagger">
+        {cards.map(([k, v, hero, sub], i) => (
+          <div className={`card ${hero ? 'hero' : ''}`} key={i}>
+            <div className="k">{k}</div>
+            <div className="v">{v}</div>
+            {sub && <div className="sub">{sub}</div>}
+          </div>
+        ))}
+      </div>
+      {byModel.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <button
+            className="link-btn"
+            aria-expanded={showModels}
+            aria-controls="llm-by-model"
+            onClick={() => setShowModels((s) => !s)}
+          >
+            {showModels ? 'hide' : 'show'} LLM cost by model ({byModel.length})
+          </button>
+          {showModels && (
+            <div className="panel-box" id="llm-by-model" style={{ marginTop: 8 }}>
+              <table>
+                <thead><tr><th>Model</th><th>Calls</th><th>Tokens in</th><th>Tokens out</th><th>Est. cost</th></tr></thead>
+                <tbody>
+                  {byModel.map(([model, m]) => (
+                    <tr key={model}>
+                      <td className="mono net-cell" title={model}>{model}</td>
+                      <td className="mono">{m.calls}</td>
+                      <td className="mono">{fmt(m.inputTokens)}</td>
+                      <td className="mono">{fmt(m.outputTokens)}</td>
+                      <td className="mono">
+                        {m.estCostUsd === null
+                          ? <span className="faint">no list price</span>
+                          : m.estCostUsd > 0 && m.estCostUsd < 0.01 ? '<$0.01' : `$${m.estCostUsd.toFixed(2)}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      ))}
-    </div>
+      )}
+    </>
   )
 }

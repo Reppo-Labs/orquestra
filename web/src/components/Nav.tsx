@@ -4,13 +4,14 @@ import { fmt, epochLabel, sign } from '../lib/format'
 import { Tip } from './Tip'
 import { RunNowButton } from './RunNowButton'
 
-export type TabId = 'overview' | 'strategy' | 'chat' | 'activity' | 'learning'
+export type TabId = 'overview' | 'strategy' | 'chat' | 'activity' | 'health' | 'learning'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'strategy', label: 'Strategy' },
   { id: 'chat', label: 'Assistant' },
   { id: 'activity', label: 'Activity' },
+  { id: 'health', label: 'Health' },
   { id: 'learning', label: 'Learning' },
 ]
 
