@@ -86,11 +86,11 @@ describe('runCycle video-pod skips', () => {
     expect(skip!.reason).toContain('never reached ACTIVE')
   })
 
-  it('arms the per-cycle video budget once via resetVideoBudget', async () => {
-    const resetVideoBudget = vi.fn()
-    const d = deps({ resetVideoBudget })
+  it('arms the per-cycle video budget once via beginCycle', async () => {
+    const beginCycle = vi.fn()
+    const d = deps({ beginCycle })
     await runCycle(config, 'cyc-reset', d)
-    expect(resetVideoBudget).toHaveBeenCalledTimes(1)
+    expect(beginCycle).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -885,17 +885,21 @@ describe('datanet yield', () => {
     datanets: { '9': { vote: true, mint: false, strictness: 'aggressive' } },
   })
 
-  it('computes yield, attaches to rubric, records an info row, reports economics', async () => {
+  it('computes yield onto a vote-scoped rubric clone (shared rubric NOT mutated), records an info row, reports economics', async () => {
     const recordActivity = vi.fn()
-    let capturedRubric: DatanetRubric | undefined
+    let sharedRubric: DatanetRubric | undefined
+    let scorerRubric: DatanetRubric | undefined
     const d = deps({
       recordActivity,
-      // Capture the exact rubric object handed to the scorer so we can assert
-      // currentYield was attached to it (not to some other copy).
+      // Capture BOTH the shared (process-cached in production) rubric object and the
+      // rubric the scorer receives: yield must ride a vote-scoped CLONE — mutating the
+      // shared object leaked the vote-only economics block into the mint path (which
+      // had to defensively strip it) and into later cycles.
       getRubric: vi.fn(async (id: string) => {
-        capturedRubric = rubric({ datanetId: id })
-        return capturedRubric
+        sharedRubric = rubric({ datanetId: id })
+        return sharedRubric
       }),
+      voteScorerFor: () => ({ scorer: { scorePod: async (_pod, r) => { scorerRubric = r; return { score: 9, reason: 'good' } } } }),
       getEpochVoteVolume: vi.fn(async (podIds: string[]) => {
         expect(podIds.length).toBeGreaterThan(0) // called with the fetched pods
         return { epoch: 7, totalRaw: 2n * 10n ** 18n }
@@ -908,7 +912,11 @@ describe('datanet yield', () => {
     expect(info).toBeDefined()
     expect(info.status).toBe('executed')
     expect(info.reason).toContain('epoch 7')
-    expect(capturedRubric?.economics.currentYield?.epoch).toBe(7)
+    // The scorer saw the yield on its rubric (a clone of the shared object)…
+    expect(scorerRubric?.economics.currentYield?.epoch).toBe(7)
+    expect(scorerRubric).not.toBe(sharedRubric)
+    // …while the shared rubric stayed untouched (mint path + later cycles reuse it).
+    expect(sharedRubric?.economics.currentYield).toBeUndefined()
   })
 
   it('volume read throws: yield unavailable, datanet still votes, cycle unaffected', async () => {

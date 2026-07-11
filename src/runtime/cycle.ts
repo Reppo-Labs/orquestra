@@ -6,7 +6,7 @@ import type { PodScorer, VoterPod, VoteFilter } from '../voter/types.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import { MINT_REPPO_FALLBACK } from '../wallet/executor.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
-import type { ExecResult, VoteIntent } from '../wallet/intents.js'
+import type { ExecResult, VoteIntent, ClaimIntent } from '../wallet/intents.js'
 import type { ClaimableEmission } from '../reppo/queryEmissionsDue.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { redactSecrets } from '../util/redact.js'
@@ -71,10 +71,11 @@ export interface CycleDeps {
   topN: number
   getRubric(datanetId: string): Promise<DatanetRubric>
   getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
-  /** Reset the per-CYCLE video-pod budget. Called once at the start of each runCycle so the
-   *  `videoPodsPerCycle` cap is global across datanets, not re-armed per datanet. Optional:
-   *  tests/wirings without video support omit it. */
-  resetVideoBudget?(): void
+  /** Arm per-cycle wiring state. Called once at the start of each runCycle so the
+   *  `videoPodsPerCycle` budget and the cycle's activity-history snapshot are global
+   *  across datanets, not re-armed per datanet. Optional: tests/wirings without that
+   *  state omit it. */
+  beginCycle?(): void
   getAdapter(adapterId: string): DatanetAdapter | undefined
   /** Per-datanet vote scorer factory. Returns the scorer to use for THIS datanet, or a
    *  skip reason (e.g. no API key for the datanet's chosen provider) — the cycle records
@@ -134,6 +135,161 @@ export interface CycleDeps {
   walletAddress?: string
 }
 
+/** Persist a structured skip row (kind:'skip') — the one shape every skip path shares.
+ *  The dashboard health panel and lastSkipReason are derived from these rows. `podId`
+ *  scopes a per-pod scoring skip; absent for datanet-level skips. */
+function recordSkipActivity(deps: CycleDeps, cycleId: string, datanetId: string, reason: string, podId?: string): void {
+  deps.recordActivity({
+    ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
+    ...(podId !== undefined ? { podId } : {}),
+    reason, status: 'skipped',
+  })
+}
+
+type SubnetAccessResult = { status: 'ok' } | { status: 'skipped'; reason: string }
+
+/** Subnet access is a one-time prerequisite for both voting and minting. Grant it once
+ *  per subnet (cached) before either. A datanet whose metadata predates the subnet model
+ *  (empty subnetUuid) can't be granted and is left to proceed/fail naturally.
+ *  grant-access is keyed by the INTEGER datanet id (the `--datanet <id>` arg), NOT the
+ *  subnet uuid; subnetUuid presence just signals the datanet uses the access model.
+ *  Without access every vote/mint reverts on-chain (VOTER_LACKS_SUBNET_ACCESS) — but
+ *  only AFTER paying for pod fetching and LLM scoring. So a failed/refused grant returns
+ *  'skipped' (the caller skips the datanet for this cycle instead of proceeding); it
+ *  resumes automatically the cycle after a grant succeeds (e.g. once the wallet has
+ *  funds for the fee). Skip reasons are recorded here; the caller only threads the
+ *  reason into the report. */
+async function ensureSubnetAccess(
+  datanetId: string,
+  policy: { vote: boolean; mint: boolean },
+  rubric: DatanetRubric,
+  cycleId: string,
+  deps: CycleDeps,
+): Promise<SubnetAccessResult> {
+  if (!(policy.vote || policy.mint) || !rubric.subnetUuid || !deps.grantedSubnets || !deps.recordGrant) {
+    return { status: 'ok' } // gate not applicable — proceed
+  }
+  const granted = await deps.grantedSubnets()
+  if (granted.has(datanetId)) return { status: 'ok' }
+  const skip = (reason: string): SubnetAccessResult => {
+    console.error(`orquestra: datanet ${datanetId} skipped — ${reason}`)
+    recordSkipActivity(deps, cycleId, datanetId, reason)
+    return { status: 'skipped', reason }
+  }
+  // Fee currency comes from the rubric: a non-REPPO access fee (accessFeeToken set)
+  // must be paid via `grant-access --token primary`. That CLI flag only exists in
+  // reppo >=0.8.5, so gate it on the startup-derived capability flag (fail-closed):
+  // an older CLI would error on the unknown flag, so skip the datanet with a clear
+  // reason instead — per-datanet isolation, never abort the cycle. REPPO-fee
+  // datanets (the common case) take the unchanged 'reppo' path with no gate.
+  const feeToken = rubric.economics.accessFeeToken
+  if (feeToken && !deps.supportsNonReppoGrants) {
+    return skip(`non-REPPO access fee needs reppo CLI ≥ 0.8.5 (this datanet charges ${feeToken.amount} ${feeToken.symbol} for access)`)
+  }
+  // Non-REPPO fee + a balance reader configured: confirm the wallet holds enough of
+  // the primary token BEFORE paying. The CLI also pre-flights this, but it costs gas
+  // to reach that revert; checking here lets us record a clean per-datanet skip and
+  // resume automatically once the operator funds the wallet (we never acquire the
+  // token). RAW-to-RAW: compare the rubric's raw integer amount (amountRaw, straight
+  // from the CLI's accessFeePrimaryToken.raw) against the raw on-chain balance — no
+  // float scaling, so no precision over-estimate and no decimals=0 defeat.
+  // When no reader is wired (no RPC), fall through — the CLI still fails closed.
+  if (feeToken && deps.readTokenBalance && deps.walletAddress) {
+    const required = BigInt(feeToken.amountRaw)
+    let balance: bigint | undefined
+    try {
+      balance = await deps.readTokenBalance(feeToken.address, deps.walletAddress)
+    } catch (e) {
+      // A failed balance read is NOT proof of insufficiency — don't skip on it.
+      // Fall through to the grant attempt (CLI fails closed); just note the read miss.
+      console.error(`orquestra: datanet ${datanetId} — ${feeToken.symbol} balance read failed, proceeding to grant (CLI will pre-flight): ${(e as Error).message}`)
+    }
+    if (balance !== undefined && balance < required) {
+      return skip(`insufficient ${feeToken.symbol} balance for access fee (need ${feeToken.amount} ${feeToken.symbol}) — fund this node's wallet with ${feeToken.symbol}`)
+    }
+  }
+  const gr = await deps.executor.executeGrantAccess(datanetId, feeToken ? 'primary' : 'reppo')
+  if (gr.status !== 'executed') {
+    return skip(`subnet access not granted (grant-access ${gr.status}: ${gr.detail ?? ''})`)
+  }
+  deps.recordGrant(datanetId)
+  // Surface the grant (and the fee paid) as an activity breadcrumb so the
+  // dashboard Activity view shows e.g. "Granted access — paid 50 EXY". Prefer the
+  // receipt-derived ACTUAL the executor read from the CLI result (gr.feePaid), then
+  // the on-chain quote (gr.feeAmount), then the rubric's expected amount; note REPPO
+  // for the common path. Label with the CLI's fee-token symbol when present, else the
+  // rubric's. 'already granted' (no fee charged) says so.
+  const feeQty = gr.feePaid ?? gr.feeAmount
+  const feeSym = gr.feeToken?.symbol ?? feeToken?.symbol
+  const feePaid = feeQty !== undefined
+    ? `paid ${feeQty} ${feeSym ?? ''}`.trimEnd()
+    : feeToken
+      ? `paid ${feeToken.amount} ${feeToken.symbol}`
+      : 'paid in REPPO'
+  const reason = gr.detail === 'already granted'
+    ? 'granted access (already granted — no fee charged)'
+    : `granted access — ${feePaid}`
+  console.error(`orquestra: datanet ${datanetId} — ${reason}`)
+  // kind:'grant' (NOT 'skip'): a successful grant is setup, not idleness. Logging
+  // it as a skip would inflate the skip count and could surface "granted access" as
+  // lastSkipReason / mark the datanet idle in buildHealth — see src/dashboard/health.ts.
+  deps.recordActivity({
+    ts: new Date().toISOString(), cycleId, kind: 'grant', datanetId,
+    reason, status: 'executed', txHash: gr.txHash, gasEth: gr.gasEth,
+  })
+  return { status: 'ok' }
+}
+
+/** Claim every unclaimed (pod, epoch) in `due`, recording activity + dedup. One loop
+ *  serves both claim kinds — OWNER (pods we minted) and VOTER (pods we curated) — which
+ *  differ only in the executor method, the dedup/idempotency key prefixes, and the
+ *  activity detail label. `seen` is the SHARED claimed-key set: mutated in place so a
+ *  duplicate (pod,epoch) in the same list isn't re-claimed this cycle, and so the
+ *  caller's post-claim filtering sees exactly what was claimed.
+ *  Per-claim isolation: one failing claim never aborts the rest of the phase.
+ *  Dedup is recorded ONLY on confirmed execution: a transiently-failed claim SHOULD
+ *  retry next cycle — unclaimed emissions are money left on the table, and the chain
+ *  rejects an already-claimed (pod,epoch). */
+async function claimPhase(
+  due: ClaimableEmission[],
+  seen: Set<string>,
+  cycleId: string,
+  deps: CycleDeps,
+  opts: {
+    /** dedup-key prefix: '' (owner) or 'voter-' — voter keys never collide with owner
+     *  keys for the same (pod,epoch). */
+    keyPrefix: string
+    /** intent idempotencyKey prefix: 'claim-' (owner) or 'claim-voter-'. */
+    idempotencyPrefix: string
+    execute: (intent: ClaimIntent) => Promise<ExecResult>
+    /** activity detail label — owner passes r.detail through; voter prefixes it. */
+    detail: (r: ExecResult) => string | undefined
+  },
+): Promise<ExecResult[]> {
+  const results: ExecResult[] = []
+  for (const em of due) {
+    const key = `${opts.keyPrefix}${em.podId}:${em.epoch}`
+    if (seen.has(key)) continue
+    let r: ExecResult
+    try {
+      r = await opts.execute({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, token: em.token, idempotencyKey: `${opts.idempotencyPrefix}${em.podId}-${em.epoch}` })
+    } catch (e) {
+      r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
+    }
+    results.push(r)
+    deps.recordActivity({
+      ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
+      // Prefer the actual claimed REPPO read from the tx receipt (em.reppo is 0 under
+      // on-chain detection — PodManager V2 has no pre-claim amount view).
+      podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
+      claimedTokenSymbol: r.tokenClaimed?.symbol, claimedTokenAmount: r.tokenClaimed?.amount,
+      status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: opts.detail(r),
+    })
+    if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
+  }
+  return results
+}
+
 export interface DatanetReport {
   datanetId: string
   votes: ExecResult[]
@@ -163,8 +319,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // aborts the cycle — fail-closed inside maybeTopUpStake.
   await maybeTopUpStake(config, cycleId, deps)
   deps.ledger.startCycle(cycleId)
-  // Arm the per-cycle video-pod budget once (global across datanets, not per-datanet).
-  deps.resetVideoBudget?.()
+  // Arm per-cycle wiring state once (video-pod budget + activity snapshot — global
+  // across datanets, not per-datanet).
+  deps.beginCycle?.()
   const datanets: DatanetReport[] = []
   const datanetEconomics: DatanetYield[] = []
 
@@ -234,9 +391,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // still records the skip so the dashboard explains why it is idle.
     const recordSkip = (reason: string, opts: { activity?: boolean } = {}): void => {
       console.error(`orquestra: datanet ${datanetId} — ${reason}`)
-      if (opts.activity !== false) {
-        deps.recordActivity({ ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId, reason, status: 'skipped' })
-      }
+      if (opts.activity !== false) recordSkipActivity(deps, cycleId, datanetId, reason)
     }
 
     // Per-datanet isolation: a failure here (RPC error, rubric unavailable on an
@@ -245,103 +400,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       const rubric = await deps.getRubric(datanetId)
 
-      // Subnet access is a one-time prerequisite for both voting and minting. Grant it
-      // once per subnet (cached) before either. A datanet whose metadata predates the
-      // subnet model (empty subnetUuid) can't be granted and is left to proceed/fail
-      // naturally.
-      // grant-access is keyed by the INTEGER datanet id (the `--datanet <id>` arg), NOT the
-      // subnet uuid; subnetUuid presence just signals the datanet uses the access model.
-      // Without access every vote/mint reverts on-chain (VOTER_LACKS_SUBNET_ACCESS) — but
-      // only AFTER paying for pod fetching and LLM scoring. So a failed/refused grant
-      // skips the datanet for this cycle instead of proceeding; it resumes automatically
-      // the cycle after a grant succeeds (e.g. once the wallet has funds for the fee).
-      if ((policy.vote || policy.mint) && rubric.subnetUuid && deps.grantedSubnets && deps.recordGrant) {
-        const granted = await deps.grantedSubnets()
-        if (!granted.has(datanetId)) {
-          // Fee currency comes from the rubric: a non-REPPO access fee (accessFeeToken set)
-          // must be paid via `grant-access --token primary`. That CLI flag only exists in
-          // reppo >=0.8.5, so gate it on the startup-derived capability flag (fail-closed):
-          // an older CLI would error on the unknown flag, so skip the datanet with a clear
-          // reason instead — per-datanet isolation, never abort the cycle. REPPO-fee
-          // datanets (the common case) take the unchanged 'reppo' path with no gate.
-          const feeToken = rubric.economics.accessFeeToken
-          if (feeToken && !deps.supportsNonReppoGrants) {
-            const skipped = `non-REPPO access fee needs reppo CLI ≥ 0.8.5 (this datanet charges ${feeToken.amount} ${feeToken.symbol} for access)`
-            console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
-            deps.recordActivity({
-              ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
-              reason: skipped, status: 'skipped',
-            })
-            datanets.push({ datanetId, votes, mints, skipped })
-            continue
-          }
-          // Non-REPPO fee + a balance reader configured: confirm the wallet holds enough of
-          // the primary token BEFORE paying. The CLI also pre-flights this, but it costs gas
-          // to reach that revert; checking here lets us record a clean per-datanet skip and
-          // resume automatically once the operator funds the wallet (we never acquire the
-          // token). RAW-to-RAW: compare the rubric's raw integer amount (amountRaw, straight
-          // from the CLI's accessFeePrimaryToken.raw) against the raw on-chain balance — no
-          // float scaling, so no precision over-estimate and no decimals=0 defeat.
-          // When no reader is wired (no RPC), fall through — the CLI still fails closed.
-          if (feeToken && deps.readTokenBalance && deps.walletAddress) {
-            const required = BigInt(feeToken.amountRaw)
-            let balance: bigint | undefined
-            try {
-              balance = await deps.readTokenBalance(feeToken.address, deps.walletAddress)
-            } catch (e) {
-              // A failed balance read is NOT proof of insufficiency — don't skip on it.
-              // Fall through to the grant attempt (CLI fails closed); just note the read miss.
-              console.error(`orquestra: datanet ${datanetId} — ${feeToken.symbol} balance read failed, proceeding to grant (CLI will pre-flight): ${(e as Error).message}`)
-            }
-            if (balance !== undefined && balance < required) {
-              const skipped = `insufficient ${feeToken.symbol} balance for access fee (need ${feeToken.amount} ${feeToken.symbol}) — fund this node's wallet with ${feeToken.symbol}`
-              console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
-              deps.recordActivity({
-                ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
-                reason: skipped, status: 'skipped',
-              })
-              datanets.push({ datanetId, votes, mints, skipped })
-              continue
-            }
-          }
-          const gr = await deps.executor.executeGrantAccess(datanetId, feeToken ? 'primary' : 'reppo')
-          if (gr.status === 'executed') {
-            deps.recordGrant(datanetId)
-            // Surface the grant (and the fee paid) as an activity breadcrumb so the
-            // dashboard Activity view shows e.g. "Granted access — paid 50 EXY". Prefer the
-            // receipt-derived ACTUAL the executor read from the CLI result (gr.feePaid), then
-            // the on-chain quote (gr.feeAmount), then the rubric's expected amount; note REPPO
-            // for the common path. Label with the CLI's fee-token symbol when present, else the
-            // rubric's. 'already granted' (no fee charged) says so.
-            const feeQty = gr.feePaid ?? gr.feeAmount
-            const feeSym = gr.feeToken?.symbol ?? feeToken?.symbol
-            const feePaid = feeQty !== undefined
-              ? `paid ${feeQty} ${feeSym ?? ''}`.trimEnd()
-              : feeToken
-                ? `paid ${feeToken.amount} ${feeToken.symbol}`
-                : 'paid in REPPO'
-            const reason = gr.detail === 'already granted'
-              ? 'granted access (already granted — no fee charged)'
-              : `granted access — ${feePaid}`
-            console.error(`orquestra: datanet ${datanetId} — ${reason}`)
-            // kind:'grant' (NOT 'skip'): a successful grant is setup, not idleness. Logging
-            // it as a skip would inflate the skip count and could surface "granted access" as
-            // lastSkipReason / mark the datanet idle in buildHealth — see src/dashboard/health.ts.
-            deps.recordActivity({
-              ts: new Date().toISOString(), cycleId, kind: 'grant', datanetId,
-              reason, status: 'executed', txHash: gr.txHash, gasEth: gr.gasEth,
-            })
-          } else {
-            const skipped = `subnet access not granted (grant-access ${gr.status}: ${gr.detail ?? ''})`
-            console.error(`orquestra: datanet ${datanetId} skipped — ${skipped}`)
-            deps.recordActivity({
-              ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
-              reason: skipped, status: 'skipped',
-            })
-            datanets.push({ datanetId, votes, mints, skipped })
-            continue
-          }
-        }
+      // One-time subnet access grant (fee gating, balance pre-check, grant, breadcrumb) —
+      // see ensureSubnetAccess. A skip here stops the datanet BEFORE pod fetching and LLM
+      // scoring are paid for; it resumes automatically once a later grant succeeds.
+      const access = await ensureSubnetAccess(datanetId, policy, rubric, cycleId, deps)
+      if (access.status === 'skipped') {
+        datanets.push({ datanetId, votes, mints, skipped: access.reason })
+        continue
       }
 
       if (policy.vote && !rubric.canVote) {
@@ -366,9 +431,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         const { pods, filter } = await deps.getPodsAndFilter(datanetId)
 
         // Datanet economics: this epoch's REAL vote volume on-chain (the catalog's
-        // upVoteVolume is lifetime-cumulative — useless for yield). Attached to the
-        // rubric so the scorer prompt renders it (buildEconomicsBlock), surfaced as an
-        // info breadcrumb + snapshot row. A failed/absent read ⇒ yield unavailable,
+        // upVoteVolume is lifetime-cumulative — useless for yield). Attached to a
+        // vote-scoped rubric clone so the scorer prompt renders it (buildEconomicsBlock),
+        // surfaced as an info breadcrumb + snapshot row. A failed/absent read ⇒ yield unavailable,
         // NEVER zero (a zero would fabricate "uncontested" from an RPC blip) — and never
         // aborts the datanet.
         let epochVotes: { epoch: number; totalRaw: bigint } | null = null
@@ -380,8 +445,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
         const yld = computeYield(datanetId, rubric.economics, epochVotes)
-        rubric.economics.currentYield = yld
         datanetEconomics.push(yld)
+        // Yield is a VOTE-ONLY prompt signal. Hand the scorer a per-datanet CLONE carrying
+        // currentYield instead of mutating the process-cached rubric — the same cached
+        // object is reused by this datanet's mint path (which must never render yield)
+        // and by every later cycle.
+        const voteRubric: DatanetRubric = { ...rubric, economics: { ...rubric.economics, currentYield: yld } }
         // Discriminate the two "unavailable" causes in the dashboard-visible reason: an
         // RPC failure carries its error, a node with no RPC wired shows the plain
         // "unavailable" line — the operator on the SSH-tunneled dashboard can't read stderr.
@@ -399,11 +468,8 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // dashboard activity here so an idle datanet explains why a pod produced no vote —
         // before this they were swallowed with only a stderr line. The reason is already
         // redacted by selectVotes.
-        const intents = await selectVotes(datanetId, pods, rubric, policy.strictness, filter, scorerResult.scorer,
-          (podId, reason) => deps.recordActivity({
-            ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
-            podId, reason: `pod scoring skipped — ${reason}`, status: 'skipped',
-          }))
+        const intents = await selectVotes(datanetId, pods, voteRubric, policy.strictness, filter, scorerResult.scorer,
+          (podId, reason) => recordSkipActivity(deps, cycleId, datanetId, `pod scoring skipped — ${reason}`, podId))
         // Pass 1: cast up to this datanet's vote-share slot; stash the rest for the post-loop
         // redistribution. A refused-budget result (global cap hit) leaves the intent pending
         // too; the single deferral breadcrumb is emitted after Pass 2, not per pod.
@@ -492,10 +558,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       console.error(redactSecrets(`orquestra: datanet ${datanetId} skipped — ${error}`))
       // Record the failure as a skip activity entry too: without it the dashboard's
       // health/idle panels can't tell "erroring every cycle" from "quietly fine".
-      deps.recordActivity({
-        ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
-        reason: `datanet error: ${error}`, status: 'skipped',
-      })
+      recordSkipActivity(deps, cycleId, datanetId, `datanet error: ${error}`)
       datanets.push({ datanetId, votes, mints, error })
     }
   }
@@ -532,11 +595,8 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // A single deferral breadcrumb per datanet whose pods couldn't all be voted this cycle
     // (retried next cycle — dedup is recorded only on executed).
     for (const [id, arr] of leftoverIntents) {
-      if (arr.length > 0) deps.recordActivity({
-        ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId: id,
-        reason: `vote rate/budget cap reached — ${arr.length} vote${arr.length === 1 ? '' : 's'} deferred to next cycle`,
-        status: 'skipped',
-      })
+      if (arr.length > 0) recordSkipActivity(deps, cycleId, id,
+        `vote rate/budget cap reached — ${arr.length} vote${arr.length === 1 ? '' : 's'} deferred to next cycle`)
     }
   }
 
@@ -554,31 +614,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
     }
     const seen = await deps.seenClaims()
-    for (const em of due) {
-      const key = `${em.podId}:${em.epoch}`
-      if (seen.has(key)) continue
-      // Per-claim isolation: one failing claim never aborts the rest of the phase.
-      let r: ExecResult
-      try {
-        r = await deps.executor.executeClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, token: em.token, idempotencyKey: `claim-${em.podId}-${em.epoch}` })
-      } catch (e) {
-        r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
-      }
-      claims.push(r)
-      deps.recordActivity({
-        ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
-        // Prefer the actual claimed REPPO read from the tx receipt (em.reppo is 0 under
-        // on-chain detection — PodManager V2 has no pre-claim amount view).
-        podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
-        claimedTokenSymbol: r.tokenClaimed?.symbol, claimedTokenAmount: r.tokenClaimed?.amount,
-        status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
-      })
-      // Record dedup ONLY on confirmed execution: a transiently-failed claim SHOULD retry
-      // next cycle — unclaimed emissions are money left on the table, and the chain
-      // rejects an already-claimed (pod,epoch). Mark in-memory `seen` too so a duplicate
-      // (pod,epoch) in the same `due` list isn't re-claimed this cycle.
-      if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
-    }
+    claims.push(...await claimPhase(due, seen, cycleId, deps, {
+      keyPrefix: '', idempotencyPrefix: 'claim-',
+      execute: (i) => deps.executor.executeClaim(i),
+      detail: (r) => r.detail,
+    }))
     // Post-claim OWNER claimable: the scan result minus every (pod,epoch) now in `seen` (either
     // already-claimed before this cycle or claimed just now). The dashboard reads this — no
     // second on-chain scan — so "claimable" reflects exactly what a claim attempt didn't clear.
@@ -593,25 +633,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     } catch (e) {
       console.error(`orquestra: voter emissions-due query failed, voter-claim skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
     }
-    for (const em of voterDue) {
-      const key = `voter-${em.podId}:${em.epoch}`
-      if (seen.has(key)) continue
-      let r: ExecResult
-      try {
-        r = await deps.executor.executeVoterClaim({ kind: 'claim', datanetId: em.datanetId, podId: em.podId, epoch: em.epoch, reppoDue: em.reppo, token: em.token, idempotencyKey: `claim-voter-${em.podId}-${em.epoch}` })
-      } catch (e) {
-        r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
-      }
-      claims.push(r)
-      deps.recordActivity({
-        ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
-        podId: em.podId, epoch: em.epoch, reppoClaimed: r.reppoClaimed ?? em.reppo,
-        claimedTokenSymbol: r.tokenClaimed?.symbol, claimedTokenAmount: r.tokenClaimed?.amount,
-        status: r.status, txHash: r.txHash, gasEth: r.gasEth,
-        detail: r.detail ? `voter · ${r.detail}` : 'voter emissions',
-      })
-      if (r.status === 'executed') { deps.recordClaim(key); seen.add(key) }
-    }
+    claims.push(...await claimPhase(voterDue, seen, cycleId, deps, {
+      keyPrefix: 'voter-', idempotencyPrefix: 'claim-voter-',
+      execute: (i) => deps.executor.executeVoterClaim(i),
+      detail: (r) => r.detail ? `voter · ${r.detail}` : 'voter emissions',
+    }))
   }
 
   return { datanets, claims, emissionsDue, datanetEconomics }

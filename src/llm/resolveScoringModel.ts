@@ -1,8 +1,11 @@
 // src/llm/resolveScoringModel.ts — pure per-datanet/per-pod scoring-model resolution.
 // Returns { model } to score, or { skip } with an operator-readable reason (reused by
 // the cycle's per-datanet skip/record mechanism — fail-closed, never aborts a cycle).
-// The video branch is here so Phase B (video ingest) only flips `isVideo`; in Phase A
-// callers always pass isVideo=false.
+// The video path is LIVE: datanet-level resolution (wiring.ts voteScorerFor) passes
+// isVideo=false as a model-resolution seam — it picks the text scorer's model, not a
+// feature flag. Video pods are detected + marked in wiring's getPodsAndFilter, and the
+// per-pod path (voter/score.ts, via ScorerModelCtx) re-resolves with isVideo=true so a
+// video pod scores on a Gemini model; panel/scorers.ts bypasses the panel for them.
 import type { LanguageModel } from 'ai'
 import { resolveModel, type LlmProvider } from './model.js'
 
@@ -13,7 +16,9 @@ export const VIDEO_DEFAULT_MODEL = 'gemini-3.1-pro-preview'
 export interface ResolveScoringInput {
   /** The datanet's explicit override (config.datanets[id].model), if any. */
   policyModel?: { provider: LlmProvider; model: string }
-  /** True when the pod under review is a video (Phase B). Phase A always passes false. */
+  /** True for the per-pod video re-resolution (voter/score.ts). Datanet-level callers
+   *  (wiring.ts voteScorerFor) always pass false — a model-resolution seam, not a
+   *  feature flag: the video path is live. */
   isVideo: boolean
   /** provider → apiKey, from buildProviderKeyRegistry. */
   registry: Map<LlmProvider, string>
