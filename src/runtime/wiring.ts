@@ -38,6 +38,7 @@ import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type S
 import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
 import { collectOutcomes } from '../learn/collect.js'
+import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
 import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
@@ -548,10 +549,19 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         .map((e) => e.podName as string)
       const currentEpoch = Number(snap?.epoch?.epoch ?? -1)
       const votes: OwnPodVote[] = []
+      // Own-pod ids per datanet, for the econ collector's owner-claim attribution below.
+      // Scope is the SAME learnDatanets loop collectOutcomes already runs (vote- or mint-
+      // enabled datanets) — this is the broadest own-pod data the cycle fetches; a datanet
+      // neither voted nor minted on this cycle has no OwnPodVote[] in scope at all. Built for
+      // EVERY learn-datanet (not just mint-enabled ones) so owner claims still attribute
+      // after mint is turned off for a datanet whose pods are still earning emissions.
+      const ownPodIdsByDatanet = new Map<string, Set<string>>()
       for (const id of learnDatanets) {
         let all: OwnPodVote[]
         try { all = await queryDatanetPodVotes(id) } catch (e) { console.error(`orquestra: pod-votes query failed for datanet ${id}: ${(e as Error).message}`); continue }
-        if (config.datanets[id]?.mint) votes.push(...selectOurPods(all, ourNames)) // earn signal: our minted pods only
+        const ours = selectOurPods(all, ourNames)
+        ownPodIdsByDatanet.set(id, new Set(ours.map((p) => p.podId)))
+        if (config.datanets[id]?.mint) votes.push(...ours) // earn signal: our minted pods only
         // Observe step: match matured votes/mints to these tallies. Best-effort, and
         // reusing the array we just fetched — no extra CLI call. Skipped when learning is
         // disabled for the datanet (operator veto stops DB churn, not just injection) or
@@ -559,6 +569,15 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         if (currentEpoch > 0 && getLearnEnabled(w.dataDir, id)) {
           try { collectOutcomes(w.dataDir, id, all, currentEpoch) } catch (e) { console.error(`orquestra: learn collect failed for ${id} (non-fatal): ${(e as Error).message}`) }
         }
+      }
+      // Economics half of the learn loop — ONE call per cycle (not per datanet): buckets
+      // this tick's newly-executed claim/mint/vote activity into per-(datanet, epoch) REPPO
+      // totals. Reuses the epoch info the snapshot ABOVE already fetched via queryEpochJson
+      // (read back off the just-written snapshot row) — no second on-chain query. Best-effort:
+      // a collector failure must never abort the cycle or the rest of this learn block.
+      if (currentEpoch > 0 && snap?.epoch) {
+        try { collectEconomics(w.dataDir, ownPodIdsByDatanet, snap.epoch) }
+        catch (e) { console.error(`orquestra: econ collect failed (non-fatal): ${(e as Error).message}`) }
       }
       const summary = earnSummary(activity, snap?.emissionsDue ?? { totalReppo: 0, pods: [] }, votes)
       writeEarnStatus(w.dataDir, { ...summary, ts: new Date().toISOString() })

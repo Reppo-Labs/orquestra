@@ -27,6 +27,16 @@ export function LessonsPanel({ id, label, view, busy, onToggle, onVeto }: {
           ? 'gathering data — no matured outcomes yet'
           : `${s.maturedTotal} matured · votes aligned ${s.voteAlignmentPct}% (${s.voteTotal}) · mints net-up ${s.mintAlignmentPct}% (${s.mintTotal}) · high-conviction reversals ${s.highConvictionReversals}`}
       </div>
+      {view.econ && (
+        <div className="dim" style={{ fontSize: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>
+            mint ROI {view.econ.mintRoiPct ?? '—'}% ({view.econ.ownerClaimedReppo}/{view.econ.mintCostReppo} REPPO)
+            {' · voter '}{view.econ.voterReppoPerVote?.toExponential(1) ?? '—'} REPPO/vote
+            {' · yield '}{view.econ.latestYieldPerVote?.toExponential(1) ?? '—'}
+          </span>
+          {view.econ.latestUncontested && <span className="econ-badge uncontested">uncontested</span>}
+        </div>
+      )}
       {!view.enabled ? (
         <div className="empty">learning disabled for this datanet — lessons are not injected</div>
       ) : view.lessons.length === 0 ? (

@@ -15,6 +15,7 @@ import type { CandidatePod } from '../adapter/types.js'
 // never reach these). Shared spies via vi.hoisted so the factories can reference them.
 const h = vi.hoisted(() => ({
   collectOutcomes: vi.fn(() => 0),
+  collectEconomics: vi.fn(() => 0),
   runReflection: vi.fn(async () => {}),
   queryDatanetPodVotes: vi.fn(async () => [] as unknown[]),
   // Spy on model resolution so the mint-default test can assert WHICH provider/key/slug the
@@ -30,6 +31,7 @@ const h = vi.hoisted(() => ({
 // CLI in unit tests (its variable spawn latency intermittently blew the 5s tick timeout).
 vi.mock('../reppo/listDatanets.js', () => ({ listDatanetsJson: vi.fn(async () => []) }))
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
+vi.mock('../learn/econ.js', () => ({ collectEconomics: h.collectEconomics }))
 vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
 vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))
 vi.mock('../dashboard/snapshot.js', () => ({
@@ -443,9 +445,11 @@ describe('buildTick config hot-reload', () => {
 describe('buildTick self-learning (reporting path)', () => {
   beforeEach(() => {
     h.collectOutcomes.mockClear()
+    h.collectEconomics.mockClear()
     h.runReflection.mockClear()
     h.queryDatanetPodVotes.mockClear()
     h.collectOutcomes.mockImplementation(() => 0)
+    h.collectEconomics.mockImplementation(() => 0)
   })
 
   const learnDeps = (w: CycleWiring) => buildCycleDeps({
@@ -491,6 +495,25 @@ describe('buildTick self-learning (reporting path)', () => {
 
   it('a thrown collectOutcomes never aborts the tick (best-effort)', async () => {
     h.collectOutcomes.mockImplementation(() => { throw new Error('boom') })
+    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await expect(tick()).resolves.toBeUndefined()
+  })
+
+  it('collects economics ONCE per tick with an own-pod-id Map and the already-fetched epoch info', async () => {
+    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await tick()
+    expect(h.collectEconomics).toHaveBeenCalledTimes(1)
+    const [calledDir, ownPodIdsByDatanet, epochInfo] = h.collectEconomics.mock.calls[0] as unknown as [string, Map<string, Set<string>>, { epoch: number }]
+    expect(calledDir).toBe(dir)
+    expect(ownPodIdsByDatanet).toBeInstanceOf(Map)
+    expect(ownPodIdsByDatanet.has('2')).toBe(true) // the one learn-datanet in `config`
+    expect(epochInfo).toMatchObject({ epoch: 5 }) // reused from the snapshot's epoch, not a fresh query
+  })
+
+  it('a thrown collectEconomics never aborts the tick (best-effort)', async () => {
+    h.collectEconomics.mockImplementation(() => { throw new Error('boom') })
     const w = wiring({ learnModel: {} as CycleWiring['model'] })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
