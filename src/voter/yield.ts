@@ -30,6 +30,10 @@ export interface DatanetYield {
    *  that emissionsPerEpochREPPO is 0 whenever nativeToken is set; not enforced here,
    *  so a datanet reporting BOTH would display only its REPPO rate.) */
   nativeTokenSymbol?: string
+  /** why the epoch-volume read was unavailable (RPC error text), set by the cycle on a
+   *  failed read. Absent when the read succeeded OR when no RPC is wired — the dashboard
+   *  distinguishes "read failed: <err>" from a plain "unavailable" (RPC-less node). */
+  unavailableReason?: string
 }
 
 /** The economics subset computeYield reads (structural — avoids importing DatanetRubric,

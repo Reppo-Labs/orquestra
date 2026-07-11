@@ -91,11 +91,12 @@ export function App() {
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
-            <DatanetEconomics snapshot={snap} netNames={netNames} />
+            <DatanetEconomics snapshot={snap} netNames={netNames} onGoToStrategy={() => setTab('strategy')} />
           </div>
         )}
         {tab === 'strategy' && (
-          <StrategyTab strategy={strategy} netNames={netNames} onReconfigure={() => setReconfiguring(true)} />
+          <StrategyTab strategy={strategy} netNames={netNames} economics={snap?.datanetEconomics}
+            onReconfigure={() => setReconfiguring(true)} />
         )}
         {/* Kept mounted (hidden when off-tab) so the conversation, draft input, and
             scroll position survive switching tabs. */}

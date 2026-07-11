@@ -885,7 +885,7 @@ describe('datanet yield', () => {
     datanets: { '9': { vote: true, mint: false, strictness: 'aggressive' } },
   })
 
-  it('computes yield, attaches to rubric, records an info row, reports economics', async () => {
+  it('computes yield, attaches to rubric, reports economics — and writes NO activity row', async () => {
     const recordActivity = vi.fn()
     let capturedRubric: DatanetRubric | undefined
     const d = deps({
@@ -904,14 +904,14 @@ describe('datanet yield', () => {
     const report = await runCycle(yieldCfg, 'c1', d)
     expect(report.datanetEconomics).toHaveLength(1)
     expect(report.datanetEconomics[0]).toMatchObject({ epoch: 7, epochVoteVolume: 2 })
-    const info = recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')
-    expect(info).toBeDefined()
-    expect(info.status).toBe('executed')
-    expect(info.reason).toContain('epoch 7')
+    expect(report.datanetEconomics[0].unavailableReason).toBeUndefined()
+    // Yield is STATE (snapshot-only) — it must NOT spam the activity log: one info row
+    // per datanet per cycle drowned the real vote/mint/claim events.
+    expect(recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')).toBeUndefined()
     expect(capturedRubric?.economics.currentYield?.epoch).toBe(7)
   })
 
-  it('volume read throws: yield unavailable, datanet still votes, cycle unaffected', async () => {
+  it('volume read throws: yield unavailable with the error, datanet still votes', async () => {
     const recordActivity = vi.fn()
     const d = deps({
       recordActivity,
@@ -920,13 +920,15 @@ describe('datanet yield', () => {
     const report = await runCycle(yieldCfg, 'c1', d)
     expect(report.datanets[0].error).toBeUndefined()      // per-datanet isolation held
     expect(report.datanetEconomics[0].yieldPerVote).toBeNull()
-    const info = recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')
-    expect(info.reason).toContain('yield unavailable')
+    // The failure detail rides the snapshot (dashboard chips), not an activity row.
+    expect(report.datanetEconomics[0].unavailableReason).toBe('rpc down')
+    expect(recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')).toBeUndefined()
   })
 
-  it('dep absent (no RPC): yield row still emitted as unavailable', async () => {
+  it('dep absent (no RPC): yield reported unavailable WITHOUT a failure reason', async () => {
     const recordActivity = vi.fn()
     const report = await runCycle(yieldCfg, 'c1', deps({ recordActivity }))
     expect(report.datanetEconomics[0].epochVoteVolume).toBeNull()
+    expect(report.datanetEconomics[0].unavailableReason).toBeUndefined() // not wired ≠ failed
   })
 })
