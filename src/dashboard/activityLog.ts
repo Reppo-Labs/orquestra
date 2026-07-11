@@ -18,8 +18,10 @@ export interface ActivityEntry {
   //  "granted access — paid 50 EXY"). Distinct from 'skip' so a successful grant is
   //  NOT counted as idleness/skip in buildHealth. The `kind` column is plain TEXT, so
   //  this needs no DDL change. (db.ts activity.kind has no CHECK constraint.)
-  // 'info' = a per-cycle datanet-economics breadcrumb (emission yield). Excluded from
-  //  ALL health aggregation — see the early continue in buildHealth.
+  // 'info' = HISTORICAL ONLY — a per-cycle datanet-economics breadcrumb (emission
+  //  yield) written by v0.3.5 nodes; no longer produced (yield is state and now rides
+  //  the snapshot only — see runCycle's stderr-only note). Kept in the union so old DB
+  //  rows still type/render; excluded from ALL health aggregation (buildHealth).
   kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant' | 'stake' | 'info'
   datanetId: string
   podId?: string

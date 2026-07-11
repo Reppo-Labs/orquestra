@@ -925,6 +925,21 @@ describe('datanet yield', () => {
     expect(recordActivity.mock.calls.map((c) => c[0]).find((e) => e.kind === 'info')).toBeUndefined()
   })
 
+  it('volume read error is REDACTED before it reaches the snapshot (dashboard path)', async () => {
+    // unavailableReason rides the snapshot to the dashboard — a path with no redaction
+    // of its own (activity rows are scrubbed on write; the snapshot is not). An RPC
+    // error can echo the full provider URL including the embedded API key.
+    const d = deps({
+      getEpochVoteVolume: vi.fn(async () => {
+        throw new Error('Invalid URL: https://eth-mainnet.g.alchemy.com/v2/SUPERSECRETKEY123')
+      }),
+    })
+    const report = await runCycle(yieldCfg, 'c1', d)
+    const reason = report.datanetEconomics[0].unavailableReason ?? ''
+    expect(reason).not.toContain('SUPERSECRETKEY123')
+    expect(reason).toContain('alchemy.com') // host survives; only the key is scrubbed
+  })
+
   it('dep absent (no RPC): yield reported unavailable WITHOUT a failure reason', async () => {
     const recordActivity = vi.fn()
     const report = await runCycle(yieldCfg, 'c1', deps({ recordActivity }))

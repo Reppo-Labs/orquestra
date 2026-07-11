@@ -43,7 +43,11 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
                 <span className="yield-net">{netLabel(y.datanetId, netNames)}</span>
                 {y.uncontested
                   ? <span className="econ-badge uncontested">uncontested — first voter takes epoch {y.epoch}</span>
-                  : <span className="yield-num mono">⚡ {y.yieldPerVote!.toExponential(2)}/vote</span>}
+                  // yieldPerVote is null for native-token datanets (rate 0 in REPPO terms)
+                  // even when contested — never assert non-null here (crashed the SPA).
+                  : y.yieldPerVote === null
+                    ? <span className="yield-num mono muted">pays {y.nativeTokenSymbol ?? '?'} (native)</span>
+                    : <span className="yield-num mono">⚡ {y.yieldPerVote.toExponential(2)}/vote</span>}
                 <span className="yield-ctx muted">
                   {y.emissionsPerEpochReppo > 0
                     ? `${y.emissionsPerEpochReppo.toLocaleString()} REPPO/epoch`

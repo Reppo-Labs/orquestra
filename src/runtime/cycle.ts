@@ -367,22 +367,25 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
 
         // Datanet economics: this epoch's REAL vote volume on-chain (the catalog's
         // upVoteVolume is lifetime-cumulative — useless for yield). Attached to the
-        // rubric so the scorer prompt renders it (buildEconomicsBlock), surfaced as an
-        // info breadcrumb + snapshot row. A failed/absent read ⇒ yield unavailable,
-        // NEVER zero (a zero would fabricate "uncontested" from an RPC blip) — and never
-        // aborts the datanet.
+        // rubric so the scorer prompt renders it (buildEconomicsBlock) and reported on
+        // the snapshot. A failed/absent read ⇒ yield unavailable, NEVER zero (a zero
+        // would fabricate "uncontested" from an RPC blip) — and never aborts the datanet.
         let epochVotes: { epoch: number; totalRaw: bigint } | null = null
         let volumeReadError: string | undefined
         try {
           epochVotes = (await deps.getEpochVoteVolume?.(pods.map((p) => p.podId))) ?? null
         } catch (e) {
-          volumeReadError = e instanceof Error ? e.message : String(e)
+          // Redact BEFORE the text leaves this scope: unavailableReason rides the
+          // snapshot to the dashboard, a path with no redaction of its own (unlike
+          // activity rows, which redactEntry scrubs on write) — an RPC error can echo
+          // the full --rpc-url including an embedded provider API key.
+          volumeReadError = redactSecrets(e instanceof Error ? e.message : String(e))
           console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
         const yld = computeYield(datanetId, rubric.economics, epochVotes)
         // Discriminate the two "unavailable" causes for the dashboard: an RPC failure
-        // carries its error, an RPC-less node shows plain "unavailable" — the operator
-        // on the SSH-tunneled dashboard can't read stderr.
+        // carries its (redacted) error, an RPC-less node shows plain "unavailable" —
+        // the operator on the SSH-tunneled dashboard can't read stderr.
         if (volumeReadError) yld.unavailableReason = volumeReadError
         rubric.economics.currentYield = yld
         datanetEconomics.push(yld)
