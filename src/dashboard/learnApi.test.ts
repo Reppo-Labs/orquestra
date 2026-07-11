@@ -128,16 +128,17 @@ describe('POST /api/learn/proposals/:id', () => {
     expect(JSON.parse(readConfigText(dir)!).datanets['9']).toBeUndefined()
   })
 
-  it('a schema-invalid vote_share result is not written (safeParse gate unchanged)', async () => {
-    // -5 fails the schema's positive-int constraint — simulates a corrupted/adversarial
-    // proposal row reaching decideProposal directly (bypassing reflect.ts's own guard).
-    const id = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '1', toValue: '-5' })
+  // Apply-time re-validation: insertion-time validation lives in reflect.ts; these
+  // simulate a corrupted/adversarial proposals row reaching decideProposal directly.
+  it.each(['-5', '3abc', '15'])('an invalid vote_share toValue (%s) is rejected unwritten and stays pending', async (toValue) => {
+    const id = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '1', toValue })
     const before = readConfigText(dir)
     const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
     expect(r.status).toBe(409)
     expect(r.body).toMatchObject({ ok: false })
-    expect(r.body.error).toMatch(/validation/)
-    expect(readConfigText(dir)).toBe(before) // unwritten
+    expect(r.body.error).toMatch(/invalid/)
+    expect(readConfigText(dir)).toBe(before) // unwritten ('3abc' must not truncate-apply as 3)
+    expect(readProposals(dir, { status: 'pending' })).toHaveLength(1) // NOT marked accepted
   })
 })
 

@@ -205,7 +205,16 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
     if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
     dn.mint = prop.toValue === 'true'
   } else {
-    // vote_share
+    // vote_share — RE-VALIDATE at apply time. Insertion-time validation lives in
+    // reflect.ts; this re-check defends against a corrupted/adversarial proposals row
+    // reaching decideProposal directly (parseInt('3abc') would truncate-apply as 3, and
+    // the config schema deliberately has no upper bound — operators may set any positive
+    // int by hand, so safeParse below would NOT catch an out-of-range proposal). Same
+    // handling as a schema-parse failure: no write, no status change.
+    const n = parseInt(prop.toValue, 10)
+    if (!/^\d+$/.test(prop.toValue) || n < 1 || n > 10) {
+      return { ok: false, error: 'invalid vote_share value in proposal — not applied' }
+    }
     const liveValue = String(cfg.datanets[prop.datanetId]?.voteShare ?? 1)
     if (liveValue !== prop.fromValue) {
       setProposalStatus(dataDir, id, 'stale')

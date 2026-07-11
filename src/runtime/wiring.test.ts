@@ -16,6 +16,7 @@ import type { CandidatePod } from '../adapter/types.js'
 const h = vi.hoisted(() => ({
   collectOutcomes: vi.fn(() => 0),
   collectEconomics: vi.fn(() => 0),
+  queryEpochJson: vi.fn(async () => ({ epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 })),
   runReflection: vi.fn(async () => {}),
   queryDatanetPodVotes: vi.fn(async () => [] as unknown[]),
   // Spy on model resolution so the mint-default test can assert WHICH provider/key/slug the
@@ -32,6 +33,9 @@ const h = vi.hoisted(() => ({
 vi.mock('../reppo/listDatanets.js', () => ({ listDatanetsJson: vi.fn(async () => []) }))
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
 vi.mock('../learn/econ.js', () => ({ collectEconomics: h.collectEconomics }))
+// The tick reads the epoch ONCE via queryEpochJson (shared by snapshot + econ collector);
+// stub it so unit ticks never spawn the real `reppo` CLI.
+vi.mock('../reppo/queryEpoch.js', () => ({ queryEpochJson: h.queryEpochJson }))
 vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
 vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))
 vi.mock('../dashboard/snapshot.js', () => ({
@@ -446,6 +450,7 @@ describe('buildTick self-learning (reporting path)', () => {
   beforeEach(() => {
     h.collectOutcomes.mockClear()
     h.collectEconomics.mockClear()
+    h.queryEpochJson.mockClear()
     h.runReflection.mockClear()
     h.queryDatanetPodVotes.mockClear()
     h.collectOutcomes.mockImplementation(() => 0)
@@ -517,6 +522,16 @@ describe('buildTick self-learning (reporting path)', () => {
     const w = wiring({ learnModel: {} as CycleWiring['model'] })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
+  })
+
+  it('defers econ collection when the epoch read fails (stale-epoch guard) and resumes next tick', async () => {
+    h.queryEpochJson.mockRejectedValueOnce(new Error('rpc down'))
+    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
+    await expect(tick()).resolves.toBeUndefined() // cycle unaffected by the failed read
+    expect(h.collectEconomics).not.toHaveBeenCalled() // never bucket into a stale merged epoch
+    await tick() // read recovers → the watermark-held backlog is collected now
+    expect(h.collectEconomics).toHaveBeenCalledTimes(1)
   })
 })
 
