@@ -6,15 +6,41 @@
 //   voter claims  → the datanet of OUR vote row for that podId (voter claims pay
 //                   for votes on OTHERS' pods)
 //   unattributable → datanetId '' (kept visible in totals, never silently dropped)
-// Mint/vote rows carry datanetId but no epoch → bucketed to the CURRENT epoch at
-// collect time. Buckets are ADDITIVE; the activity-id watermark guarantees each row
-// is counted exactly once across cycles.
+// Mint/vote rows carry datanetId but no epoch → their epoch is derived from the
+// row's own ts against the current epoch window (epochAt), so a backlog collected
+// late still lands in the epoch the action actually happened in. Buckets are
+// ADDITIVE; the activity-id watermark guarantees each row is counted exactly once
+// across cycles.
 import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { getDb } from '../dashboard/db.js'
 import { addEconDeltas, getEconWatermark, setEconWatermark, type EconEpochRow } from './store.js'
 
+/** Subset of src/reppo/queryEpoch.ts EpochInfo the collector needs to place a
+ *  timestamp in an epoch. epochStart is unix SECONDS. */
+export interface EconEpochInfo {
+  epoch: number
+  epochStart: number
+  epochDurationSeconds: number
+}
+
+/** Discriminator for voter-claim activity rows. cycle.ts writes claim details as
+ *  'voter · …' / 'voter emissions' for voter claims; owner-claim details never
+ *  contain it. This couples us to that free text — keep the two in sync. */
+export const VOTER_CLAIM_DETAIL = 'voter'
+
 function emptyBucket(datanetId: string, epoch: number): EconEpochRow {
   return { datanetId, epoch, ownerClaimedReppo: 0, voterClaimedReppo: 0, mintCostReppo: 0, mintCount: 0, votesCast: 0 }
+}
+
+/** Epoch a wall-clock timestamp fell in, derived from the CURRENT epoch's start.
+ *  ts within the current epoch → epoch; older → walk back whole durations. Falls
+ *  back to the current epoch when duration is 0/invalid (never NaN buckets). */
+function epochAt(tsIso: string, e: EconEpochInfo): number {
+  const ts = Date.parse(tsIso) / 1000
+  if (!Number.isFinite(ts) || e.epochDurationSeconds <= 0) return e.epoch
+  if (ts >= e.epochStart) return e.epoch
+  const back = Math.ceil((e.epochStart - ts) / e.epochDurationSeconds)
+  return Math.max(0, e.epoch - back)
 }
 
 /** Which of ownPodIdsByDatanet's sets contains podId, or '' when none does (or podId
@@ -33,7 +59,7 @@ export function bucketEconomics(
   rows: (ActivityEntry & { id?: number })[],
   ownPodIdsByDatanet: Map<string, Set<string>>,
   voteDatanetByPodId: Map<string, string>,
-  currentEpoch: number,
+  epochInfo: EconEpochInfo,
 ): EconEpochRow[] {
   const buckets = new Map<string, EconEpochRow>()
   const bucketFor = (datanetId: string, epoch: number): EconEpochRow => {
@@ -50,8 +76,10 @@ export function bucketEconomics(
     if (row.status !== 'executed') continue
 
     if (row.kind === 'claim') {
-      const epoch = row.epoch ?? currentEpoch
-      const isVoterClaim = (row.detail ?? '').includes('voter')
+      // Claims are per (pod, epoch) — trust the row's own epoch; ts-derived fallback
+      // only when a claim row somehow lacks one.
+      const epoch = row.epoch ?? epochAt(row.ts, epochInfo)
+      const isVoterClaim = (row.detail ?? '').includes(VOTER_CLAIM_DETAIL)
       if (isVoterClaim) {
         const datanetId = voteDatanetByPodId.get(row.podId ?? '') ?? ''
         bucketFor(datanetId, epoch).voterClaimedReppo += row.reppoClaimed ?? 0
@@ -60,11 +88,11 @@ export function bucketEconomics(
         bucketFor(datanetId, epoch).ownerClaimedReppo += row.reppoClaimed ?? 0
       }
     } else if (row.kind === 'mint') {
-      const b = bucketFor(row.datanetId, currentEpoch)
+      const b = bucketFor(row.datanetId, epochAt(row.ts, epochInfo))
       b.mintCostReppo += row.reppoSpent ?? 0
       b.mintCount += 1
     } else if (row.kind === 'vote') {
-      bucketFor(row.datanetId, currentEpoch).votesCast += 1
+      bucketFor(row.datanetId, epochAt(row.ts, epochInfo)).votesCast += 1
     }
     // other kinds ('skip', 'grant', 'stake', 'info') carry no economics — ignored.
   }
@@ -91,6 +119,9 @@ function toEntry(r: RawEconActivityRow): ActivityEntry & { id: number } {
     id: r.id,
     ts: r.ts ?? '',
     cycleId: r.cycleId ?? '',
+    // The casts on kind/status are safe because the SQL WHERE clause is the enforcing
+    // filter (status='executed' AND kind IN ('claim','mint','vote')) — only rows
+    // already matching the union values reach this mapping.
     kind: (r.kind ?? '') as ActivityEntry['kind'],
     datanetId: r.datanetId ?? '',
     podId: r.podId ?? undefined,
@@ -109,7 +140,7 @@ function toEntry(r: RawEconActivityRow): ActivityEntry & { id: number } {
 export function collectEconomics(
   dataDir: string,
   ownPodIdsByDatanet: Map<string, Set<string>>,
-  currentEpoch: number,
+  epochInfo: EconEpochInfo,
 ): number {
   const d = getDb(dataDir)
   const watermark = getEconWatermark(dataDir)
@@ -121,13 +152,15 @@ export function collectEconomics(
   if (raw.length === 0) return 0
 
   // Full history — voter claims can arrive many epochs after the vote that earned them.
+  // ORDER BY id + Map insertion ⇒ the LAST vote row for a pod wins (a re-vote's datanet
+  // supersedes older rows; in practice a pod belongs to one datanet, so ties are moot).
   const voteRows = d.prepare(
-    "SELECT DISTINCT podId, datanetId FROM activity WHERE kind = 'vote' AND podId IS NOT NULL",
+    "SELECT podId, datanetId FROM activity WHERE kind = 'vote' AND podId IS NOT NULL ORDER BY id",
   ).all() as unknown as { podId: string; datanetId: string }[]
   const voteDatanetByPodId = new Map(voteRows.map((r) => [r.podId, r.datanetId]))
 
   const entries = raw.map(toEntry)
-  const buckets = bucketEconomics(entries, ownPodIdsByDatanet, voteDatanetByPodId, currentEpoch)
+  const buckets = bucketEconomics(entries, ownPodIdsByDatanet, voteDatanetByPodId, epochInfo)
   const lastId = raw[raw.length - 1].id
 
   d.exec('BEGIN')

@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS activity (
   claimedTokenSymbol TEXT, claimedTokenAmount REAL
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
+-- (kind, podId): the econ collector's per-cycle voteDatanetByPodId query
+-- (kind='vote' AND podId IS NOT NULL) would full-scan activity otherwise.
+CREATE INDEX IF NOT EXISTS idx_activity_kind_pod ON activity(kind, podId);
 
 CREATE TABLE IF NOT EXISTS earn_status (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, cycleId TEXT, data TEXT NOT NULL
