@@ -38,6 +38,32 @@ describe('StrategyConfigSchema', () => {
   })
 })
 
+describe('StrategyConfig budget/stake ceilings (caps are the real security boundary)', () => {
+  it('rejects mintReppoMax above the 1M ceiling, accepts at the ceiling', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintReppoMax: 1_000_001 } })).toThrow()
+    expect(StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintReppoMax: 1_000_000 } }).budget.mintReppoMax).toBe(1_000_000)
+  })
+  it('rejects voteRateMaxPerCycle above the 1000 ceiling, accepts at the ceiling', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, voteRateMaxPerCycle: 1_001 } })).toThrow()
+    expect(StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, voteRateMaxPerCycle: 1_000 } }).budget.voteRateMaxPerCycle).toBe(1_000)
+  })
+  it('rejects mintRateMaxPerCycle above the 1000 ceiling', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintRateMaxPerCycle: 1_001 } })).toThrow()
+  })
+  it('rejects gas caps above the 10 ETH ceiling (all three)', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, voteGasEthMax: 11 } })).toThrow()
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintGasEthMax: 11 } })).toThrow()
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, claimGasEthMax: 11 } })).toThrow()
+  })
+  it('rejects stake.lockReppo above the 10M ceiling, accepts at the ceiling', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, stake: { ...valid.stake, lockReppo: 10_000_001 } })).toThrow()
+    expect(StrategyConfigSchema.parse({ ...valid, stake: { ...valid.stake, lockReppo: 10_000_000 } }).stake.lockReppo).toBe(10_000_000)
+  })
+  it('rejects an Infinity cap (cannot unbound the wallet)', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintReppoMax: Infinity } })).toThrow()
+  })
+})
+
 describe('StrategyConfig claim fields', () => {
   it('defaults claimEmissions to true', () => {
     expect(StrategyConfigSchema.parse(valid).claimEmissions).toBe(true)

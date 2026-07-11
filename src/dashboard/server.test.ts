@@ -123,6 +123,91 @@ describe('write layer (unauthenticated — localhost-bound by default)', () => {
   })
 })
 
+describe('cross-site write defense (CSRF / DNS-rebinding)', () => {
+  // Raw http request: fetch()/undici sets Host itself and strips Sec-* headers,
+  // so forged-header cases need node:http.
+  const rawPost = (path: string, headers: Record<string, string>, body?: string) =>
+    new Promise<{ status: number; body: string }>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path, method: 'POST', headers }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP({ status: res.statusCode ?? 0, body: s }))
+      })
+      req.on('error', rejectP)
+      if (body !== undefined) req.write(body)
+      req.end()
+    })
+
+  it('rejects a foreign Host (DNS rebinding) with 403, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'attacker.example.com:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/host .* not allowed/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a raw non-loopback IP Host', async () => {
+    const r = await rawPost('/api/strategy', { host: '10.0.0.5:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+  })
+
+  it('rejects Sec-Fetch-Site: cross-site even with a localhost Host', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/cross-site/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a non-JSON content-type (text/plain defeats CORS preflight)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'text/plain' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/application\/json/)
+  })
+
+  it('accepts a normal localhost JSON POST (browser same-origin metadata included)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json; charset=utf-8', 'sec-fetch-site': 'same-origin' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).notes).toBe('from dashboard test')
+  })
+
+  it('accepts the IPv6 loopback bracket Host form', async () => {
+    const r = await rawPost('/api/strategy', { host: '[::1]:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+  })
+
+  it('bodyless POST /api/run-now without a content-type is NOT blocked by the guard', async () => {
+    // 503 (no scheduler wired), NOT 403 — the guard must not break the trigger.
+    const r = await rawPost('/api/run-now', { host: 'localhost:7070' })
+    expect(r.status).toBe(503)
+  })
+
+  it('DASHBOARD_ALLOWED_HOSTS extends the write allowlist for deliberate exposure', async () => {
+    const saved = process.env.DASHBOARD_ALLOWED_HOSTS
+    process.env.DASHBOARD_ALLOWED_HOSTS = 'panel.internal'
+    try {
+      const r = await rawPost('/api/strategy', { host: 'panel.internal:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+      expect(r.status).toBe(200)
+    } finally {
+      if (saved === undefined) delete process.env.DASHBOARD_ALLOWED_HOSTS
+      else process.env.DASHBOARD_ALLOWED_HOSTS = saved
+    }
+  })
+
+  it('GET routes stay untouched by the guard (foreign Host still reads)', async () => {
+    // Reads are not the write boundary; only mutating routes are gated.
+    const status = await new Promise<number>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path: '/api/config', headers: { host: 'attacker.example.com' } }, (res) => {
+        res.resume()
+        res.on('end', () => resolveP(res.statusCode ?? 0))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(status).toBe(200)
+  })
+})
+
 describe('POST /api/run-now', () => {
   it('503 when no triggerCycle is wired (scheduler not up yet)', async () => {
     // The default handle (this file's beforeEach) has no triggerCycle.
