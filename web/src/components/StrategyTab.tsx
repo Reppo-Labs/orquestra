@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { type DatanetEntry, loadModels, type ModelProvider, type AgentInfo, getAgent, renameAgent } from '../api'
+import { type DatanetEntry, type DatanetYield, loadModels, type ModelProvider, type AgentInfo, getAgent, renameAgent } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
 import { netLabel } from '../lib/format'
 import { AddDatanetModal } from './AddDatanetModal'
@@ -51,8 +51,40 @@ function Num({ label, value, int, onChange, hint }: {
 
 type Params = { focus?: string; angle?: string; topN?: number; minImportance?: number }
 
-function NetCard({ id, d, name, edit, providers }: {
+/** Read-only economics chip row for a datanet card — the decision-support data for the
+ *  voteShare/vote controls right below it. Heat is RELATIVE to the best yield across
+ *  the node's datanets this cycle (hot ≥ ⅔ of max, warm ≥ ⅓), not an absolute scale. */
+function EconChips({ y, maxYield }: { y?: DatanetYield; maxYield: number }) {
+  if (!y) return null // pre-feature snapshot, or the datanet didn't reach vote scoring yet
+  const rate = y.emissionsPerEpochReppo > 0
+    ? `${y.emissionsPerEpochReppo.toLocaleString()} REPPO/epoch`
+    : y.nativeTokenSymbol ? `${y.nativeTokenSymbol} (native)` : 'pays nothing'
+  const heat = y.yieldPerVote !== null && maxYield > 0
+    ? y.yieldPerVote >= maxYield * (2 / 3) ? 'hot' : y.yieldPerVote >= maxYield / 3 ? 'warm' : ''
+    : ''
+  return (
+    <div className="econ-chips">
+      <span className={`econ-chip ${y.emissionsPerEpochReppo > 0 || y.nativeTokenSymbol ? '' : 'off'}`}>{rate}</span>
+      {y.epochVoteVolume === null ? (
+        <span className="econ-chip off" title={y.unavailableReason ? `volume read failed: ${y.unavailableReason}` : 'no RPC configured on this node'}>
+          yield unavailable{y.unavailableReason ? ' (read failed)' : ''}
+        </span>
+      ) : y.uncontested ? (
+        <span className="econ-badge uncontested" title={`nobody has voted in epoch ${y.epoch} yet — the first voter takes the epoch's emissions`}>
+          uncontested · epoch {y.epoch}
+        </span>
+      ) : y.yieldPerVote !== null ? (
+        <span className={`econ-chip yield ${heat}`} title={`epoch ${y.epoch} vote volume ${y.epochVoteVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}>
+          ⚡ {y.yieldPerVote.toExponential(2)}/vote
+        </span>
+      ) : null /* rate 0 (native/pays-nothing): the rate chip already says it — no dead "⚡ —" chip */}
+    </div>
+  )
+}
+
+function NetCard({ id, d, name, edit, providers, econ, maxYield }: {
   id: string; d: DatanetEntry; name: string; edit: Strategy['edit']; providers: ModelProvider[]
+  econ?: DatanetYield; maxYield: number
 }) {
   const [open, setOpen] = useState(false)
   const upd = (fn: (n: DatanetEntry) => void) => edit((c) => fn(c.datanets[id]))
@@ -97,6 +129,7 @@ function NetCard({ id, d, name, edit, providers }: {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); upd((n) => { n.mint = !n.mint }) } }}>mint</span>
         </div>
       </div>
+      <EconChips y={econ} maxYield={maxYield} />
       <div className="net-row">
         <label className="field">
           <span>adapter <Tip label="what the adapter does">Where mint candidates come from for this datanet: gdelt = world news, hyperliquid = on-chain trades, sports = sports signals. Blank = no minting source (vote-only).</Tip></span>
@@ -280,8 +313,8 @@ function AgentIdentity() {
   )
 }
 
-export function StrategyTab({ strategy, netNames, onReconfigure }: {
-  strategy: Strategy; netNames: Record<string, string>; onReconfigure: () => void
+export function StrategyTab({ strategy, netNames, economics, onReconfigure }: {
+  strategy: Strategy; netNames: Record<string, string>; economics?: DatanetYield[]; onReconfigure: () => void
 }) {
   const [adding, setAdding] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
@@ -290,6 +323,10 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
   if (!candidate) return <div className="muted">loading strategy…</div>
 
   const rows = Object.entries(candidate.datanets).filter(([id]) => id !== '*')
+  // Latest-cycle economics per datanet, and the best yield across them — the chips'
+  // heat scale is relative to the node's own datanets, not an absolute threshold.
+  const econById = new Map((economics ?? []).map((y) => [y.datanetId, y]))
+  const maxYield = Math.max(0, ...(economics ?? []).map((y) => y.yieldPerVote ?? 0))
   const budget = candidate.budget ?? {}
   const stake = candidate.stake ?? {}
   const delib = candidate.deliberation ?? {}
@@ -314,7 +351,8 @@ export function StrategyTab({ strategy, netNames, onReconfigure }: {
       </div>
       <div className="net-grid stagger">
         {rows.map(([id, d]) => (
-          <NetCard key={id} id={id} d={d} name={netNames[id] ?? netLabel(id, netNames)} edit={edit} providers={providers} />
+          <NetCard key={id} id={id} d={d} name={netNames[id] ?? netLabel(id, netNames)} edit={edit} providers={providers}
+            econ={econById.get(id)} maxYield={maxYield} />
         ))}
         <button className="net add" onClick={() => setAdding(true)}>
           <div style={{ textAlign: 'center' }}><div className="plus">+</div><div>add datanet</div></div>
