@@ -108,6 +108,25 @@ CREATE TABLE IF NOT EXISTS voter_scan (
 CREATE TABLE IF NOT EXISTS owner_scan (
   podId TEXT PRIMARY KEY, throughEpoch INTEGER NOT NULL
 );
+
+-- econ_epochs = per-(datanet, epoch) REPPO economics buckets for the learn loop's
+-- economics half (additive upserts from src/learn/econ.ts). econ_watermark = last
+-- processed activity.id, so every activity row is counted exactly once.
+CREATE TABLE IF NOT EXISTS econ_epochs (
+  datanetId TEXT NOT NULL,
+  epoch INTEGER NOT NULL,
+  ownerClaimedReppo REAL NOT NULL DEFAULT 0,
+  voterClaimedReppo REAL NOT NULL DEFAULT 0,
+  mintCostReppo REAL NOT NULL DEFAULT 0,
+  mintCount INTEGER NOT NULL DEFAULT 0,
+  votesCast INTEGER NOT NULL DEFAULT 0,
+  updatedTs TEXT NOT NULL,
+  PRIMARY KEY (datanetId, epoch)
+);
+CREATE TABLE IF NOT EXISTS econ_watermark (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  lastActivityId INTEGER NOT NULL
+);
 `
 
 /** Cached SQLite handle for this dataDir, with all tables ensured on first open. */

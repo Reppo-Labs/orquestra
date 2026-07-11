@@ -6,7 +6,8 @@ import { _resetDbs } from '../dashboard/db.js'
 import {
   upsertOutcome, readOutcomes, insertLesson, readLessons, clearLessons,
   insertProposal, readProposals, setProposalStatus, getLearnEnabled, setLearnEnabled,
-  type OutcomeRow,
+  addEconDeltas, readEconEpochs, getEconWatermark, setEconWatermark,
+  type OutcomeRow, type EconEpochRow,
 } from './store.js'
 
 let dir: string
@@ -91,5 +92,41 @@ describe('learn store — per-datanet flag', () => {
     expect(getLearnEnabled(dir, '9')).toBe(false)
     setLearnEnabled(dir, '9', true)
     expect(getLearnEnabled(dir, '9')).toBe(true)
+  })
+})
+
+describe('learn store — econ epochs', () => {
+  const bucket = (over: Partial<EconEpochRow> = {}): EconEpochRow => ({
+    datanetId: '9', epoch: 100,
+    ownerClaimedReppo: 0, voterClaimedReppo: 0, mintCostReppo: 0, mintCount: 0, votesCast: 0,
+    ...over,
+  })
+
+  it('addEconDeltas is an additive upsert: two adds to the same (datanet, epoch) sum', () => {
+    addEconDeltas(dir, [bucket({ ownerClaimedReppo: 10, mintCostReppo: 5, mintCount: 1, votesCast: 2 })])
+    addEconDeltas(dir, [bucket({ ownerClaimedReppo: 3, mintCostReppo: 1, mintCount: 1, votesCast: 4 })])
+    const rows = readEconEpochs(dir, '9')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ ownerClaimedReppo: 13, mintCostReppo: 6, mintCount: 2, votesCast: 6 })
+  })
+
+  it('addEconDeltas keeps separate (datanet, epoch) buckets distinct', () => {
+    addEconDeltas(dir, [bucket({ epoch: 100, ownerClaimedReppo: 1 }), bucket({ datanetId: '2', epoch: 100, ownerClaimedReppo: 2 })])
+    expect(readEconEpochs(dir, '9')).toHaveLength(1)
+    expect(readEconEpochs(dir, '2')).toHaveLength(1)
+  })
+
+  it('readEconEpochs orders newest epoch first and respects lastN', () => {
+    addEconDeltas(dir, [bucket({ epoch: 100 }), bucket({ epoch: 102 }), bucket({ epoch: 101 })])
+    expect(readEconEpochs(dir, '9').map((r) => r.epoch)).toEqual([102, 101, 100])
+    expect(readEconEpochs(dir, '9', { lastN: 2 }).map((r) => r.epoch)).toEqual([102, 101])
+  })
+
+  it('watermark round-trips and starts at 0 when unset', () => {
+    expect(getEconWatermark(dir)).toBe(0)
+    setEconWatermark(dir, 42)
+    expect(getEconWatermark(dir)).toBe(42)
+    setEconWatermark(dir, 57)
+    expect(getEconWatermark(dir)).toBe(57)
   })
 })
