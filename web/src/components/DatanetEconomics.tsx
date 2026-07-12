@@ -17,7 +17,10 @@ function rank(a: DatanetYield, b: DatanetYield): number {
 export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
   snapshot: Snapshot | null
   netNames: Record<string, string>
-  onGoToStrategy: () => void
+  /** Jump to the Strategy tab; with a datanetId, scroll to + flash that datanet's card.
+   *  (The board ranks CONFIGURED datanets only — the row's action is tuning its vote
+   *  share, never "add". Discovery of new datanets is the Learning tab's job.) */
+  onGoToStrategy: (datanetId?: string) => void
 }) {
   const all = snapshot?.datanetEconomics ?? []
   // Only datanets that pay and whose volume read succeeded can be ranked.
@@ -30,15 +33,18 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
   return (
     <div>
       <div className="sec-head">
-        <h2>Best places to vote</h2><div className="rule" />
-        <button className="link-btn" onClick={onGoToStrategy}>adjust vote shares →</button>
+        <h2>Best places to vote</h2>
+        <span className="muted" style={{ fontSize: 12 }}>among your configured datanets</span>
+        <div className="rule" />
+        <button className="link-btn" onClick={() => onGoToStrategy()}>adjust vote shares →</button>
       </div>
       <div className="panel-box">
         {top.length ? (
           <div className="yield-board">
             {top.map((y, i) => (
-              <button key={y.datanetId} className="yield-row" onClick={onGoToStrategy}
-                title="open Strategy to adjust this datanet's vote share">
+              <button key={y.datanetId} className="yield-row" onClick={() => onGoToStrategy(y.datanetId)}
+                title="open this datanet's card on the Strategy tab">
+
                 <span className="yield-rank mono">#{i + 1}</span>
                 <span className="yield-net">{netLabel(y.datanetId, netNames)}</span>
                 {y.uncontested
