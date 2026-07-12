@@ -219,6 +219,12 @@ td { font-size: 13px; }
 .yield-net { font-weight: 600; font-size: 13px; }
 .yield-num { color: var(--accent-hi); font-size: 12px; }
 .yield-ctx { font-size: 11px; margin-left: auto; }
+/* One-shot highlight when a leaderboard click-through lands on a Strategy card. */
+.net.flash { animation: net-flash 1.6s ease-out; }
+@keyframes net-flash {
+  0% { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  100% { border-color: var(--border); box-shadow: none; }
+}
 
 /* ── Buttons ──────────────────────────────────────────────────────────── */
 .btn {

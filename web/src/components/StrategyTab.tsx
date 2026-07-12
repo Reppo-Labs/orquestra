@@ -82,9 +82,11 @@ function EconChips({ y, maxYield }: { y?: DatanetYield; maxYield: number }) {
   )
 }
 
-function NetCard({ id, d, name, edit, providers, econ, maxYield }: {
+function NetCard({ id, d, name, edit, providers, econ, maxYield, flash }: {
   id: string; d: DatanetEntry; name: string; edit: Strategy['edit']; providers: ModelProvider[]
   econ?: DatanetYield; maxYield: number
+  /** one-shot highlight after a leaderboard click-through scrolled here */
+  flash?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const upd = (fn: (n: DatanetEntry) => void) => edit((c) => fn(c.datanets[id]))
@@ -113,7 +115,7 @@ function NetCard({ id, d, name, edit, providers, econ, maxYield }: {
   const curModels = providers.find((p) => p.provider === curProvider)?.models ?? []
 
   return (
-    <div className={`net ${d.mint ? 'active-mint' : ''}`}>
+    <div id={`net-card-${id}`} className={`net ${d.mint ? 'active-mint' : ''} ${flash ? 'flash' : ''}`}>
       <div className="net-top">
         <div>
           <div className="net-id mono">datanet {id}</div>
@@ -313,8 +315,12 @@ function AgentIdentity() {
   )
 }
 
-export function StrategyTab({ strategy, netNames, economics, onReconfigure }: {
-  strategy: Strategy; netNames: Record<string, string>; economics?: DatanetYield[]; onReconfigure: () => void
+export function StrategyTab({ strategy, netNames, economics, focusDatanet, onFocusConsumed, onReconfigure }: {
+  strategy: Strategy; netNames: Record<string, string>; economics?: DatanetYield[]
+  /** Datanet card to scroll to + flash on mount (Overview leaderboard click-through). */
+  focusDatanet?: string | null
+  onFocusConsumed?: () => void
+  onReconfigure: () => void
 }) {
   const [adding, setAdding] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
@@ -327,6 +333,18 @@ export function StrategyTab({ strategy, netNames, economics, onReconfigure }: {
   // heat scale is relative to the node's own datanets, not an absolute threshold.
   const econById = new Map((economics ?? []).map((y) => [y.datanetId, y]))
   const maxYield = Math.max(0, ...(economics ?? []).map((y) => y.yieldPerVote ?? 0))
+  // Leaderboard click-through: scroll the target card into view and flash it once.
+  const [flashId, setFlashId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!focusDatanet) return
+    setFlashId(focusDatanet)
+    // rAF: the card must be in the DOM before scrollIntoView (tab just mounted).
+    requestAnimationFrame(() => {
+      document.getElementById(`net-card-${focusDatanet}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    const t = setTimeout(() => { setFlashId(null); onFocusConsumed?.() }, 1800)
+    return () => clearTimeout(t)
+  }, [focusDatanet, onFocusConsumed])
   const budget = candidate.budget ?? {}
   const stake = candidate.stake ?? {}
   const delib = candidate.deliberation ?? {}
@@ -352,7 +370,7 @@ export function StrategyTab({ strategy, netNames, economics, onReconfigure }: {
       <div className="net-grid stagger">
         {rows.map(([id, d]) => (
           <NetCard key={id} id={id} d={d} name={netNames[id] ?? netLabel(id, netNames)} edit={edit} providers={providers}
-            econ={econById.get(id)} maxYield={maxYield} />
+            econ={econById.get(id)} maxYield={maxYield} flash={flashId === id} />
         ))}
         <button className="net add" onClick={() => setAdding(true)}>
           <div style={{ textAlign: 'center' }}><div className="plus">+</div><div>add datanet</div></div>

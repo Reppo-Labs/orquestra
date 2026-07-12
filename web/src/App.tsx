@@ -26,6 +26,8 @@ export function App() {
   const [obStatus, setObStatus] = useState<OnboardingStatus | null>(null)
   const [reconfiguring, setReconfiguring] = useState(false)
   const [tab, setTab] = useState<TabId>('overview')
+  // Datanet card to scroll to + flash when landing on the Strategy tab (leaderboard click-through).
+  const [focusNet, setFocusNet] = useState<string | null>(null)
   const [panelRow, setPanelRow] = useState<ActivityRow | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
   const [healthLoaded, setHealthLoaded] = useState(false)
@@ -96,11 +98,13 @@ export function App() {
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
-            <DatanetEconomics snapshot={snap} netNames={netNames} onGoToStrategy={() => setTab('strategy')} />
+            <DatanetEconomics snapshot={snap} netNames={netNames}
+              onGoToStrategy={(id) => { setFocusNet(id ?? null); setTab('strategy') }} />
           </div>
         )}
         {tab === 'strategy' && (
           <StrategyTab strategy={strategy} netNames={netNames} economics={snap?.datanetEconomics}
+            focusDatanet={focusNet} onFocusConsumed={() => setFocusNet(null)}
             onReconfigure={() => setReconfiguring(true)} />
         )}
         {/* Kept mounted (hidden when off-tab) so the conversation, draft input, and
