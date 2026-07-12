@@ -43,6 +43,8 @@ export interface DatanetYield {
   yieldPerVote: number | null
   uncontested: boolean
   nativeTokenSymbol?: string
+  /** RPC error text when the epoch-volume read failed; absent = read OK or no RPC wired. */
+  unavailableReason?: string
 }
 
 export interface LlmUsage {

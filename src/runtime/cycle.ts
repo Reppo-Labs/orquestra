@@ -445,24 +445,22 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
         const yld = computeYield(datanetId, rubric.economics, epochVotes)
+        // Discriminate the two "unavailable" causes for the dashboard: an RPC failure
+        // carries its error, an RPC-less node shows plain "unavailable" — the operator
+        // on the SSH-tunneled dashboard can't read stderr.
+        if (volumeReadError) yld.unavailableReason = volumeReadError
         datanetEconomics.push(yld)
         // Yield is a VOTE-ONLY prompt signal. Hand the scorer a per-datanet CLONE carrying
         // currentYield instead of mutating the process-cached rubric — the same cached
         // object is reused by this datanet's mint path (which must never render yield)
         // and by every later cycle.
         const voteRubric: DatanetRubric = { ...rubric, economics: { ...rubric.economics, currentYield: yld } }
-        // Discriminate the two "unavailable" causes in the dashboard-visible reason: an
-        // RPC failure carries its error, a node with no RPC wired shows the plain
-        // "unavailable" line — the operator on the SSH-tunneled dashboard can't read stderr.
-        const yieldLine = formatYieldLine(yld)
-          + (volumeReadError ? ` — read failed: ${volumeReadError}` : '')
-        console.error(`orquestra: datanet ${datanetId} — ${yieldLine}`)
-        deps.recordActivity({
-          ts: new Date().toISOString(), cycleId, kind: 'info', datanetId,
-          reason: yieldLine, status: 'executed',
-          // structured epoch (mirrors claim rows) so dashboard consumers don't regex the reason
-          ...(yld.epoch !== null ? { epoch: yld.epoch } : {}),
-        })
+        // Stderr breadcrumb only. Yield is STATE, not an event — it reaches the
+        // dashboard via the snapshot (Strategy-tab chips + Overview leaderboard), NOT
+        // as activity rows: one info row per datanet per cycle drowned the real
+        // vote/mint/claim events (~300 rows/day at 13 datanets × 1h cadence). The
+        // 'info' activity kind remains in the schema for historical rows only.
+        console.error(`orquestra: datanet ${datanetId} — ${formatYieldLine(yld)}${volumeReadError ? ` — read failed: ${volumeReadError}` : ''}`)
 
         // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
         // dashboard activity here so an idle datanet explains why a pod produced no vote —

@@ -185,6 +185,32 @@ td { font-size: 13px; }
 .pill.stake { background: rgba(179, 154, 229, 0.14); color: var(--claim); }
 .pill.info { background: var(--panel-hi); color: var(--muted); }
 
+/* ── Datanet economics (Strategy chips + Overview leaderboard) ────────── */
+.econ-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.econ-chip {
+  font-family: var(--mono); font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--border-2); background: var(--bg); color: var(--muted);
+}
+.econ-chip.off { color: var(--faint); border-style: dashed; }
+.econ-chip.yield { color: var(--muted); }
+.econ-chip.yield.warm { color: var(--warn); border-color: rgba(224, 179, 74, 0.4); }
+.econ-chip.yield.hot { color: var(--accent-hi); border-color: var(--accent-line); background: var(--accent-soft); }
+.econ-badge.uncontested {
+  font-family: var(--mono); font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  background: rgba(87, 211, 155, 0.14); color: var(--pos); border: 1px solid rgba(87, 211, 155, 0.35);
+}
+.yield-board { display: flex; flex-direction: column; gap: 6px; }
+.yield-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-2);
+  background: var(--bg); color: inherit; font: inherit; cursor: pointer; transition: border-color 0.15s;
+}
+.yield-row:hover { border-color: var(--accent-line); }
+.yield-rank { color: var(--faint); font-size: 11px; }
+.yield-net { font-weight: 600; font-size: 13px; }
+.yield-num { color: var(--accent-hi); font-size: 12px; }
+.yield-ctx { font-size: 11px; margin-left: auto; }
+
 /* ── Buttons ──────────────────────────────────────────────────────────── */
 .btn {
   appearance: none; cursor: pointer; font-size: 14px; font-weight: 600;
