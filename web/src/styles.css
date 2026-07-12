@@ -160,6 +160,15 @@ button { font-family: var(--body); }
 /* ── Tables ───────────────────────────────────────────────────────────── */
 /* Datanet column: one line, truncated — full label lives in the title attr. */
 td.net-cell { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Detail column: bounded width + 2-line clamp, click-to-expand (Activity.tsx DetailCell).
+   overflow-wrap:anywhere keeps unbroken CLI/JSON error strings from widening the table
+   past the panel's overflow:hidden, which clipped the Status/Tx columns. */
+td.detail-cell { max-width: 480px; }
+.detail-clamp {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; overflow-wrap: anywhere; cursor: pointer;
+}
+.detail-clamp.open { display: block; -webkit-line-clamp: unset; overflow: visible; }
 .panel-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 14px; font-variant-numeric: tabular-nums; }

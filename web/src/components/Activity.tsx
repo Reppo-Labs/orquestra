@@ -26,6 +26,20 @@ const detail = (r: ActivityRow) =>
  *  logged before names were recorded. */
 const podLabel = (r: ActivityRow) => r.podName ?? r.podId ?? r.canonicalKey ?? ''
 
+/** Detail cell: clamped to 2 lines — long unbroken CLI error strings otherwise widen
+ *  the table past the panel's overflow:hidden and clip the Status/Tx columns. Click
+ *  toggles the full text; wrap-anywhere makes JSON/URLs wrap instead of pushing layout. */
+function DetailCell({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span
+      className={`detail-clamp ${open ? 'open' : ''}`}
+      title={open ? 'click to collapse' : 'click to expand'}
+      onClick={() => setOpen((o) => !o)}
+    >{text}</span>
+  )
+}
+
 export function Activity({ activity, netNames, onOpenPanel }: {
   activity: ActivityRow[]
   netNames: Record<string, string>
@@ -77,7 +91,7 @@ export function Activity({ activity, netNames, onOpenPanel }: {
                   {r.datanetId ? netLabel(r.datanetId, netNames) : ''}
                 </td>
                 <td>{podLabel(r)}</td>
-                <td>{detail(r)}</td>
+                <td className="detail-cell"><DetailCell text={detail(r)} /></td>
                 <td className={r.status === 'executed' ? 'pos' : 'neg'}>{r.status}</td>
                 <td>{txLink(r)}</td>
               </tr>
