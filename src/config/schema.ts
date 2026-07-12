@@ -44,20 +44,28 @@ export const StrategyConfigSchema = z
     // Fractional hours allowed (0.5 = 30 min). Floor of 0.1h (6 min) keeps a typo'd
     // 0.001 from hammering the LLM/chain with a cycle every few seconds.
     cadenceHours: z.number().min(0.1),
+    // Ceilings on every spend-limiting field: budget caps are the node's REAL security
+    // boundary (the wallet key sits in plaintext .env — the ledger refusing to sign past
+    // a cap is the only thing bounding loss), so a single malicious or corrupt config
+    // write must not be able to raise them arbitrarily. The values are deliberately
+    // generous multiples of any sane strategy (not tuning knobs): 10M REPPO locked /
+    // 1M REPPO mint spend dwarf real node budgets, 1k actions/cycle dwarfs real cadence
+    // throughput, and 10 ETH of gas is orders beyond Base reality. Legitimate operators
+    // never hit them; an attacker who can write config once cannot unbound the wallet.
     stake: z.object({
-      lockReppo: z.number().nonnegative(),
+      lockReppo: z.number().nonnegative().max(10_000_000),
       lockDurationDays: z.number().int().positive(),
     }),
     budget: z.object({
-      voteRateMaxPerCycle: z.number().int().nonnegative(),
-      mintRateMaxPerCycle: z.number().int().nonnegative().optional(),
-      mintReppoMax: z.number().nonnegative(),
+      voteRateMaxPerCycle: z.number().int().nonnegative().max(1_000),
+      mintRateMaxPerCycle: z.number().int().nonnegative().max(1_000).optional(),
+      mintReppoMax: z.number().nonnegative().max(1_000_000),
       // Gas caps are no longer operator-configured — gas on Base is negligible. They
       // default to a high value that never bites in practice but still bounds a
       // runaway loop, and the ledger keeps enforcing them as a safety backstop.
-      voteGasEthMax: z.number().nonnegative().default(1),
-      mintGasEthMax: z.number().nonnegative().default(1),
-      claimGasEthMax: z.number().nonnegative().default(1),
+      voteGasEthMax: z.number().nonnegative().max(10).default(1),
+      mintGasEthMax: z.number().nonnegative().max(10).default(1),
+      claimGasEthMax: z.number().nonnegative().max(10).default(1),
     }),
     claimEmissions: z.boolean().default(true),
     // Multi-agent panel deliberation (personas + judge; see src/panel/).

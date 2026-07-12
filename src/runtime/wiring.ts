@@ -33,7 +33,7 @@ import { queryEpochJson, type EpochInfo } from '../reppo/queryEpoch.js'
 import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
 import { queryEpochVoteVolume } from '../reppo/epochVotes.js'
 import { candidateScoreInput } from '../minter/score.js'
-import { appendActivity, readActivity } from '../dashboard/activityLog.js'
+import { appendActivity, readActivity, type ActivityEntry } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
 import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
@@ -195,7 +195,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // Per-datanet vote scorer: resolve THIS datanet's model (its `model` override, else the
   // node default) against the env key registry, then wrap in the panel exactly as before.
   // A skip (no key for the chosen provider) is returned straight to the cycle, which
-  // records it per-datanet. isVideo is false in Phase A (no video detection yet).
+  // records it per-datanet. isVideo:false here is only a model-resolution seam — it picks
+  // the datanet-level TEXT scorer's model; video pods (detected + marked in
+  // getPodsAndFilter) re-resolve per pod to a Gemini model inside the scorer via modelCtx.
   //
   // Build-once cache: datanets sharing a resolved provider:model reuse one scorer
   // (per datanet per cycle was rebuilding it). Safe across hot-reload — the scorer reads
@@ -218,7 +220,8 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model,
     }, w.resolveModel ?? resolveModel)
     if ('skip' in resolved) return { skip: resolved.skip }
-    // Key by the effective provider:model (isVideo always false in Phase A): identical
+    // Key by the effective provider:model (the datanet-level resolution is always the
+    // text model; video pods re-resolve per pod via modelCtx below): identical
     // resolutions yield an identical scorer, so one build serves every such datanet.
     const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${eff.provider}:${eff.model}`
     let scorer = scorerCache.get(cacheKey)
@@ -250,14 +253,10 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     scoreCandidate: (cand, rub) => {
       const model = effectiveDefaultModel(w)
       if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
-      // Mint prompts must NEVER render the vote-economics block (yield is a where-to-vote
-      // signal). The cycle attaches economics.currentYield onto the process-cached rubric
-      // before VOTE scoring, and this mint screen runs later in the same datanet iteration
-      // with the SAME object — so strip it here, at the mint boundary, instead of trusting
-      // the cycle to clean up. Shallow clone: the rubric itself must stay untouched.
-      const mintRubric = rub.economics.currentYield
-        ? { ...rub, economics: { ...rub.economics, currentYield: undefined } }
-        : rub
+      // Mint prompts never render the vote-economics block (yield is a where-to-vote
+      // signal): the cycle attaches economics.currentYield only to a vote-scoped rubric
+      // CLONE (cycle.ts), so the shared rubric arriving here never carries it — no
+      // defensive strip needed at this boundary.
       const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
       const candidateBase: CandidateScorer = {
         scoreCandidate: (c, r) => {
@@ -266,16 +265,36 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         },
       }
       const panel = createPanelCandidateScorer(candidateBase, { model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      return panel.scoreCandidate(cand, mintRubric)
+      return panel.scoreCandidate(cand, rub)
     },
   }
   // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
   // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
-  // remaining budget in this closure and reset it once per cycle via resetVideoBudget
+  // remaining budget in this closure and reset it once per cycle via beginCycle
   // (runCycle calls it right after startCycle). Decremented as videos are marked across all
   // datanets in the cycle.
   const videoCap = w.videoPodsPerCycle ?? 4
   let videoBudget = videoCap
+
+  // Per-CYCLE activity snapshot. The SQLite history (up to 100k rows, never rotated)
+  // feeds several derived views: the own-mint pod-name backstop (previously re-read once
+  // PER DATANET), the pod→datanet claim enrichment, and the voter-claim pod set. Reading
+  // it inside each consumer reconstructed the whole table N_datanets+2 times per cycle —
+  // the dominant per-cycle cost and memory churn. Read it lazily at most ONCE per cycle;
+  // beginCycle (called by runCycle right after startCycle) invalidates it. Same query,
+  // same data — consumers derive their views from the in-memory snapshot.
+  let activitySnapshot: ActivityEntry[] | null = null
+  const cycleActivity = (): ActivityEntry[] =>
+    (activitySnapshot ??= readActivity(w.dataDir, { limit: 100_000 }))
+  // Executed-mint pod names (the earn-attribution source), derived once per cycle from
+  // the snapshot; consumed per datanet by getPodsAndFilter's own-pod name backstop.
+  let mintedNamesMemo: Set<string> | null = null
+  const mintedNames = (): Set<string> =>
+    (mintedNamesMemo ??= new Set(
+      cycleActivity()
+        .filter((e) => e.kind === 'mint' && e.status === 'executed' && e.podName)
+        .map((e) => e.podName as string),
+    ))
 
   // Attach the NON-REPPO emission token to claimable (pod,epoch)s so the executor can read the
   // claimed native amount from the tx receipt. The on-chain claim scanners return datanetId='' and
@@ -284,7 +303,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   const enrichTokens = async (due: ClaimableEmission[]): Promise<ClaimableEmission[]> => {
     if (due.length === 0) return due
     const podDatanet = new Map<string, string>()
-    for (const e of readActivity(w.dataDir, { limit: 100_000 })) {
+    for (const e of cycleActivity()) {
       if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) podDatanet.set(e.podId, e.datanetId)
     }
     const tokenByDatanet = new Map<string, ClaimToken>()
@@ -300,7 +319,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   return {
     dataDir: w.dataDir,
     topN: 12,
-    resetVideoBudget: () => { videoBudget = videoCap },
+    beginCycle: () => { videoBudget = videoCap; activitySnapshot = null; mintedNamesMemo = null },
     getRubric: (id) => io.getRubric(id),
     getPodsAndFilter: async (id) => {
       const pods = await io.listPods(id, { all: true })
@@ -317,12 +336,8 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // pods, so the creator-based query above misses some — each miss wastes an
       // LLM scoring call and burns a one-time CANNOT_VOTE_FOR_OWN_POD error. Our
       // executed mints' names (the earn-attribution source) close the gap.
-      const mintedNames = new Set(
-        readActivity(w.dataDir, { limit: 100_000 })
-          .filter((e) => e.kind === 'mint' && e.status === 'executed' && e.podName)
-          .map((e) => e.podName as string),
-      )
-      for (const p of pods) if (p.name && mintedNames.has(p.name)) ownSet.add(p.podId)
+      const minted = mintedNames() // per-cycle memo — was a full activity re-scan PER DATANET
+      for (const p of pods) if (p.name && minted.has(p.name)) ownSet.add(p.podId)
       // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
       // — content fetches are the slow part of a cycle. For each, probe Content-Type:
       // a video/* pod is marked (mediaUrl/mediaType/contentLength) for the Gemini video
@@ -408,7 +423,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getVoterEmissionsDue: async () => {
       if (!w.rpcUrl || !w.walletAddress) return []
       const votedPodIds = [...new Set(
-        readActivity(w.dataDir, { limit: 100_000 })
+        cycleActivity() // per-cycle snapshot — no extra table scan for the claim phase
           .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
           .map((e) => e.podId as string),
       )]
@@ -552,6 +567,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
     // log it, and persist earn-status.json for the dashboard (/api/earn). Best-effort.
     try {
       const snap = readSnapshot(w.dataDir)
+      // Deliberately a FRESH read, not the deps' per-cycle snapshot: the earn attribution
+      // below must include the rows THIS cycle just appended. This is one of only two
+      // activity table scans per cycle (the other is the lazy snapshot in buildCycleDeps).
       const activity = readActivity(w.dataDir, { limit: 100_000 })
       // All datanets we vote OR mint on — the self-learning observe step covers votes
       // (cast on others' pods) too, not just our own mints.

@@ -158,6 +158,75 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
+/** Hostnames a browser legitimately presents when reaching the dashboard. Direct
+ *  use AND the documented Docker deployment both arrive as localhost: the compose
+ *  `127.0.0.1:7070:7070` mapping + SSH tunnel terminate on the operator's own
+ *  loopback, so the browser's Host header is `localhost:<port>` (or 127.0.0.1)
+ *  even though the container binds 0.0.0.0. */
+const LOOPBACK_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  '[::1]',
+  // IPv4-mapped IPv6 loopback: some stacks accept these forms for 127.0.0.1.
+  '::ffff:127.0.0.1',
+  '[::ffff:127.0.0.1]',
+])
+
+/** Operators who deliberately expose the panel behind a name (ADR 0002 says add
+ *  auth first) can extend the write allowlist: comma-separated hostnames, no ports.
+ *  Read per request so tests (and a restart-less env tweak) see changes. */
+function extraAllowedHosts(): Set<string> {
+  const raw = process.env.DASHBOARD_ALLOWED_HOSTS
+  if (!raw) return new Set()
+  return new Set(raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
+}
+
+/** Host header without the port, trailing DNS dot removed. Handles the
+ *  `[::1]:7070` bracket form. `localhost.` resolves identically to `localhost`
+ *  in DNS, so the fully-qualified trailing dot must not slip past the allowlist. */
+function stripPort(hostHeader: string): string {
+  let host: string
+  if (hostHeader.startsWith('[')) {
+    const end = hostHeader.indexOf(']')
+    host = end === -1 ? hostHeader : hostHeader.slice(0, end + 1)
+  } else {
+    host = hostHeader.replace(/:\d+$/, '')
+  }
+  return host.replace(/\.$/, '')
+}
+
+/** Defense-in-depth for the mutating routes (the panel is unauthenticated by
+ *  design — ADR 0002 — so CSRF/DNS-rebinding from a page the operator's browser
+ *  happens to visit is the realistic remote path to the budget/strategy). Three
+ *  additive checks; returns a rejection reason or null when the write may proceed.
+ *  GET routes and the static SPA are deliberately untouched. */
+function crossSiteWriteError(req: IncomingMessage): string | null {
+  // 1) Host allowlist. A DNS-rebinding page reaches this server with the
+  //    ATTACKER'S hostname in Host (the browser thinks it is talking to
+  //    attacker.example); legitimate access always presents localhost.
+  const hostHeader = req.headers.host
+  const host = hostHeader ? stripPort(hostHeader).toLowerCase() : ''
+  if (!LOOPBACK_HOSTS.has(host) && !extraAllowedHosts().has(host)) {
+    return `host "${hostHeader ?? ''}" not allowed for writes — the dashboard accepts localhost only (extend with DASHBOARD_ALLOWED_HOSTS)`
+  }
+  // 2) Fetch metadata: modern browsers stamp cross-site requests. An absent
+  //    header (older client, curl, node) passes — this check is purely additive.
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site.toLowerCase() === 'cross-site') {
+    return 'cross-site request rejected'
+  }
+  // 3) Content-Type: writes are JSON. A cross-origin form or no-cors fetch can
+  //    send text/plain / form encodings WITHOUT a CORS preflight; requiring
+  //    application/json closes that. An ABSENT content-type stays allowed for
+  //    bodyless triggers (e.g. POST /api/run-now with no body).
+  const ct = req.headers['content-type']
+  if (ct !== undefined && ct.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return `unsupported content-type "${ct}" — dashboard writes require application/json`
+  }
+  return null
+}
+
 type ProposalDecisionResult = { ok: boolean; status?: string; error?: string; appliesNextCycle?: boolean }
 
 /** Apply an operator decision to a learning proposal. Accept goes through the validated
@@ -244,6 +313,10 @@ async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse
       }
       // No auth on writes: the dashboard binds localhost by default; restricting
       // exposure (the `-p 127.0.0.1:` mapping) is the operator's responsibility.
+      // crossSiteWriteError adds browser-facing defense-in-depth (CSRF/DNS-rebinding)
+      // on top — it never gates same-machine tools like curl.
+      const guardError = crossSiteWriteError(req)
+      if (guardError) { json(res, 403, { error: guardError }); return }
       let body: unknown
       try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
 

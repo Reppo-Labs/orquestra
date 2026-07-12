@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { loadAll, onboardingStatus, type ActivityRow, type DashData, type OnboardingStatus } from './api'
+import { loadAll, loadHealth, onboardingStatus, type ActivityRow, type DashData, type Health, type OnboardingStatus } from './api'
 import { useStrategy } from './lib/useStrategy'
 import { Nav, type TabId } from './components/Nav'
 import { PnlCards } from './components/PnlCards'
@@ -9,6 +9,7 @@ import { DatanetEconomics } from './components/DatanetEconomics'
 import { StrategyTab } from './components/StrategyTab'
 import { ChatTab } from './components/ChatTab'
 import { Activity } from './components/Activity'
+import { HealthTab } from './components/HealthTab'
 import { LearningTab } from './components/LearningTab'
 import { PanelDrawer } from './components/PanelDrawer'
 import { Onboarding } from './components/Onboarding'
@@ -26,14 +27,18 @@ export function App() {
   const [reconfiguring, setReconfiguring] = useState(false)
   const [tab, setTab] = useState<TabId>('overview')
   const [panelRow, setPanelRow] = useState<ActivityRow | null>(null)
+  const [health, setHealth] = useState<Health | null>(null)
+  const [healthLoaded, setHealthLoaded] = useState(false)
 
   const refresh = useCallback(async () => {
+    const healthP = loadHealth() // in parallel with loadAll; never rejects (degrades to null)
     try {
       const [d, ob] = await Promise.all([loadAll(), onboardingStatus()])
       setData(d); setObStatus(ob); setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
+    setHealth(await healthP); setHealthLoaded(true)
   }, [])
 
   useEffect(() => {
@@ -87,7 +92,7 @@ export function App() {
               ) : 'earn-test pending first cycle'}
             </div>
             <SecHead title="Emissions" />
-            <EmissionsSummary pnl={data?.pnl ?? null} earn={earn} />
+            <EmissionsSummary pnl={data?.pnl ?? null} earn={earn} snapshot={snap} netNames={netNames} />
             <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
@@ -105,6 +110,9 @@ export function App() {
         </div>
         {tab === 'activity' && (
           <Activity activity={data?.activity ?? []} netNames={netNames} onOpenPanel={setPanelRow} />
+        )}
+        {tab === 'health' && (
+          <HealthTab health={health} loaded={healthLoaded} netNames={netNames} />
         )}
         {tab === 'learning' && (
           <LearningTab netNames={netNames} onConfigChanged={() => void refresh()} />

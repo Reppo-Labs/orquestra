@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { buildCycleDeps, buildTick, type CycleWiring } from './wiring.js'
 import { DedupState } from './state.js'
 import { StrategyConfigSchema } from '../config/schema.js'
-import { appendActivity } from '../dashboard/activityLog.js'
+import { appendActivity, readActivity } from '../dashboard/activityLog.js'
 import type { VoterPod } from '../voter/types.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { DatanetRubric } from '../rubric/types.js'
@@ -31,6 +31,13 @@ const h = vi.hoisted(() => ({
 // Stub the datanet catalog so discovery + token-enrichment never spawn the real `reppo`
 // CLI in unit tests (its variable spawn latency intermittently blew the 5s tick timeout).
 vi.mock('../reppo/listDatanets.js', () => ({ listDatanetsJson: vi.fn(async () => []) }))
+// Passthrough spy on readActivity so tests can assert the activity table is scanned a
+// BOUNDED number of times per cycle (the per-datanet full re-scan was the dominant
+// per-cycle cost). appendActivity and the rest stay real (SQLite in the test tmpdir).
+vi.mock('../dashboard/activityLog.js', async (orig) => {
+  const actual = await orig<typeof import('../dashboard/activityLog.js')>()
+  return { ...actual, readActivity: vi.fn(actual.readActivity) }
+})
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
 vi.mock('../learn/econ.js', () => ({ collectEconomics: h.collectEconomics }))
 // The tick reads the epoch ONCE via queryEpochJson (shared by snapshot + econ collector);
@@ -359,10 +366,31 @@ describe('buildCycleDeps', () => {
     expect(pods.find((p) => p.podId === 'vid')!.contentLength).toBe(123456)
   })
 
-  it('video cap is GLOBAL per cycle, not per-datanet: resetVideoBudget arms it once', async () => {
+  it('reads the activity history at most ONCE per cycle (snapshot memo, re-armed by beginCycle)', async () => {
+    // Three consumers used to each re-scan the full table: the minted-name backstop in
+    // getPodsAndFilter (PER DATANET), the claim-token enrichment, and the voter-claim pod
+    // set. All must now share one per-cycle snapshot; beginCycle invalidates it.
+    const deps = buildCycleDeps(wiring({
+      io: {
+        listPods: async (id, opts) => opts.all ? [pod(`p-${id}`, { url: `https://x/${id}` })] : [],
+        fetchContent: async () => '',
+        emissionsDue: async () => ({ pods: [{ podId: 'p9', datanetId: '', epoch: 1, reppo: 1 }] }),
+      },
+    }))
+    vi.mocked(readActivity).mockClear()
+    await deps.getPodsAndFilter('2')  // minted-name backstop (datanet 1 of 2)
+    await deps.getPodsAndFilter('5')  // …must NOT re-scan for datanet 2
+    await deps.getEmissionsDue()      // claim-token enrichment shares the snapshot too
+    expect(readActivity).toHaveBeenCalledTimes(1)
+    deps.beginCycle!()                // next cycle re-arms the snapshot
+    await deps.getPodsAndFilter('2')
+    expect(readActivity).toHaveBeenCalledTimes(2)
+  })
+
+  it('video cap is GLOBAL per cycle, not per-datanet: beginCycle arms it once', async () => {
     // videoPodsPerCycle=1, two datanets each with a video pod. Without a reset between cycles
     // and with a per-datanet local counter, BOTH would be marked. The closure budget is shared
-    // across datanets, so only the FIRST datanet's video is marked until resetVideoBudget runs.
+    // across datanets, so only the FIRST datanet's video is marked until beginCycle runs.
     const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
     const deps = buildCycleDeps({
       ...w,
@@ -378,8 +406,8 @@ describe('buildCycleDeps', () => {
     const b = await deps.getPodsAndFilter('5')
     expect(a.pods.filter((p) => p.mediaUrl).length).toBe(1)
     expect(b.pods.filter((p) => p.mediaUrl).length).toBe(0) // budget already spent this cycle
-    // New cycle: resetVideoBudget re-arms the global budget → the next datanet can mark again.
-    deps.resetVideoBudget!()
+    // New cycle: beginCycle re-arms the global budget → the next datanet can mark again.
+    deps.beginCycle!()
     const c = await deps.getPodsAndFilter('5')
     expect(c.pods.filter((p) => p.mediaUrl).length).toBe(1)
   })
@@ -443,6 +471,61 @@ describe('buildTick config hot-reload', () => {
     await tick()
     boom = true
     await expect(tick()).resolves.toBeUndefined() // tolerated, last-good used
+  })
+})
+
+describe('buildTick budget-cap hot-swap (security boundary)', () => {
+  // The dashboard is the ONLY way an operator can lower a cap to stop spend. buildTick
+  // must re-arm the live ledger when the reloaded budget/horizon differs — otherwise the
+  // node keeps signing at the OLD ceiling after the operator tightened it. These prove the
+  // re-arm fires on a lowered cap, is skipped when nothing changed, and covers horizonDays.
+  const mkConfig = (over: { budget?: Record<string, number>; horizonDays?: number }) =>
+    StrategyConfigSchema.parse({
+      horizonDays: over.horizonDays ?? 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: over.budget ?? { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'balanced' } },
+      notes: '',
+    })
+
+  function armedWiring(initial: ReturnType<typeof StrategyConfigSchema.parse>) {
+    const w = wiring({ config: initial })
+    const updateCaps = vi.fn()
+    const updateHorizonDays = vi.fn()
+    w.ledger = { startCycle: vi.fn(), updateCaps, updateHorizonDays, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
+    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    return { w, deps, updateCaps, updateHorizonDays }
+  }
+
+  it('CRITICAL: lowering the mint REPPO cap in the dashboard re-arms the ledger on the next tick', async () => {
+    const start = mkConfig({ budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 } })
+    const lowered = mkConfig({ budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 10, mintGasEthMax: 1 } })
+    const { w, deps, updateCaps } = armedWiring(start)
+    const tick = buildTick(w, deps, { reloadConfig: () => lowered, reporting: false })
+    await tick()
+    // The ledger's caps were swapped to the LOWERED budget — not left at the old ceiling.
+    expect(updateCaps).toHaveBeenCalledWith(lowered.budget)
+    expect((updateCaps.mock.calls[0][0] as { mintReppoMax: number }).mintReppoMax).toBe(10)
+  })
+
+  it('does NOT re-arm the ledger when the budget is unchanged (guarded by a deep compare)', async () => {
+    const cfg = mkConfig({})
+    const { w, deps, updateCaps } = armedWiring(cfg)
+    // reload returns the SAME budget shape each tick → the guard must skip updateCaps entirely.
+    const tick = buildTick(w, deps, { reloadConfig: () => mkConfig({}), reporting: false })
+    await tick()
+    await tick()
+    expect(updateCaps).not.toHaveBeenCalled()
+  })
+
+  it('re-arms the horizon window when horizonDays changes', async () => {
+    const start = mkConfig({ horizonDays: 7 })
+    const shortened = mkConfig({ horizonDays: 3 })
+    const { w, deps, updateHorizonDays, updateCaps } = armedWiring(start)
+    const tick = buildTick(w, deps, { reloadConfig: () => shortened, reporting: false })
+    await tick()
+    expect(updateHorizonDays).toHaveBeenCalledWith(3)
+    expect(updateCaps).not.toHaveBeenCalled() // budget unchanged → only the horizon re-armed
   })
 })
 
@@ -656,10 +739,12 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
     expect(h.generateObjectWithRetry).toHaveBeenCalled() // a model WAS resolved + scored
   })
 
-  it('mint screen prompts never render the vote-economics block even when currentYield is attached', async () => {
-    // The cycle attaches economics.currentYield onto the PROCESS-CACHED rubric object before
-    // vote scoring; mint scoring runs later in the same datanet iteration with the SAME object.
-    // Yield is a where-to-vote signal — the mint prompt must never render it.
+  it('mint screen prompts never render the vote-economics block (yield lives only on the vote-scoped clone)', async () => {
+    // The cycle attaches economics.currentYield to a vote-scoped rubric CLONE (cycle.ts) and
+    // never mutates the shared rubric, so the rubric reaching the mint scorer carries no
+    // yield — no defensive strip at this boundary. Yield is a where-to-vote signal; the mint
+    // prompt must never render it. (The never-mutated invariant itself is asserted in
+    // cycle.test.ts's "vote-scoped rubric clone" test.)
     const cfg = StrategyConfigSchema.parse({
       horizonDays: 7, cadenceHours: 1,
       stake: { lockReppo: 0, lockDurationDays: 7 },
@@ -679,10 +764,7 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
     const deps = buildCycleDeps(w)
     const rubric = {
       datanetId: '9', subnetUuid: 'u', canVote: false, canMint: true, voteRubric: '', mintSpec: 'spec', subnetDescription: '',
-      economics: {
-        accessFeeReppo: 0, emissionsPerEpochReppo: 500, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO',
-        currentYield: { datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42, epochVoteVolume: 2_000_000, yieldPerVote: 0.00025, uncontested: false },
-      },
+      economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 500, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
     } as unknown as DatanetRubric
     const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
     await deps.candidateScorer.scoreCandidate(candidate, rubric)
@@ -691,8 +773,5 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
     const [, , system, gen] = h.generateObjectWithRetry.mock.calls[0] as unknown as [unknown, unknown, string, { prompt?: string }]
     expect(system).not.toContain('## Datanet economics')
     expect(gen.prompt ?? '').not.toContain('## Datanet economics')
-    // The strip must be a clone at the mint boundary — the shared rubric object stays intact
-    // for the vote path.
-    expect(rubric.economics.currentYield).toBeDefined()
   })
 })

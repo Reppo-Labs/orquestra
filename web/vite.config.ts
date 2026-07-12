@@ -8,5 +8,8 @@ export default defineConfig({
   plugins: [react()],
   server: { proxy: { '/api': 'http://localhost:7070' } },
   build: { outDir: '../dist/dashboard/public', emptyOutDir: true },
-  test: { include: ['src/**/*.test.ts'], environment: 'node' },
+  // Default env stays node (api.test.ts, configDiff.test.ts, BudgetBurn.test.ts).
+  // Render tests (*.render.test.tsx) opt into jsdom via a per-file
+  // `// @vitest-environment jsdom` docblock — least blast radius.
+  test: { include: ['src/**/*.test.{ts,tsx}'], environment: 'node' },
 })
