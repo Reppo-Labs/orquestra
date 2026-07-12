@@ -73,11 +73,11 @@ function EconChips({ y, maxYield }: { y?: DatanetYield; maxYield: number }) {
         <span className="econ-badge uncontested" title={`nobody has voted in epoch ${y.epoch} yet — the first voter takes the epoch's emissions`}>
           uncontested · epoch {y.epoch}
         </span>
-      ) : (
+      ) : y.yieldPerVote !== null ? (
         <span className={`econ-chip yield ${heat}`} title={`epoch ${y.epoch} vote volume ${y.epochVoteVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}>
-          ⚡ {y.yieldPerVote === null ? '—' : `${y.yieldPerVote.toExponential(2)}/vote`}
+          ⚡ {y.yieldPerVote.toExponential(2)}/vote
         </span>
-      )}
+      ) : null /* rate 0 (native/pays-nothing): the rate chip already says it — no dead "⚡ —" chip */}
     </div>
   )
 }

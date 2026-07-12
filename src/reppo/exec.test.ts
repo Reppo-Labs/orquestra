@@ -52,6 +52,11 @@ describe('isTransientReppoError', () => {
     expect(isTransientReppoError('request to https://x failed, reason: ECONNRESET')).toBe(true)
     expect(isTransientReppoError('reppo command timed out')).toBe(true)
   })
+  it('matches a truncated public-API 200 (PUBLIC_API_INVALID_RESPONSE) — live hit Jul 12: body cut mid-stream', () => {
+    expect(isTransientReppoError(
+      '{"error":{"code":"PUBLIC_API_INVALID_RESPONSE","message":"/api/v1/public/pods returned 200 but the body was not valid JSON: terminated."}}',
+    )).toBe(true)
+  })
   it('matches public-RPC rate-limit / INTERNAL_ERROR blips (operator hit these on mainnet.base.org)', () => {
     expect(isTransientReppoError('query datanet failed: INTERNAL_ERROR')).toBe(true)
     expect(isTransientReppoError('{"error":{"code":-32603,"message":"Internal error"}}')).toBe(true)

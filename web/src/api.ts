@@ -345,11 +345,25 @@ export interface LearnStatsView {
   highConvictionReversals: number
   sampleEpochs: number
 }
-export interface LearnDatanetView { enabled: boolean; lessons: LearnLesson[]; stats: LearnStatsView }
+// Mirrors src/learn/econStats.ts EconStats — numbers only, no free text.
+export interface EconStats {
+  datanetId: string
+  epochsCovered: number
+  mintCostReppo: number
+  mintCount: number
+  ownerClaimedReppo: number
+  mintRoiPct: number | null
+  voterClaimedReppo: number
+  votesCast: number
+  voterReppoPerVote: number | null
+  latestYieldPerVote: number | null
+  latestUncontested: boolean
+}
+export interface LearnDatanetView { enabled: boolean; lessons: LearnLesson[]; stats: LearnStatsView; econ?: EconStats }
 export interface LearnProposal {
   id: number
   datanetId: string
-  field: 'strictness'
+  field: 'strictness' | 'vote_enable' | 'mint_enable' | 'vote_share'
   fromValue: string
   toValue: string
   rationale: string

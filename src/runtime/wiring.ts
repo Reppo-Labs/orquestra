@@ -29,7 +29,7 @@ import { queryClaimableOnchain, queryVoterClaimableOnchain } from '../reppo/emis
 import { makeDbPodCache, makeVoterScanCache, makeOwnerScanCache } from '../reppo/podCacheStore.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
-import { queryEpochJson } from '../reppo/queryEpoch.js'
+import { queryEpochJson, type EpochInfo } from '../reppo/queryEpoch.js'
 import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
 import { queryEpochVoteVolume } from '../reppo/epochVotes.js'
 import { candidateScoreInput } from '../minter/score.js'
@@ -38,6 +38,7 @@ import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type S
 import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
 import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
 import { collectOutcomes } from '../learn/collect.js'
+import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
 import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
@@ -506,6 +507,18 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
     console.error(`orquestra: cycle ${cycleId} — ${v} votes, ${m} mints, ${report.claims.length} claims executed`)
     if (opts.reporting === false) return
 
+    // The epoch is read ONCE per tick and shared by the snapshot and the econ collector.
+    // collectSnapshot silently merges a FAILED epoch read over the PREVIOUS snapshot's
+    // value with no failure flag — right for display, but the econ collector must never
+    // bucket new activity into that stale epoch: a sustained RPC outage would pile every
+    // cycle's mints/votes into one old (datanet, epoch) bucket, additively corrupting the
+    // exact numbers reflection cites. epochLive is the ground truth for THIS tick;
+    // undefined = the read failed → econ collection defers (the watermark holds).
+    let epochLive: EpochInfo | undefined
+    try { epochLive = await queryEpochJson() } catch (e) {
+      console.error(`orquestra: epoch query failed this tick (non-fatal): ${(e as Error).message}`)
+    }
+
     // Snapshot the on-chain view for the dashboard (best-effort; never throws into the loop).
     try {
       const budget: SnapshotBudget = {
@@ -534,7 +547,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         balance: () => queryBalanceJson(),
         votingPower: () => queryVotingPowerJson(),
         emissionsDue: emissionsDueOnchain,
-        epoch: () => queryEpochJson(),
+        // Throwing when the hoisted read failed preserves collectSnapshot's existing
+        // merge-over-previous fallback exactly (its `safe()` catches and keeps prev.epoch).
+        epoch: async () => { if (!epochLive) throw new Error('epoch read failed this tick'); return epochLive },
         budget: () => budget,
       })
       // Per-cycle LLM spend (tokens + est USD) — reset above, accumulated by the
@@ -566,10 +581,19 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         .map((e) => e.podName as string)
       const currentEpoch = Number(snap?.epoch?.epoch ?? -1)
       const votes: OwnPodVote[] = []
+      // Own-pod ids per datanet, for the econ collector's owner-claim attribution below.
+      // Scope is the SAME learnDatanets loop collectOutcomes already runs (vote- or mint-
+      // enabled datanets) — this is the broadest own-pod data the cycle fetches; a datanet
+      // neither voted nor minted on this cycle has no OwnPodVote[] in scope at all. Built for
+      // EVERY learn-datanet (not just mint-enabled ones) so owner claims still attribute
+      // after mint is turned off for a datanet whose pods are still earning emissions.
+      const ownPodIdsByDatanet = new Map<string, Set<string>>()
       for (const id of learnDatanets) {
         let all: OwnPodVote[]
         try { all = await queryDatanetPodVotes(id) } catch (e) { console.error(`orquestra: pod-votes query failed for datanet ${id}: ${(e as Error).message}`); continue }
-        if (config.datanets[id]?.mint) votes.push(...selectOurPods(all, ourNames)) // earn signal: our minted pods only
+        const ours = selectOurPods(all, ourNames)
+        ownPodIdsByDatanet.set(id, new Set(ours.map((p) => p.podId)))
+        if (config.datanets[id]?.mint) votes.push(...ours) // earn signal: our minted pods only
         // Observe step: match matured votes/mints to these tallies. Best-effort, and
         // reusing the array we just fetched — no extra CLI call. Skipped when learning is
         // disabled for the datanet (operator veto stops DB churn, not just injection) or
@@ -577,6 +601,20 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         if (currentEpoch > 0 && getLearnEnabled(w.dataDir, id)) {
           try { collectOutcomes(w.dataDir, id, all, currentEpoch) } catch (e) { console.error(`orquestra: learn collect failed for ${id} (non-fatal): ${(e as Error).message}`) }
         }
+      }
+      // Economics half of the learn loop — ONE call per cycle (not per datanet): buckets
+      // this tick's newly-executed claim/mint/vote activity into per-(datanet, epoch) REPPO
+      // totals. Uses epochLive (the tick's SINGLE queryEpochJson read, shared with the
+      // snapshot) — NOT snap.epoch, which merges a failed read over the previous snapshot's
+      // value and would bucket new activity into a stale epoch. Best-effort: a collector
+      // failure must never abort the cycle or the rest of this learn block.
+      if (epochLive) {
+        try { collectEconomics(w.dataDir, ownPodIdsByDatanet, epochLive) }
+        catch (e) { console.error(`orquestra: econ collect failed (non-fatal): ${(e as Error).message}`) }
+      } else {
+        // Deferred, not lost: the activity-id watermark holds, and mint/vote epochs are
+        // ts-derived (econ.ts epochAt), so the next successful cycle attributes correctly.
+        console.error('orquestra: epoch read failed — econ collection deferred (watermark holds)')
       }
       const summary = earnSummary(activity, snap?.emissionsDue ?? { totalReppo: 0, pods: [] }, votes)
       writeEarnStatus(w.dataDir, { ...summary, ts: new Date().toISOString() })
