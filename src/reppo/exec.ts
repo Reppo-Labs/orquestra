@@ -29,6 +29,10 @@ export function withRpcUrl(args: string[]): string[] {
 // do NOT match, so they fail fast instead of wasting retries.
 const TRANSIENT = [
   /PUBLIC_API_UNREACHABLE/i,
+  // A 200 whose body failed to parse ("... not valid JSON: terminated.") is a response
+  // truncated mid-stream by the platform/gateway — same blip class as UNREACHABLE, hit
+  // live on `list pods` (Jul 12). A genuinely permanent bad body just burns the retries.
+  /PUBLIC_API_INVALID_RESPONSE/i,
   /fetch failed/i,
   /\bENOTFOUND\b/, /\bEAI_AGAIN\b/, /\bECONNRESET\b/, /\bETIMEDOUT\b/, /\bECONNREFUSED\b/,
   /socket hang up/i,
