@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS activity (
   claimedTokenSymbol TEXT, claimedTokenAmount REAL
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
+-- (kind, podId): the econ collector's per-cycle voteDatanetByPodId query
+-- (kind='vote' AND podId IS NOT NULL) would full-scan activity otherwise.
+CREATE INDEX IF NOT EXISTS idx_activity_kind_pod ON activity(kind, podId);
 
 CREATE TABLE IF NOT EXISTS earn_status (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, cycleId TEXT, data TEXT NOT NULL
@@ -107,6 +110,25 @@ CREATE TABLE IF NOT EXISTS voter_scan (
 -- the two scans cover different (pod,epoch) grids and advance independently.
 CREATE TABLE IF NOT EXISTS owner_scan (
   podId TEXT PRIMARY KEY, throughEpoch INTEGER NOT NULL
+);
+
+-- econ_epochs = per-(datanet, epoch) REPPO economics buckets for the learn loop's
+-- economics half (additive upserts from src/learn/econ.ts). econ_watermark = last
+-- processed activity.id, so every activity row is counted exactly once.
+CREATE TABLE IF NOT EXISTS econ_epochs (
+  datanetId TEXT NOT NULL,
+  epoch INTEGER NOT NULL,
+  ownerClaimedReppo REAL NOT NULL DEFAULT 0,
+  voterClaimedReppo REAL NOT NULL DEFAULT 0,
+  mintCostReppo REAL NOT NULL DEFAULT 0,
+  mintCount INTEGER NOT NULL DEFAULT 0,
+  votesCast INTEGER NOT NULL DEFAULT 0,
+  updatedTs TEXT NOT NULL,
+  PRIMARY KEY (datanetId, epoch)
+);
+CREATE TABLE IF NOT EXISTS econ_watermark (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  lastActivityId INTEGER NOT NULL
 );
 `
 

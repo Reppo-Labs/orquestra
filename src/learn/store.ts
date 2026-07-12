@@ -1,8 +1,9 @@
 // src/learn/store.ts
-// Persistence for the self-learning loop. Four tables, all owned by db.ts and living
+// Persistence for the self-learning loop. Tables, all owned by db.ts and living
 // in the shared activity.db: `outcomes` (matured vote/mint decisions matched to their
 // on-chain tally), `lessons` (distilled, operator-vetoable guidance per datanet),
-// `proposals` (operator-approved config tweaks), `learn_flags` (per-datanet on/off).
+// `proposals` (operator-approved config tweaks), `learn_flags` (per-datanet on/off),
+// `econ_epochs` + `econ_watermark` (economics half — see src/learn/econ.ts).
 import { getDb } from '../dashboard/db.js'
 
 export type OutcomeKind = 'vote' | 'mint'
@@ -39,7 +40,8 @@ export interface LessonRow {
   active: 0 | 1
 }
 
-export type ProposalField = 'strictness' | 'vote_enable'
+// mint_enable/vote_share are proposed by the ECONOMIC reflection — see reflect.ts/econStats.ts.
+export type ProposalField = 'strictness' | 'vote_enable' | 'mint_enable' | 'vote_share'
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'stale'
 export interface ProposalRow {
   id: number
@@ -153,4 +155,62 @@ export function setLearnEnabled(dataDir: string, datanetId: string, enabled: boo
   getDb(dataDir).prepare(
     'INSERT INTO learn_flags (datanetId, enabled) VALUES (?, ?) ON CONFLICT(datanetId) DO UPDATE SET enabled = excluded.enabled',
   ).run(datanetId, enabled ? 1 : 0)
+}
+
+// ── econ epochs (economics half of the learn loop) ──────────────────────────────
+/** Per-(datanet, epoch) REPPO economics bucket. See src/learn/econ.ts for attribution. */
+export interface EconEpochRow {
+  datanetId: string
+  epoch: number
+  ownerClaimedReppo: number
+  voterClaimedReppo: number
+  mintCostReppo: number
+  mintCount: number
+  votesCast: number
+}
+
+/** ADD the deltas into the (datanetId, epoch) bucket (additive upsert — each field is
+ *  summed onto whatever is already there, never overwritten), refreshing updatedTs. */
+export function addEconDeltas(dataDir: string, deltas: EconEpochRow[]): void {
+  if (deltas.length === 0) return
+  const d = getDb(dataDir)
+  const stmt = d.prepare(
+    `INSERT INTO econ_epochs
+       (datanetId, epoch, ownerClaimedReppo, voterClaimedReppo, mintCostReppo, mintCount, votesCast, updatedTs)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(datanetId, epoch) DO UPDATE SET
+       ownerClaimedReppo = econ_epochs.ownerClaimedReppo + excluded.ownerClaimedReppo,
+       voterClaimedReppo = econ_epochs.voterClaimedReppo + excluded.voterClaimedReppo,
+       mintCostReppo = econ_epochs.mintCostReppo + excluded.mintCostReppo,
+       mintCount = econ_epochs.mintCount + excluded.mintCount,
+       votesCast = econ_epochs.votesCast + excluded.votesCast,
+       updatedTs = excluded.updatedTs`,
+  )
+  const now = new Date().toISOString()
+  for (const r of deltas) {
+    stmt.run(r.datanetId, r.epoch, r.ownerClaimedReppo, r.voterClaimedReppo, r.mintCostReppo, r.mintCount, r.votesCast, now)
+  }
+}
+
+/** Rows for one datanet, newest epochs first, limited to lastN (default 5). */
+export function readEconEpochs(dataDir: string, datanetId: string, opts: { lastN?: number } = {}): EconEpochRow[] {
+  const lastN = opts.lastN ?? 5
+  return getDb(dataDir).prepare(
+    `SELECT datanetId, epoch, ownerClaimedReppo, voterClaimedReppo, mintCostReppo, mintCount, votesCast
+     FROM econ_epochs WHERE datanetId = ? ORDER BY epoch DESC LIMIT ?`,
+  ).all(datanetId, lastN) as unknown as EconEpochRow[]
+}
+
+/** Last processed activity.id for the econ collector. 0 when unset (nothing collected yet). */
+export function getEconWatermark(dataDir: string): number {
+  const row = getDb(dataDir).prepare('SELECT lastActivityId FROM econ_watermark WHERE id = 1').get() as
+    | { lastActivityId: number }
+    | undefined
+  return row?.lastActivityId ?? 0
+}
+
+export function setEconWatermark(dataDir: string, lastActivityId: number): void {
+  getDb(dataDir).prepare(
+    'INSERT INTO econ_watermark (id, lastActivityId) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET lastActivityId = excluded.lastActivityId',
+  ).run(lastActivityId)
 }

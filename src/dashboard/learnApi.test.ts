@@ -82,6 +82,64 @@ describe('POST /api/learn/proposals/:id', () => {
     expect(r.status).toBe(409)
     expect(r.body.ok).toBe(false)
   })
+
+  it('accept applies a mint_enable change (true→false)', async () => {
+    const id = insertProposal(dir, { ...proposal(), field: 'mint_enable', fromValue: 'true', toValue: 'false' })
+    const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ ok: true, status: 'accepted', appliesNextCycle: true })
+    expect(JSON.parse(readConfigText(dir)!).datanets['9'].mint).toBe(false)
+  })
+
+  it('rejects a stale mint_enable proposal when the live mint flag drifted', async () => {
+    const id = insertProposal(dir, { ...proposal(), field: 'mint_enable', fromValue: 'true', toValue: 'false' })
+    writeConfig(dir, { ...baseConfig(), datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } } } as never)
+    const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ ok: false, status: 'stale' })
+    expect(JSON.parse(readConfigText(dir)!).datanets['9'].mint).toBe(false) // untouched (already false)
+  })
+
+  it('accept applies a vote_share change (1→3)', async () => {
+    const id = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '1', toValue: '3' })
+    const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ ok: true, status: 'accepted', appliesNextCycle: true })
+    expect(JSON.parse(readConfigText(dir)!).datanets['9'].voteShare).toBe(3)
+  })
+
+  it('rejects a stale vote_share proposal when the live voteShare drifted', async () => {
+    const id = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '1', toValue: '3' })
+    writeConfig(dir, { ...baseConfig(), datanets: { '9': { vote: true, mint: true, strictness: 'balanced', voteShare: 5 } } } as never)
+    const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ ok: false, status: 'stale' })
+    expect(JSON.parse(readConfigText(dir)!).datanets['9'].voteShare).toBe(5) // untouched
+  })
+
+  it('mint_enable marks stale (does not create the entry) when the datanet is gone', async () => {
+    // fromValue matches the "missing entry" default (false) so the optimistic check
+    // passes and the code reaches the dedicated "datanet no longer configured" branch.
+    const id = insertProposal(dir, { ...proposal(), field: 'mint_enable', fromValue: 'false', toValue: 'true' })
+    writeConfig(dir, { ...baseConfig(), datanets: {} } as never)
+    const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ ok: false, status: 'stale' })
+    expect(JSON.parse(readConfigText(dir)!).datanets['9']).toBeUndefined()
+  })
+
+  // Apply-time re-validation: insertion-time validation lives in reflect.ts; these
+  // simulate a corrupted/adversarial proposals row reaching decideProposal directly.
+  it.each(['-5', '3abc', '15'])('an invalid vote_share toValue (%s) is rejected unwritten and stays pending', async (toValue) => {
+    const id = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '1', toValue })
+    const before = readConfigText(dir)
+    const r = await post(`/api/learn/proposals/${id}`, { decision: 'accept' })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ ok: false })
+    expect(r.body.error).toMatch(/invalid/)
+    expect(readConfigText(dir)).toBe(before) // unwritten ('3abc' must not truncate-apply as 3)
+    expect(readProposals(dir, { status: 'pending' })).toHaveLength(1) // NOT marked accepted
+  })
 })
 
 describe('POST /api/learn/disable and /api/learn/veto', () => {

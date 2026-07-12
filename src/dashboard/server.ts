@@ -183,8 +183,8 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
     }
     const existing = updated.datanets[prop.datanetId]
     updated.datanets[prop.datanetId] = { ...existing, vote: true, mint: existing?.mint ?? false, strictness: existing?.strictness ?? 'balanced', mintMode: existing?.mintMode ?? 'pin', voteShare: existing?.voteShare ?? 1 }
-  } else {
-    // strictness: optimistic-concurrency check — reject if live value drifted.
+  } else if (prop.field === 'strictness') {
+    // optimistic-concurrency check — reject if live value drifted.
     const liveValue = cfg.datanets[prop.datanetId]?.strictness ?? 'balanced'
     if (liveValue !== prop.fromValue) {
       setProposalStatus(dataDir, id, 'stale')
@@ -193,6 +193,36 @@ function decideProposal(dataDir: string, id: number, decision: 'accept' | 'rejec
     const dn = updated.datanets[prop.datanetId]
     if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
     dn.strictness = prop.toValue as typeof dn.strictness
+  } else if (prop.field === 'mint_enable') {
+    // economics-derived proposal — same optimistic-concurrency + "must already exist"
+    // posture as strictness (never silently CREATE a datanet entry from a proposal accept).
+    const liveValue = String(cfg.datanets[prop.datanetId]?.mint ?? false)
+    if (liveValue !== prop.fromValue) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+    }
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.mint = prop.toValue === 'true'
+  } else {
+    // vote_share — RE-VALIDATE at apply time. Insertion-time validation lives in
+    // reflect.ts; this re-check defends against a corrupted/adversarial proposals row
+    // reaching decideProposal directly (parseInt('3abc') would truncate-apply as 3, and
+    // the config schema deliberately has no upper bound — operators may set any positive
+    // int by hand, so safeParse below would NOT catch an out-of-range proposal). Same
+    // handling as a schema-parse failure: no write, no status change.
+    const n = parseInt(prop.toValue, 10)
+    if (!/^\d+$/.test(prop.toValue) || n < 1 || n > 10) {
+      return { ok: false, error: 'invalid vote_share value in proposal — not applied' }
+    }
+    const liveValue = String(cfg.datanets[prop.datanetId]?.voteShare ?? 1)
+    if (liveValue !== prop.fromValue) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+    }
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.voteShare = parseInt(prop.toValue, 10)
   }
 
   const parsed = StrategyConfigSchema.safeParse(updated)
