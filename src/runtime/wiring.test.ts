@@ -379,6 +379,41 @@ describe('buildCycleDeps', () => {
     expect(pods.find((p) => p.podId === 'vid')!.contentLength).toBe(123456)
   })
 
+  it('attributes an owner claim to its datanet via the datanet pod list when activity cannot (mint rows carry no podId)', async () => {
+    // reppo CLI ≤0.12.x mint-pod --json returns NO podId, so our own mints never enter
+    // the activity-derived pod→datanet map — exactly the pods whose owner emissions we
+    // claim. The enrichment must fall back to datanet membership (list the configured
+    // datanets' pods and find the claim's podId).
+    const podVotes = vi.fn(async (id: string) =>
+      id === '2' ? [{ podId: 'p77', name: 'ours', validityEpoch: '3', upVotes: 1, downVotes: 0 }] : [])
+    const deps = buildCycleDeps(wiring({
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    const due = await deps.reads.getEmissionsDue()
+    expect(due[0]!.datanetId).toBe('2')
+  })
+
+  it('does NOT list datanet pods when the claim is already attributable from activity', async () => {
+    // Cost guard: the membership fallback is per-cycle CLI work — it must not run when
+    // the activity map (vote/mint rows with podId+datanetId) already resolves every claim.
+    appendActivity(dir, {
+      ts: 't', cycleId: 'c', kind: 'vote', datanetId: '2', podId: 'p77', status: 'executed',
+    })
+    const podVotes = vi.fn(async () => [])
+    const deps = buildCycleDeps(wiring({
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    const due = await deps.reads.getEmissionsDue()
+    expect(due[0]!.datanetId).toBe('2')
+    expect(podVotes).not.toHaveBeenCalled()
+  })
+
   it('reads the activity history at most ONCE per cycle (snapshot memo, re-armed by beginCycle)', async () => {
     // Three consumers used to each re-scan the full table: the minted-name backstop in
     // getPodsAndFilter (PER DATANET), the claim-token enrichment, and the voter-claim pod

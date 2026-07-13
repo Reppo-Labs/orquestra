@@ -197,6 +197,22 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     for (const e of cycleActivity()) {
       if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) podDatanet.set(e.podId, e.datanetId)
     }
+    // The activity map above can NEVER cover our own mints: `reppo mint-pod --json`
+    // (CLI ≤0.12.x) returns no podId, so executed mint rows have podId=null — and those
+    // are exactly the pods whose OWNER emissions we claim. Resolve the leftovers by
+    // datanet membership: list each configured datanet's pods once and match the claim's
+    // on-chain podId. Runs only when a claim is otherwise unattributable (claims are
+    // occasional; most cycles skip this entirely). Best-effort per datanet — a failed
+    // list leaves those claims unattributed this cycle, never blocks the claim itself.
+    const unresolved = due.some((em) => !em.datanetId && !podDatanet.has(em.podId))
+    if (unresolved) {
+      for (const id of Object.keys(w.config.datanets)) {
+        if (id === '*') continue
+        try {
+          for (const p of await reader.datanetPodVotes(id)) if (!podDatanet.has(p.podId)) podDatanet.set(p.podId, id)
+        } catch { /* best-effort: skip this datanet's membership map this cycle */ }
+      }
+    }
     const tokenByDatanet = new Map<string, ClaimToken>()
     try {
       for (const d of await reader.listDatanets()) if (d.nativeToken) tokenByDatanet.set(d.id, d.nativeToken)
