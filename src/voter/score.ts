@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import type { CoreMessage, FilePart, LanguageModel } from 'ai'
 import type { PodScorer, PodScore, VoterPod } from './types.js'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { VoteRubric } from '../rubric/types.js'
 import type { LlmProvider } from '../llm/model.js'
 import { INJECTION_GUARD, buildRubricBlock, buildEconomicsBlock } from '../llm/prompt.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
@@ -27,7 +27,7 @@ const SYSTEM =
  *  brief = optional per-operator strategy injected so the operator's stance shapes curation. */
 export function buildVotePrompt(
   pod: VoterPod,
-  rubric: DatanetRubric,
+  rubric: VoteRubric,
   brief = '',
   videoPart?: FilePart,
 ): { system: string; prompt: string } | { system: string; messages: CoreMessage[] } {
@@ -76,7 +76,7 @@ export function createLlmScorer(
   const resolveBrief = () => (typeof opts.brief === 'function' ? opts.brief() : opts.brief ?? '')
   const resolveCtx = () => (typeof opts.modelCtx === 'function' ? opts.modelCtx() : opts.modelCtx)
   return {
-    async scorePod(pod: VoterPod, rubric: DatanetRubric): Promise<PodScore> {
+    async scorePod(pod: VoterPod, rubric: VoteRubric): Promise<PodScore> {
       const isVideo = !!pod.mediaUrl
       // Text pod → the original fixed-model text path, byte-for-byte unchanged. The wiring
       // already resolved `model` for this datanet (its override or the node default), so a

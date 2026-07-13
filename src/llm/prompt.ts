@@ -36,9 +36,9 @@ export function buildRubricBlock(rubric: DatanetRubric): string {
 }
 
 /** Datanet-economics block for VOTE prompts (single scorer + the panel's vote path;
- *  mint prompts must never render it — enforced in the cycle (cycle.ts), which attaches
- *  currentYield only to a vote-scoped rubric clone, never to the shared rubric the mint
- *  path receives). Built from NUMERICS ONLY — the native-token symbol
+ *  mint prompts can never render it — currentYield exists only on VoteRubric, and the
+ *  mint path holds a MintRubric that structurally forbids it (rubric/types.ts)).
+ *  Built from NUMERICS ONLY — the native-token symbol
  *  is creator-controlled text and must not enter the prompt outside the guarded rubric
  *  region. Empty string when no yield was computed (RPC-less node, mint path, tests).
  *  Plain context by explicit operator decision: the scorer MAY weigh it (an accepted

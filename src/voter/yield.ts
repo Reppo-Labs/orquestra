@@ -10,8 +10,8 @@
 // change rarely); the volume side is live from chain each cycle.
 //
 // LAYERING: this module must stay IMPORT-FREE. rubric/types.ts (the upstream domain
-// type) type-imports DatanetYield from here for economics.currentYield — adding any
-// import back into rubric/ or llm/ from this file would create a real cycle.
+// type) type-imports DatanetYield from here for VoteRubric's economics.currentYield —
+// adding any import back into rubric/ or llm/ from this file would create a real cycle.
 
 export interface DatanetYield {
   datanetId: string

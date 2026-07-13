@@ -1,6 +1,6 @@
 // src/runtime/cycle.ts
 import { STRICTNESS_THRESHOLDS, type StrategyConfig } from '../config/schema.js'
-import type { DatanetRubric } from '../rubric/types.js'
+import { toVoteRubric, toMintRubric, type DatanetRubric } from '../rubric/types.js'
 import type { DatanetAdapter, CandidateScorer } from '../adapter/types.js'
 import type { PodScorer, VoterPod, VoteFilter } from '../voter/types.js'
 import type { WalletExecutor } from '../wallet/executor.js'
@@ -454,11 +454,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // the operator on the SSH-tunneled dashboard can't read stderr.
         if (volumeReadError) yld.unavailableReason = volumeReadError
         datanetEconomics.push(yld)
-        // Yield is a VOTE-ONLY prompt signal. Hand the scorer a per-datanet CLONE carrying
-        // currentYield instead of mutating the process-cached rubric — the same cached
-        // object is reused by this datanet's mint path (which must never render yield)
-        // and by every later cycle.
-        const voteRubric: DatanetRubric = { ...rubric, economics: { ...rubric.economics, currentYield: yld } }
+        // Yield is a VOTE-ONLY prompt signal — the VoteRubric/MintRubric split
+        // (rubric/types.ts) makes yield-on-a-mint-prompt a compile error.
+        const voteRubric = toVoteRubric(rubric, yld)
         // Stderr breadcrumb only. Yield is STATE, not an event — it reaches the
         // dashboard via the snapshot (Strategy-tab chips + Overview leaderboard), NOT
         // as activity rows: one info row per datanet per cycle drowned the real
@@ -517,7 +515,8 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           })
           const seenKeys = await deps.seenKeysFor(datanetId)
           const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
-          const intents = await selectMints(datanetId, candidates, rubric, {
+          // toMintRubric: the mint path only ever holds a MintRubric (never yield).
+          const intents = await selectMints(datanetId, candidates, toMintRubric(rubric), {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
             mintMode: policy.mintMode,
           })

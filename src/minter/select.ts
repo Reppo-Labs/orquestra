@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CandidatePod, CandidateScorer } from '../adapter/types.js'
 import { clampPodName, POD_DESC_MAX } from '../adapter/podName.js'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { MintRubric } from '../rubric/types.js'
 import type { MintIntent } from '../wallet/intents.js'
 import { redactSecrets } from '../util/redact.js'
 
@@ -27,7 +27,7 @@ export interface SelectMintsOpts {
 export async function selectMints(
   datanetId: string,
   candidates: CandidatePod[],
-  rubric: DatanetRubric,
+  rubric: MintRubric,
   opts: SelectMintsOpts,
 ): Promise<MintIntent[]> {
   if (!rubric.canMint) return []

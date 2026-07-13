@@ -739,11 +739,11 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
   })
 
   it('mint screen prompts never render the vote-economics block (yield lives only on the vote-scoped clone)', async () => {
-    // The cycle attaches economics.currentYield to a vote-scoped rubric CLONE (cycle.ts) and
-    // never mutates the shared rubric, so the rubric reaching the mint scorer carries no
-    // yield — no defensive strip at this boundary. Yield is a where-to-vote signal; the mint
-    // prompt must never render it. (The never-mutated invariant itself is asserted in
-    // cycle.test.ts's "vote-scoped rubric clone" test.)
+    // The rubric reaching the mint scorer is a MintRubric, which structurally cannot carry
+    // economics.currentYield (rubric/types.ts) — a compile-time guarantee, no defensive
+    // strip at this boundary. Yield is a where-to-vote signal; the mint prompt must never
+    // render it. (The never-mutated shared rubric is asserted in cycle.test.ts's
+    // "vote-scoped rubric clone" test; this test keeps the end-to-end runtime proof.)
     const cfg = StrategyConfigSchema.parse({
       horizonDays: 7, cadenceHours: 1,
       stake: { lockReppo: 0, lockDurationDays: 7 },
