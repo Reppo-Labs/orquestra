@@ -10,6 +10,7 @@ import type { VoterPod } from '../voter/types.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { CandidatePod } from '../adapter/types.js'
+import type { ReppoReader } from '../reppo/reader.js'
 
 // Mocks for the post-cycle reporting/learning path (the reporting=false tests below
 // never reach these). Shared spies via vi.hoisted so the factories can reference them.
@@ -28,9 +29,6 @@ const h = vi.hoisted(() => ({
   attachSnapshotLlm: vi.fn(),
   snap: { ts: 't', cycleId: 'c', balance: {}, votingPower: {}, emissionsDue: { totalReppo: 0, pods: [] }, budget: {}, epoch: { epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 } },
 }))
-// Stub the datanet catalog so discovery + token-enrichment never spawn the real `reppo`
-// CLI in unit tests (its variable spawn latency intermittently blew the 5s tick timeout).
-vi.mock('../reppo/listDatanets.js', () => ({ listDatanetsJson: vi.fn(async () => []) }))
 // Passthrough spy on readActivity so tests can assert the activity table is scanned a
 // BOUNDED number of times per cycle (the per-datanet full re-scan was the dominant
 // per-cycle cost). appendActivity and the rest stay real (SQLite in the test tmpdir).
@@ -40,11 +38,7 @@ vi.mock('../dashboard/activityLog.js', async (orig) => {
 })
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
 vi.mock('../learn/econ.js', () => ({ collectEconomics: h.collectEconomics }))
-// The tick reads the epoch ONCE via queryEpochJson (shared by snapshot + econ collector);
-// stub it so unit ticks never spawn the real `reppo` CLI.
-vi.mock('../reppo/queryEpoch.js', () => ({ queryEpochJson: h.queryEpochJson }))
 vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
-vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))
 vi.mock('../dashboard/snapshot.js', () => ({
   collectSnapshot: vi.fn(async () => h.snap),
   writeSnapshot: h.writeSnapshot,
@@ -82,6 +76,28 @@ let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-wire-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
+// Reusable ReppoReader fake — the one collaborator fake shared by every test here, so no
+// unit test ever spawns the real `reppo` CLI. Quiet-chain defaults (empty lists, zero
+// balances); the epoch + pod-votes reads default to the shared h spies the learn-path
+// tests assert on. Override only what a test exercises.
+function fakeReader(over: Partial<ReppoReader> = {}): ReppoReader {
+  return {
+    listPods: async () => [],
+    datanetPodVotes: h.queryDatanetPodVotes as unknown as ReppoReader['datanetPodVotes'],
+    emissionsDue: async () => ({ totalReppo: 0, pods: [] }),
+    balance: async () => ({ eth: 0, reppo: 0, veReppo: 0, usdc: 0 }),
+    votingPower: async () => ({ power: 0, lockupCount: 0 }),
+    epoch: h.queryEpochJson,
+    listDatanets: async () => [],
+    subnetEmissionInfo: async () => ({ primaryToken: '0x0', primaryEmissionsPerEpoch: 0n, reppoEmissionsPerEpoch: 0n }),
+    tokenBalance: async () => 0n,
+    epochVoteVolume: async () => ({ epoch: 0, totalRaw: 0n }),
+    claimableOnchain: async () => [],
+    voterClaimableOnchain: async () => [],
+    ...over,
+  }
+}
+
 function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
   return {
     dataDir: dir, config,
@@ -92,6 +108,7 @@ function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
     executor: {} as CycleWiring['executor'],
     dedup: new DedupState(dir),
     adapters: [{ id: 'gdelt', discover: async () => [] }],
+    reader: fakeReader(),
     ...over,
   }
 }
@@ -103,12 +120,12 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'fetched content')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('p1', { url: 'https://x/1' }), pod('own1', { url: 'https://x/own' }), pod('voted1', { url: 'https://x/v' }), pod('old', { validityEpoch: '99', url: 'https://x/old' })]
           : [pod('own1')],
-        fetchContent,
-      },
+      }),
+      io: { fetchContent },
     })
     const { pods, filter } = await deps.getPodsAndFilter('2')
     expect(fetchContent).toHaveBeenCalledTimes(1) // only p1 — own/voted/stale-epoch excluded
@@ -124,13 +141,13 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => '<!doctype html> app shell junk')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('withWriteup', { url: 'https://araistotle/spa/1', description: 'ArAIstotle YES 0.45 | full analysis + sources' }),
              pod('titleOnly', { url: 'https://x/2' })]
           : [],
-        fetchContent,
-      },
+      }),
+      io: { fetchContent },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     // Only the title-only pod is fetched; the one with a writeup keeps its CLI description.
@@ -149,12 +166,12 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'content')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('p1', { url: 'https://x/1' }), pod('mine', { name: 'US sanctions Chinese firms over Iran arms', url: 'https://x/mine' })]
           : [], // creator-based query returns NOTHING (the live failure mode)
-        fetchContent,
-      },
+      }),
+      io: { fetchContent },
     })
     const { filter } = await deps.getPodsAndFilter('2')
     expect(filter.ownPodIds).toContain('mine')          // name-matched into the own set
@@ -164,13 +181,13 @@ describe('buildCycleDeps', () => {
 
   it('own-pods query failure disables the guard for the cycle instead of throwing', async () => {
     const deps = buildCycleDeps(wiring({
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => {
           if (!opts.all) throw new Error('rpc down')
           return [pod('p1')]
         },
-        fetchContent: async () => '',
-      },
+      }),
+      io: { fetchContent: async () => '' },
     }))
     const { filter } = await deps.getPodsAndFilter('2')
     expect(filter.ownPodIds).toEqual([]) // tolerated, not thrown
@@ -227,7 +244,7 @@ describe('buildCycleDeps', () => {
 
   it('getExistingPodNames tolerates a failing list (returns [])', async () => {
     const deps = buildCycleDeps(wiring({
-      io: { listPods: async () => { throw new Error('boom') }, fetchContent: async () => '' },
+      reader: fakeReader({ listPods: async () => { throw new Error('boom') } }),
     }))
     expect(await deps.getExistingPodNames!('2')).toEqual([])
   })
@@ -245,13 +262,12 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('vid', { url: 'https://x/clip.mp4' }), pod('txt', { url: 'https://x/doc.json' })]
           : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
@@ -274,13 +290,12 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('vid', { url: 'https://drive.google.com/file/d/1AbC_dEfGhI/view?usp=sharing' })]
           : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
@@ -298,13 +313,12 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('vid', { url: 'https://drive.google.com/file/d/1AbC_dEfGhI/view' })]
           : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
@@ -319,11 +333,10 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all ? [pod('bin', { url: 'https://cdn.example.com/blob' })] : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     const bin = pods.find((p) => p.podId === 'bin')!
@@ -338,11 +351,10 @@ describe('buildCycleDeps', () => {
     const deps = buildCycleDeps({
       ...w,
       videoPodsPerCycle: 1,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all ? [pod('v1', { url: 'https://x/a.mp4' }), pod('v2', { url: 'https://x/b.mp4' })] : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
     const { pods } = await deps.getPodsAndFilter('2')
     const marked = pods.filter((p) => p.mediaUrl).length
@@ -355,8 +367,10 @@ describe('buildCycleDeps', () => {
     const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all ? [pod('vid', { url: 'https://x/c.mp4' })] : [],
+      }),
+      io: {
         fetchContent: async () => '',
         detectType: async () => ({ mediaType: 'video/mp4', contentLength: 123456 }),
       },
@@ -370,11 +384,11 @@ describe('buildCycleDeps', () => {
     // getPodsAndFilter (PER DATANET), the claim-token enrichment, and the voter-claim pod
     // set. All must now share one per-cycle snapshot; beginCycle invalidates it.
     const deps = buildCycleDeps(wiring({
-      io: {
+      reader: fakeReader({
         listPods: async (id, opts) => opts.all ? [pod(`p-${id}`, { url: `https://x/${id}` })] : [],
-        fetchContent: async () => '',
-        emissionsDue: async () => ({ pods: [{ podId: 'p9', datanetId: '', epoch: 1, reppo: 1 }] }),
-      },
+        emissionsDue: async () => ({ totalReppo: 1, pods: [{ podId: 'p9', datanetId: '', epoch: 1, reppo: 1 }] }),
+      }),
+      io: { fetchContent: async () => '' },
     }))
     vi.mocked(readActivity).mockClear()
     await deps.getPodsAndFilter('2')  // minted-name backstop (datanet 1 of 2)
@@ -394,8 +408,10 @@ describe('buildCycleDeps', () => {
     const deps = buildCycleDeps({
       ...w,
       videoPodsPerCycle: 1,
-      io: {
+      reader: fakeReader({
         listPods: async (id, opts) => opts.all ? [pod(`v-${id}`, { url: `https://x/${id}.mp4` })] : [],
+      }),
+      io: {
         fetchContent: async () => '',
         detectType: async () => ({ mediaType: 'video/mp4', contentLength: 1000 }),
       },
@@ -449,7 +465,7 @@ describe('buildTick config hot-reload', () => {
     const updateCaps = vi.fn()
     w.ledger = { startCycle: vi.fn(), updateCaps, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
     const ranWith: string[][] = []
-    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    const deps = buildCycleDeps({ ...w, io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } } })
     return { w, deps, updateCaps, ranWith, reload }
   }
 
@@ -492,7 +508,7 @@ describe('buildTick budget-cap hot-swap (security boundary)', () => {
     const updateCaps = vi.fn()
     const updateHorizonDays = vi.fn()
     w.ledger = { startCycle: vi.fn(), updateCaps, updateHorizonDays, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
-    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    const deps = buildCycleDeps({ ...w, io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } } })
     return { w, deps, updateCaps, updateHorizonDays }
   }
 
@@ -541,7 +557,7 @@ describe('buildTick self-learning (reporting path)', () => {
 
   const learnDeps = (w: CycleWiring) => buildCycleDeps({
     ...w,
-    io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) },
+    io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } },
   })
 
   it('collects outcomes per learn-datanet and reflects once per epoch when a learnModel is set', async () => {
