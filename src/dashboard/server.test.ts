@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
-import { startDashboard, type DashboardHandle } from './server.js'
+import { startDashboard, dispatch, type DashboardHandle } from './server.js'
+import type { RouteContext } from './routes.js'
 import { appendActivity } from './activityLog.js'
 import { writeEarnStatus } from './earnStatus.js'
 import { writeConfig, readConfigText } from '../config/load.js'
@@ -459,7 +460,49 @@ describe('GET /api/models', () => {
   })
 })
 
-describe('network bind (ADR 0002: unauthenticated panel must not default to a public interface)', () => {
+describe('dispatch (route table + write guards, no HTTP server)', () => {
+  const dctx = (): RouteContext => ({ dataDir: dir, opts: {}, session: { messages: [], draft: null, finalized: null } })
+  const body = (b: unknown) => () => Promise.resolve(b)
+
+  it('routes an existing GET to the right handler', async () => {
+    const out = await dispatch(dctx(), { method: 'GET', url: '/api/config?x=1', headers: {} }, body(undefined))
+    expect(out?.status).toBe(200)
+    expect(out?.body).toHaveProperty('cadenceHours')
+  })
+
+  it('refuses a cross-site write with 403 BEFORE reading the body', async () => {
+    let bodyRead = false
+    const out = await dispatch(
+      dctx(),
+      { method: 'POST', url: '/api/strategy', headers: { host: 'attacker.example.com:7070', 'content-type': 'application/json' } },
+      () => { bodyRead = true; return Promise.resolve({}) },
+    )
+    expect(out?.status).toBe(403)
+    expect(bodyRead).toBe(false)
+  })
+
+  it('unknown non-API route → null (falls through to the static SPA)', async () => {
+    expect(await dispatch(dctx(), { method: 'GET', url: '/some/client/route', headers: {} }, body(undefined))).toBeNull()
+  })
+
+  it('unknown POST → 405 on /api/*, 404 elsewhere (never the SPA)', async () => {
+    const api = await dispatch(dctx(), { method: 'POST', url: '/api/health', headers: { host: 'localhost' } }, body({}))
+    expect(api?.status).toBe(405)
+    const other = await dispatch(dctx(), { method: 'POST', url: '/nope', headers: { host: 'localhost' } }, body({}))
+    expect(other?.status).toBe(404)
+  })
+
+  it('a body reader failure on a matched write → 400', async () => {
+    const out = await dispatch(
+      dctx(),
+      { method: 'POST', url: '/api/strategy', headers: { host: 'localhost', 'content-type': 'application/json' } },
+      () => Promise.reject(new Error('invalid JSON body')),
+    )
+    expect(out?.status).toBe(400)
+  })
+})
+
+describe('network bind (the unauthenticated panel must not default to a public interface)', () => {
   const saved = process.env.DASHBOARD_HOST
   afterEach(() => { if (saved === undefined) delete process.env.DASHBOARD_HOST; else process.env.DASHBOARD_HOST = saved })
 

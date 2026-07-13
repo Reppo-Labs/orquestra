@@ -4,47 +4,37 @@
 // index.ts stays a thin shell: env, service construction, argv dispatch, signals.
 import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
-import type { CycleDeps, CycleReport } from './cycle.js'
-import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
-import type { VoterPod, PodScorer } from '../voter/types.js'
+import type { CycleDeps, CycleReport, OnchainReads } from './cycle.js'
+import type { DatanetAdapter } from '../adapter/types.js'
+import type { VoterPod } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
-import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
-import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
-import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
-import { effectiveDefault } from '../llm/effectiveDefault.js'
-import { resolveModel } from '../llm/model.js'
-import { detectContentType, isVideoType, isGenericBinaryType } from '../llm/contentType.js'
-import { resolveDriveUrl } from '../llm/driveResolve.js'
+import { buildScorers, effectiveDefaultModel } from './scorers.js'
+import type { ModelResolver } from '../llm/resolveScoringModel.js'
+import { createVideoPipeline } from '../voter/videoPipeline.js'
+// isVideoType here guards fetchPodContent only (never slice a binary response into text);
+// video-pod detection/routing itself lives in the VideoPodPipeline.
+import { detectContentType, isVideoType } from '../llm/contentType.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
 import type { DedupState } from './state.js'
-import type { ClaimableEmission, ClaimToken, EmissionsDue } from '../reppo/queryEmissionsDue.js'
+// All reppo READS go through the facade seam — never the individual query files.
+import {
+  defaultReppoReader, deriveCurrentEpoch, formatTokenAmount,
+  type ReppoReader, type ClaimableEmission, type ClaimToken, type EmissionsDue,
+  type EpochInfo, type OwnPodVote,
+} from '../reppo/reader.js'
 import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
-import { listPodsJson, deriveCurrentEpoch } from '../reppo/listPods.js'
-import { queryEmissionsDueJson } from '../reppo/queryEmissionsDue.js'
-import { readTokenBalance } from '../reppo/tokenBalance.js'
-import { queryClaimableOnchain, queryVoterClaimableOnchain } from '../reppo/emissionsOnchain.js'
-import { makeDbPodCache, makeVoterScanCache, makeOwnerScanCache } from '../reppo/podCacheStore.js'
-import { queryBalanceJson } from '../reppo/queryBalance.js'
-import { queryVotingPowerJson } from '../reppo/queryVotingPower.js'
-import { queryEpochJson, type EpochInfo } from '../reppo/queryEpoch.js'
-import { queryDatanetPodVotes } from '../reppo/queryOwnPods.js'
-import { queryEpochVoteVolume } from '../reppo/epochVotes.js'
-import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity, type ActivityEntry } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
 import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
-import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods, type OwnPodVote } from '../dashboard/earnStatus.js'
+import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods } from '../dashboard/earnStatus.js'
 import { collectOutcomes } from '../learn/collect.js'
 import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
-import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
-import { listDatanetsJson } from '../reppo/listDatanets.js'
-import { getSubnetEmissionInfo, formatTokenAmount } from '../reppo/subnetManager.js'
 import { registerVoteOnPlatform } from '../reppo/platformApi.js'
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
@@ -85,11 +75,10 @@ function isTextLike(mediaType: string): boolean {
   return /^application\/(json|xml|.*\+json|.*\+xml|x-ndjson|jsonl|csv|javascript|x-yaml|yaml)$/.test(mediaType)
 }
 
-/** IO surface used by the cycle wiring — injectable so tests run without the CLI. */
+/** Rubric + HTTP-content surface used by the cycle wiring — injectable so tests run
+ *  without the CLI or the network. Reppo reads live on the ReppoReader seam instead. */
 export interface WiringIo {
   getRubric(id: string): Promise<DatanetRubric>
-  listPods(id: string, opts: { all: boolean }): Promise<VoterPod[]>
-  emissionsDue(): Promise<{ pods: ClaimableEmission[] }>
   fetchContent(url: string): Promise<string>
   /** Probe a pod URL's Content-Type so a video pod routes to the video path. */
   detectType(url: string): Promise<{ mediaType: string; contentLength: number | null } | null>
@@ -97,8 +86,6 @@ export interface WiringIo {
 
 const defaultIo: WiringIo = {
   getRubric: (id) => getDatanetRubric(id),
-  listPods: (id, opts) => listPodsJson(id, opts),
-  emissionsDue: () => queryEmissionsDueJson(),
   fetchContent: (url) => fetchPodContent(url),
   detectType: (url) => detectContentType(url),
 }
@@ -106,11 +93,6 @@ const defaultIo: WiringIo = {
 export interface CycleWiring {
   dataDir: string
   config: StrategyConfig
-  /** Startup env-default model. NO LONGER used by the mint screen scorer / deliberation panel /
-   *  reflection — those now resolve the LIVE node default (config.defaultModel, hot-reloaded) via
-   *  effectiveDefaultModel(). Kept because index.ts still threads it to the adapters, which stay
-   *  on the env default for now (out of scope). */
-  model: LanguageModel
   /** provider → apiKey, built once at startup from env (src/llm/registry.ts). The
    *  per-datanet scorer resolves a model from this; an absent key for a datanet's
    *  chosen provider → that datanet's vote is skipped with a recorded reason. */
@@ -144,22 +126,9 @@ export interface CycleWiring {
    *  non-REPPO access fee is skipped (recorded) rather than fired on an older CLI. */
   supportsNonReppoGrants?: boolean
   io?: Partial<WiringIo>
-}
-
-/** The LIVE node-default model: dashboard-selected `config.defaultModel` when its provider is
- *  keyed, else the env default (`w.defaultProvider`/`w.defaultModel`). Read from w.config each
- *  call so a dashboard default change takes effect on the next cycle (hot-reload), mirroring the
- *  vote scorer + chat. null when even the effective default has no key — callers that can't
- *  proceed without a model (mint scorer, reflection) skip/throw, matching their existing
- *  no-model behavior. Keys are env-only (registry); never read from config. */
-function effectiveDefaultModel(w: CycleWiring): LanguageModel | null {
-  const eff = effectiveDefault({
-    configDefault: w.config.defaultModel,
-    registry: w.providerKeyRegistry,
-    envProvider: w.defaultProvider,
-    envModel: w.defaultModel,
-  })
-  return eff.key ? (w.resolveModel ?? resolveModel)(eff.provider, eff.key, eff.model) : null
+  /** Reppo read facade. Defaults to the CLI/RPC-backed defaultReppoReader; tests
+   *  inject a fake so no `reppo` process is ever spawned. */
+  reader?: ReppoReader
 }
 
 /** Floor for the on-chain emissions scans: REPPO_EMISSIONS_FLOOR_EPOCH (the epoch the node
@@ -174,107 +143,29 @@ function emissionsFloorEpoch(): number | undefined {
  *  is threaded explicitly; everything IO is injectable for tests. */
 export function buildCycleDeps(w: CycleWiring): CycleDeps {
   const io: WiringIo = { ...defaultIo, ...w.io }
+  const reader = w.reader ?? defaultReppoReader
   // The operator brief is config.notes, read live so dashboard edits hot-reload
   // (buildTick swaps w.config each cycle). Used by the screen scorer, the panel
   // judge, and the adapters.
   const liveBrief = (): string => w.config.notes
+  // Raw pass-through by design: each adapter parses/validates these params itself
+  // (e.g. parseGdeltParams / parseSportsParams) so the typing lives at the adapter.
   const strategyFor = (id: string): Record<string, unknown> => {
-    const p = (w.config.datanets[id] as { adapterParams?: Record<string, unknown> } | undefined)?.adapterParams ?? {}
+    const p = w.config.datanets[id]?.adapterParams ?? {}
     return { brief: liveBrief(), ...p }
   }
-  // Per-datanet learned-lessons block for the judge, read live from the DB so a new
-  // reflection or an operator veto/disable takes effect on the next decision.
-  const liveLessons = (id: string): string => {
-    try { return buildLessonsBlock(w.dataDir, id) } catch { return '' }
-  }
-
-  // Screen scorer + panel decorators are built ONCE. They read the brief and the
-  // deliberation settings live (via getters / liveBrief) so a hot-reload of either
-  // takes effect on the next decision without rebuilding anything.
-  const getDeliberation = () => w.config.deliberation
-  // Per-datanet vote scorer: resolve THIS datanet's model (its `model` override, else the
-  // node default) against the env key registry, then wrap in the panel exactly as before.
-  // A skip (no key for the chosen provider) is returned straight to the cycle, which
-  // records it per-datanet. isVideo:false here is only a model-resolution seam — it picks
-  // the datanet-level TEXT scorer's model; video pods (detected + marked in
-  // getPodsAndFilter) re-resolve per pod to a Gemini model inside the scorer via modelCtx.
-  //
-  // Build-once cache: datanets sharing a resolved provider:model reuse one scorer
-  // (per datanet per cycle was rebuilding it). Safe across hot-reload — the scorer reads
-  // brief/deliberation/lessons live via getters (getLessons takes datanetId at call time),
-  // so the cached object stays correct. Skips are not cached (cheap, no scorer built).
-  const scorerCache = new Map<string, PodScorer>()
-  const voteScorerFor = (datanetId: string): { scorer: PodScorer } | { skip: string } => {
-    const policyModel = (w.config.datanets[datanetId] as { model?: { provider: LlmProvider; model: string } } | undefined)?.model
-    // The node default is the dashboard-selected config.defaultModel when its provider is
-    // keyed, else the env default (w.defaultProvider/w.defaultModel). Read live from w.config
-    // (hot-reloaded each cycle), so a dashboard default change takes effect on the next cycle.
-    const eff = effectiveDefault({
-      configDefault: w.config.defaultModel,
-      registry: w.providerKeyRegistry,
-      envProvider: w.defaultProvider,
-      envModel: w.defaultModel,
-    })
-    const resolved = resolveScoringModel({
-      policyModel, isVideo: false,
-      registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model,
-    }, w.resolveModel ?? resolveModel)
-    if ('skip' in resolved) return { skip: resolved.skip }
-    // Key by the effective provider:model (the datanet-level resolution is always the
-    // text model; video pods re-resolve per pod via modelCtx below): identical
-    // resolutions yield an identical scorer, so one build serves every such datanet.
-    const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${eff.provider}:${eff.model}`
-    let scorer = scorerCache.get(cacheKey)
-    if (!scorer) {
-      // modelCtx lets the screen scorer RE-RESOLVE to a Gemini model for a video pod (a
-      // video pod can't be scored on this datanet's text model). policyModel is fixed per
-      // cacheKey, so binding it into the cached scorer is correct (datanets sharing a key
-      // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
-      const modelCtx: ScorerModelCtx = {
-        registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model, policyModel,
-        resolveModel: w.resolveModel ?? resolveModel,
-      }
-      const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
-      scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      scorerCache.set(cacheKey, scorer)
-    }
-    return { scorer }
-  }
-  // Mint path is unchanged by per-datanet voting overrides (spec: override scopes to the
-  // voting scorer only). Score the DATASET (not just the summary line) on the node default
-  // model — otherwise every candidate scores low and nothing mints (src/minter/score.ts).
-  // The model is the LIVE effective default (config.defaultModel, hot-reloaded), resolved at
-  // scoreCandidate-call time — NOT captured at startup. A missing key (eff.key === '') THROWS,
-  // which selectMints catches per-candidate and records as a skip (parity with a scoring
-  // failure); it never aborts the datanet's mint batch. The screen scorer + panel are rebuilt
-  // per call against the live model — cheap (no SDK round-trip until scorePod/runPanel runs),
-  // and necessary because both capture `model` at construction.
-  const candidateScorer: CandidateScorer = {
-    scoreCandidate: (cand, rub) => {
-      const model = effectiveDefaultModel(w)
-      if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
-      // Mint prompts never render the vote-economics block (yield is a where-to-vote
-      // signal): the cycle attaches economics.currentYield only to a vote-scoped rubric
-      // CLONE (cycle.ts), so the shared rubric arriving here never carries it — no
-      // defensive strip needed at this boundary.
-      const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
-      const candidateBase: CandidateScorer = {
-        scoreCandidate: (c, r) => {
-          const { name, description } = candidateScoreInput(c)
-          return mintScreenScorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
-        },
-      }
-      const panel = createPanelCandidateScorer(candidateBase, { model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      return panel.scoreCandidate(cand, rub)
-    },
-  }
-  // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
-  // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
-  // remaining budget in this closure and reset it once per cycle via beginCycle
-  // (runCycle calls it right after startCycle). Decremented as videos are marked across all
-  // datanets in the cycle.
-  const videoCap = w.videoPodsPerCycle ?? 4
-  let videoBudget = videoCap
+  // Video-pod handling — detection + per-CYCLE budget + per-pod Gemini scoring — is
+  // owned by ONE pipeline instance shared across datanets (a per-datanet instance would
+  // let `videoPodsPerCycle × datanets` videos through). beginCycle re-arms its budget.
+  const video = createVideoPipeline({
+    registry: w.providerKeyRegistry,
+    resolveModel: w.resolveModel,
+    videoPodsPerCycle: w.videoPodsPerCycle,
+    detectType: (url) => io.detectType(url),
+  })
+  // LLM scoring collaborator — the scorer cache + model routing live in scorers.ts,
+  // reading config live off `w` (hot-reload safe); video pods route to the pipeline.
+  const scorers = buildScorers(w, video)
 
   // Per-CYCLE activity snapshot. The SQLite history (up to 100k rows, never rotated)
   // feeds several derived views: the own-mint pod-name backstop (previously re-read once
@@ -300,15 +191,42 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // claimed native amount from the tx receipt. The on-chain claim scanners return datanetId='' and
   // no token; we resolve pod→datanet from our own vote/mint activity and datanet→token from the
   // catalog. Best-effort + only when there ARE claims (avoids a per-cycle CLI call when idle).
+  // pod→datanet from this cycle's activity snapshot (vote/mint rows carrying both ids) —
+  // shared by the owner-claim enrichment and the voter-claim attribution below.
+  const podDatanetFromActivity = (): Map<string, string> => {
+    const m = new Map<string, string>()
+    for (const e of cycleActivity()) {
+      if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) m.set(e.podId, e.datanetId)
+    }
+    return m
+  }
   const enrichTokens = async (due: ClaimableEmission[]): Promise<ClaimableEmission[]> => {
     if (due.length === 0) return due
-    const podDatanet = new Map<string, string>()
-    for (const e of cycleActivity()) {
-      if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) podDatanet.set(e.podId, e.datanetId)
+    const podDatanet = podDatanetFromActivity()
+    // The activity map above can NEVER cover our own mints: `reppo mint-pod --json`
+    // (CLI ≤0.12.x) returns no podId, so executed mint rows have podId=null — and those
+    // are exactly the pods whose OWNER emissions we claim. Resolve the leftovers by
+    // datanet membership: list configured datanets' pods and match the claim's on-chain
+    // podId, stopping as soon as everything is resolved. Runs only when a claim is
+    // otherwise unattributable (claims are occasional; most cycles skip this entirely).
+    // Best-effort per datanet — a failed list leaves those claims unattributed this
+    // cycle, never blocks the claim itself.
+    const unresolved = new Set(due.filter((em) => !em.datanetId && !podDatanet.has(em.podId)).map((em) => em.podId))
+    if (unresolved.size > 0) {
+      for (const id of Object.keys(w.config.datanets)) {
+        if (id === '*') continue
+        try {
+          for (const p of await reader.datanetPodVotes(id)) {
+            if (!podDatanet.has(p.podId)) podDatanet.set(p.podId, id)
+            unresolved.delete(p.podId)
+          }
+        } catch { /* best-effort: skip this datanet's membership map this cycle */ }
+        if (unresolved.size === 0) break
+      }
     }
     const tokenByDatanet = new Map<string, ClaimToken>()
     try {
-      for (const d of await listDatanetsJson()) if (d.nativeToken) tokenByDatanet.set(d.id, d.nativeToken)
+      for (const d of await reader.listDatanets()) if (d.nativeToken) tokenByDatanet.set(d.id, d.nativeToken)
     } catch { /* best-effort: skip token enrichment this cycle (claims still record REPPO) */ }
     return due.map((em) => {
       const datanetId = em.datanetId || podDatanet.get(em.podId) || ''
@@ -316,158 +234,156 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     })
   }
 
+  // On-chain reads are wired PRESENT-OR-ABSENT AS A UNIT — the RPC decision is made
+  // ONCE here (not per field). The wallet-scoped tier (fee pre-check, voter emissions)
+  // nests the same way: absent when the wallet address could not be derived at startup.
+  const rpcUrl = w.rpcUrl
+  const walletAddress = w.walletAddress
+  const onchain: OnchainReads | undefined = rpcUrl
+    ? {
+        // Per-datanet emission-yield volume — read-only, needs RPC alone.
+        getEpochVoteVolume: (podIds) => reader.epochVoteVolume(rpcUrl, podIds),
+        ...(walletAddress
+          ? {
+              wallet: {
+                address: walletAddress,
+                readTokenBalance: (token: string, owner: string) => reader.tokenBalance(rpcUrl, token, owner),
+                // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod
+                // set comes from our executed-vote activity (the wallet doesn't own them, so
+                // they're absent from the owner Transfer-log cache); claimable (pod,epoch) is
+                // then detected on-chain. RPC-only — no platform-API fallback exists.
+                getVoterEmissionsDue: async () => {
+                  const votedPodIds = [...new Set(
+                    cycleActivity() // per-cycle snapshot — no extra table scan for the claim phase
+                      .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
+                      .map((e) => e.podId as string),
+                  )]
+                  // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
+                  // describes publisher/mint emissions only). Enriching here causes readClaimedToken
+                  // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
+                  // The DATANET is attributed though (datanetId only): the on-chain scan returns
+                  // datanetId='', and a voter claim is always on a pod we voted on, so this
+                  // cycle's vote rows resolve it with zero extra CLI calls.
+                  const claims = await reader.voterClaimableOnchain(rpcUrl, walletAddress, votedPodIds, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+                  const podDatanet = podDatanetFromActivity()
+                  return claims.map((em) => em.datanetId ? em : { ...em, datanetId: podDatanet.get(em.podId) ?? '' })
+                },
+              },
+            }
+          : {}),
+      }
+    : undefined
+
   return {
     dataDir: w.dataDir,
-    topN: 12,
-    beginCycle: () => { videoBudget = videoCap; activitySnapshot = null; mintedNamesMemo = null },
-    getRubric: (id) => io.getRubric(id),
-    getPodsAndFilter: async (id) => {
-      const pods = await io.listPods(id, { all: true })
-      const own = await io.listPods(id, { all: false })
-        .then((p) => p.map((x) => x.podId))
-        .catch((e) => {
-          console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
-          return [] as string[]
-        })
-      const currentEpoch = deriveCurrentEpoch(pods)
-      const voted = w.dedup.getVotedPodIds(id)
-      const ownSet = new Set(own), votedSet = new Set(voted)
-      // Name-based own-pod backstop: the platform's creator field is empty on our
-      // pods, so the creator-based query above misses some — each miss wastes an
-      // LLM scoring call and burns a one-time CANNOT_VOTE_FOR_OWN_POD error. Our
-      // executed mints' names (the earn-attribution source) close the gap.
-      const minted = mintedNames() // per-cycle memo — was a full activity re-scan PER DATANET
-      for (const p of pods) if (p.name && minted.has(p.name)) ownSet.add(p.podId)
-      // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
-      // — content fetches are the slow part of a cycle. For each, probe Content-Type:
-      // a video/* pod is marked (mediaUrl/mediaType/contentLength) for the Gemini video
-      // path instead of text-fetched; a per-CYCLE cap (videoBudget, shared across datanets)
-      // bounds how many videos we score. A DETECTED video is NEVER text-fetched — under the
-      // cap it is marked; over the cap it is left unmarked and skipped (continue) this cycle.
-      for (const p of pods) {
-        const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
-        if (!eligible || !p.url) continue
-        // A Google Drive viewer/share link (drive.google.com/file/d/<ID>/view) serves an
-        // HTML shell, not bytes — detectType would see text/html and the pod would be
-        // text-fetched (model scores the page chrome, not the video). Rewrite it to a
-        // direct-download URL FIRST so the probe sees video/* and ingestVideo can fetch it.
-        // Non-Drive URLs pass through unchanged.
-        const mediaSrc = resolveDriveUrl(p.url)
-        const resolvedFromDrive = mediaSrc !== p.url
-        let info: { mediaType: string; contentLength: number | null } | null = null
-        try { info = await io.detectType(mediaSrc) } catch { info = null }
-        // video/* routes to the Gemini path. A Drive-resolved URL whose download endpoint
-        // reports a generic binary type (application/octet-stream — common for Drive file
-        // downloads) is also treated as the clip: we only rewrite Drive links, and a binary
-        // body on a video datanet IS the video. Gemini needs a concrete video mime to ingest,
-        // so a coerced type defaults to video/mp4 when detection didn't give a video/* type.
-        const isVideo = info && (isVideoType(info.mediaType) || (resolvedFromDrive && isGenericBinaryType(info.mediaType)))
-        if (info && isVideo) {
-          // A detected video MUST NOT be text-fetched (binary sliced into description = junk
-          // votes), whether or not it fits the cap. Under the cap → mark for the video path;
-          // over the cap → leave unmarked and skip it entirely this cycle (retried next cycle).
-          if (videoBudget > 0) {
-            p.mediaUrl = mediaSrc
-            p.mediaType = isVideoType(info.mediaType) ? info.mediaType : 'video/mp4'
-            if (info.contentLength !== null) p.contentLength = info.contentLength
-            videoBudget--
-          }
-          continue
-        }
-        // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
-        // When we already have that real writeup (description differs from the bare title),
-        // do NOT fetch the url — for SPA-backed datanets (e.g. ArAIstotle) a server-side
-        // fetch returns the app-shell HTML, which would CLOBBER good content with junk and
-        // produce bad votes. Only fetch to enrich when we have title-only (no writeup).
-        if (p.description.trim() !== p.name.trim()) continue
-        const c = await io.fetchContent(p.url)
-        if (c) p.description = `${p.name}\n\n${c}`
-      }
-      return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
+    // Activity log + per-cycle arming + platform vote registration, as one collaborator.
+    activity: {
+      record: (entry) => {
+        try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
+      },
+      beginCycle: () => { video.beginCycle(); activitySnapshot = null; mintedNamesMemo = null },
+      // Cred check deferred to call time so late-arriving or rotated creds take effect
+      // without restarting the node (env vars set from SQLite at startup but re-read here).
+      registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+        const agentId = process.env.REPPO_AGENT_ID
+        const apiKey = process.env.REPPO_API_KEY
+        if (!agentId || !apiKey) return Promise.resolve()
+        return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
+      },
     },
-    getAdapter: (id) => w.adapters.find((a) => a.id === id),
-    voteScorerFor,
-    candidateScorer,
-    seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
-    // Live veREPPO for the per-cycle stake top-up — same balance query setupNode/snapshot use.
-    // null on a failed read (NOT 0): maybeTopUpStake skips this cycle's top-up rather than
-    // treating a read miss as zero veREPPO, which would lock the FULL target on top of whatever
-    // the wallet already holds (over-lock). The top-up retries next cycle.
-    getVeReppo: async () => (await queryBalanceJson().catch(() => null))?.veReppo ?? null,
+    reads: {
+      getRubric: (id) => io.getRubric(id),
+      getPodsAndFilter: async (id) => {
+        const pods = await reader.listPods(id, { all: true })
+        const own = await reader.listPods(id, { all: false })
+          .then((p) => p.map((x) => x.podId))
+          .catch((e) => {
+            console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
+            return [] as string[]
+          })
+        const currentEpoch = deriveCurrentEpoch(pods)
+        const voted = w.dedup.getVotedPodIds(id)
+        const ownSet = new Set(own), votedSet = new Set(voted)
+        // Name-based own-pod backstop: the platform's creator field is empty on our
+        // pods, so the creator-based query above misses some — each miss wastes an
+        // LLM scoring call and burns a one-time CANNOT_VOTE_FOR_OWN_POD error. Our
+        // executed mints' names (the earn-attribution source) close the gap.
+        const minted = mintedNames() // per-cycle memo — was a full activity re-scan PER DATANET
+        for (const p of pods) if (p.name && minted.has(p.name)) ownSet.add(p.podId)
+        // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
+        // — content fetches are the slow part of a cycle. For each, the video pipeline
+        // probes Content-Type (Drive-aware) and marks a video pod for the Gemini path
+        // within its per-CYCLE budget. A DETECTED video is NEVER text-fetched — under
+        // the cap it is marked; over the cap it is left unmarked and skipped (continue)
+        // this cycle. Detection, marking, and the budget all live in the pipeline.
+        for (const p of pods) {
+          const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
+          if (!eligible || !p.url) continue
+          if (await video.detectAndMark(p)) continue
+          // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
+          // When we already have that real writeup (description differs from the bare title),
+          // do NOT fetch the url — for SPA-backed datanets (e.g. ArAIstotle) a server-side
+          // fetch returns the app-shell HTML, which would CLOBBER good content with junk and
+          // produce bad votes. Only fetch to enrich when we have title-only (no writeup).
+          if (p.description.trim() !== p.name.trim()) continue
+          const c = await io.fetchContent(p.url)
+          if (c) p.description = `${p.name}\n\n${c}`
+        }
+        return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
+      },
+      // Live veREPPO for the per-cycle stake top-up — same balance query setupNode/snapshot use.
+      // null on a failed read (NOT 0): maybeTopUpStake skips this cycle's top-up rather than
+      // treating a read miss as zero veREPPO, which would lock the FULL target on top of whatever
+      // the wallet already holds (over-lock). The top-up retries next cycle.
+      getVeReppo: async () => (await reader.balance().catch(() => null))?.veReppo ?? null,
+      // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
+      // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
+      // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
+      // cycle's claim phase (it skips claiming that cycle). The owner-scan watermark makes
+      // the first run backfill history from REPPO_EMISSIONS_FLOOR_EPOCH — without it, the
+      // fixed 3-epoch window permanently hid older unclaimed emissions (operator report:
+      // "claimed once, then only manual claims worked").
+      getEmissionsDue: async () => enrichTokens((rpcUrl && walletAddress)
+        ? await reader.claimableOnchain(rpcUrl, walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+        : (await reader.emissionsDue()).pods),
+    },
+    // Adapter routing + the per-datanet inputs the cycle threads into adapter.discover.
+    adapters: {
+      get: (id) => w.adapters.find((a) => a.id === id),
+      topN: 12,
+      strategyFor,
+      existingPodNames: async (id) => {
+        const pods = await reader.listPods(id, { all: true }).catch(() => [] as VoterPod[])
+        const currentEpoch = deriveCurrentEpoch(pods)
+        // Current-epoch pods are the most likely semantic duplicates of new candidates;
+        // sort them first, then cap to avoid flooding the LLM judge with stale history.
+        const MAX_EXISTING = 50
+        const sorted = currentEpoch === null ? pods : [
+          ...pods.filter((p) => p.validityEpoch === currentEpoch),
+          ...pods.filter((p) => p.validityEpoch !== currentEpoch),
+        ]
+        return sorted.slice(0, MAX_EXISTING).map((p) => p.name).filter(Boolean)
+      },
+    },
+    scorers,
+    // Persistent dedup — thin views over DedupState (SQLite). Grants are always
+    // supported in production wiring, so the grant cache is always present.
+    dedup: {
+      seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
+      recordVote: (id, podId) => w.dedup.recordVote(id, podId),
+      recordMint: (id, key) => w.dedup.recordMint(id, key),
+      seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
+      recordClaim: (key) => w.dedup.recordClaim(key),
+      grants: {
+        granted: async () => new Set(w.dedup.getGrantedSubnets()),
+        record: (id) => w.dedup.recordGrant(id),
+        revoke: (id) => w.dedup.removeGrant(id),
+      },
+    },
     executor: w.executor,
     ledger: w.ledger,
-    recordVote: (id, podId) => w.dedup.recordVote(id, podId),
-    // Cred check deferred to call time so late-arriving or rotated creds take effect
-    // without restarting the node (env vars set from SQLite at startup but re-read here).
-    registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
-      const agentId = process.env.REPPO_AGENT_ID
-      const apiKey = process.env.REPPO_API_KEY
-      if (!agentId || !apiKey) return Promise.resolve()
-      return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
-    },
-    recordMint: (id, key) => w.dedup.recordMint(id, key),
-    // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
-    // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
-    // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
-    // cycle's claim phase (it skips claiming that cycle). The owner-scan watermark makes
-    // the first run backfill history from REPPO_EMISSIONS_FLOOR_EPOCH — without it, the
-    // fixed 3-epoch window permanently hid older unclaimed emissions (operator report:
-    // "claimed once, then only manual claims worked").
-    getEmissionsDue: async () => enrichTokens((w.rpcUrl && w.walletAddress)
-      ? await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() }, makeOwnerScanCache(w.dataDir))
-      : (await io.emissionsDue()).pods),
-    // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod set comes
-    // from our executed-vote activity (the wallet doesn't own them, so they're absent from the
-    // owner Transfer-log cache); claimable (pod,epoch) is then detected on-chain. RPC-only —
-    // no platform-API fallback exists for voter claims.
-    getVoterEmissionsDue: async () => {
-      if (!w.rpcUrl || !w.walletAddress) return []
-      const votedPodIds = [...new Set(
-        cycleActivity() // per-cycle snapshot — no extra table scan for the claim phase
-          .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
-          .map((e) => e.podId as string),
-      )]
-      // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
-      // describes publisher/mint emissions only). Enriching here causes readClaimedToken
-      // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
-      return queryVoterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, makeVoterScanCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() })
-    },
-    seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
-    recordActivity: (entry) => {
-      try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
-    },
-    recordClaim: (key) => w.dedup.recordClaim(key),
-    strategyFor,
-    getExistingPodNames: async (id) => {
-      const pods = await io.listPods(id, { all: true }).catch(() => [] as VoterPod[])
-      const currentEpoch = deriveCurrentEpoch(pods)
-      // Current-epoch pods are the most likely semantic duplicates of new candidates;
-      // sort them first, then cap to avoid flooding the LLM judge with stale history.
-      const MAX_EXISTING = 50
-      const sorted = currentEpoch === null ? pods : [
-        ...pods.filter((p) => p.validityEpoch === currentEpoch),
-        ...pods.filter((p) => p.validityEpoch !== currentEpoch),
-      ]
-      return sorted.slice(0, MAX_EXISTING).map((p) => p.name).filter(Boolean)
-    },
-    grantedSubnets: async () => new Set(w.dedup.getGrantedSubnets()),
-    recordGrant: (id) => w.dedup.recordGrant(id),
-    revokeGrant: (id) => w.dedup.removeGrant(id),
     supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
-    // Wallet ERC20 balance reader for the NON-REPPO access-fee pre-check (cycle.ts). Wired
-    // ONLY when both an RPC URL and the wallet address are known — same RPC the CLI uses.
-    // When omitted (no RPC), the cycle skips the pre-check and lets the CLI fail closed.
-    ...(w.rpcUrl && w.walletAddress
-      ? {
-          walletAddress: w.walletAddress,
-          readTokenBalance: (token: string, owner: string) => readTokenBalance(w.rpcUrl as string, token, owner),
-        }
-      : {}),
-    // Per-datanet emission-yield volume reader — a read-only call, so only rpcUrl is
-    // needed (no wallet address required, unlike the balance reader above).
-    ...(w.rpcUrl
-      ? { getEpochVoteVolume: (podIds: string[]) => queryEpochVoteVolume(w.rpcUrl as string, podIds) }
-      : {}),
+    ...(onchain ? { onchain } : {}),
   }
 }
 
@@ -482,6 +398,7 @@ export interface TickOpts {
 /** Build the scheduler tick: re-read config, run a cycle, then best-effort
  *  snapshot + earn-status for the dashboard. Reporting failures never abort the loop. */
 export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}): () => Promise<void> {
+  const reader = w.reader ?? defaultReppoReader
   let config = w.config // last-good
   let lastReflectedEpoch = -1 // reflect at most once per epoch boundary (this process)
   const reflecting = new Set<string>() // datanets with an in-flight reflection (mutual exclusion)
@@ -515,7 +432,7 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
     // exact numbers reflection cites. epochLive is the ground truth for THIS tick;
     // undefined = the read failed → econ collection defers (the watermark holds).
     let epochLive: EpochInfo | undefined
-    try { epochLive = await queryEpochJson() } catch (e) {
+    try { epochLive = await reader.epoch() } catch (e) {
       console.error(`orquestra: epoch query failed this tick (non-fatal): ${(e as Error).message}`)
     }
 
@@ -537,15 +454,15 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       // and a stuck claimable epoch pins its watermark, so a re-scan re-walks the whole tail.
       // When claiming is disabled the claim phase never scanned, so do the one scan here.
       const emissionsDueOnchain = async (): Promise<EmissionsDue> => {
-        if (!w.rpcUrl || !w.walletAddress) return queryEmissionsDueJson()
+        if (!w.rpcUrl || !w.walletAddress) return reader.emissionsDue()
         const pods = config.claimEmissions
           ? report.emissionsDue
-          : await queryClaimableOnchain(w.rpcUrl, w.walletAddress, makeDbPodCache(w.dataDir), { floorEpoch: emissionsFloorEpoch() }, makeOwnerScanCache(w.dataDir))
+          : await reader.claimableOnchain(w.rpcUrl, w.walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
         return { totalReppo: pods.reduce((s, p) => s + p.reppo, 0), pods }
       }
       const snap = await collectSnapshot(w.dataDir, cycleId, {
-        balance: () => queryBalanceJson(),
-        votingPower: () => queryVotingPowerJson(),
+        balance: () => reader.balance(),
+        votingPower: () => reader.votingPower(),
         emissionsDue: emissionsDueOnchain,
         // Throwing when the hoisted read failed preserves collectSnapshot's existing
         // merge-over-previous fallback exactly (its `safe()` catches and keeps prev.epoch).
@@ -590,7 +507,7 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       const ownPodIdsByDatanet = new Map<string, Set<string>>()
       for (const id of learnDatanets) {
         let all: OwnPodVote[]
-        try { all = await queryDatanetPodVotes(id) } catch (e) { console.error(`orquestra: pod-votes query failed for datanet ${id}: ${(e as Error).message}`); continue }
+        try { all = await reader.datanetPodVotes(id) } catch (e) { console.error(`orquestra: pod-votes query failed for datanet ${id}: ${(e as Error).message}`); continue }
         const ours = selectOurPods(all, ourNames)
         ownPodIdsByDatanet.set(id, new Set(ours.map((p) => p.podId)))
         if (config.datanets[id]?.mint) votes.push(...ours) // earn signal: our minted pods only
@@ -632,14 +549,14 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         // Datanet discovery: propose vote_enable for any active datanet with emissions
         // that isn't yet vote-enabled. No LLM needed — runs regardless of learnModel.
         try {
-          const allDatanets = await listDatanetsJson()
+          const allDatanets = await reader.listDatanets()
           // When RPC is wired, resolve each non-REPPO datanet's per-epoch native emission
           // amount from the SubnetManager so the proposal rationale shows magnitude (e.g.
           // "40,000 LBM/epoch"). Best-effort: a failed read falls back to a quantity-less desc.
           const rpcUrl = w.rpcUrl
           const resolveNativeEmissions = rpcUrl
             ? async (subnetId: string): Promise<number | null> => {
-                const info = await getSubnetEmissionInfo(rpcUrl, subnetId)
+                const info = await reader.subnetEmissionInfo(rpcUrl, subnetId)
                 if (info.primaryEmissionsPerEpoch <= 0n) return null
                 const dn = allDatanets.find((d) => d.id === subnetId)
                 return formatTokenAmount(info.primaryEmissionsPerEpoch, dn?.nativeToken?.decimals ?? 18)

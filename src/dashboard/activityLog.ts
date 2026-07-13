@@ -189,6 +189,58 @@ export function readActivitySince(dataDir: string, sinceMs: number): ActivityEnt
   return rows.map(rowToEntry)
 }
 
+/** Back-fill datanetId on historical executed claim rows recorded as unattributed.
+ *  The on-chain emissions scan returns datanetId='' and `reppo mint-pod --json`
+ *  (CLI ≤0.12.x) returns no podId, so the runtime enrichment could not map OUR OWN
+ *  pods' owner claims to their datanet — per-datanet earn views under-count while the
+ *  claimed total is correct. Resolution mirrors the runtime fix: vote/mint activity
+ *  first, then datanet membership via `listDatanetPodIds` (one fetch per configured
+ *  datanet, only when something is unresolved). Unresolvable rows stay '' — never
+ *  guessed. Runs once at startup, fire-and-forget; safe to re-run. */
+export async function backfillClaimDatanets(
+  dataDir: string,
+  configuredDatanets: string[],
+  listDatanetPodIds: (datanetId: string) => Promise<string[]>,
+): Promise<void> {
+  const db = conn(dataDir)
+  const rows = db.prepare(
+    "SELECT id, podId FROM activity WHERE kind='claim' AND status='executed' AND (datanetId IS NULL OR datanetId='') AND podId IS NOT NULL AND podId != ''"
+  ).all() as { id: number; podId: string }[]
+  if (rows.length === 0) return
+  const podDatanet = new Map<string, string>()
+  const acts = db.prepare(
+    "SELECT DISTINCT podId, datanetId FROM activity WHERE kind IN ('vote','mint') AND podId IS NOT NULL AND podId != '' AND datanetId IS NOT NULL AND datanetId != ''"
+  ).all() as { podId: string; datanetId: string }[]
+  for (const a of acts) if (!podDatanet.has(a.podId)) podDatanet.set(a.podId, a.datanetId)
+  // Membership sweep with early exit. A permanently unresolvable row (pod on a removed
+  // or never-configured datanet) does re-trigger this sweep on every boot — a conscious
+  // trade-off: the cost is bounded (≤1 list per configured datanet per boot) and a
+  // negative-result marker would wrongly freeze rows that become resolvable later
+  // (transient CLI failure, datanet re-enabled).
+  const unresolvedPods = new Set(rows.filter((r) => !podDatanet.has(r.podId)).map((r) => r.podId))
+  if (unresolvedPods.size > 0) {
+    for (const id of configuredDatanets) {
+      if (id === '*') continue
+      try {
+        for (const podId of await listDatanetPodIds(id)) {
+          if (!podDatanet.has(podId)) podDatanet.set(podId, id)
+          unresolvedPods.delete(podId)
+        }
+      } catch { /* best-effort: a failed list skips that datanet's membership map */ }
+      if (unresolvedPods.size === 0) break
+    }
+  }
+  const update = db.prepare('UPDATE activity SET datanetId = ? WHERE id = ?')
+  let ok = 0
+  for (const row of rows) {
+    const datanetId = podDatanet.get(row.podId)
+    if (!datanetId) continue
+    update.run(datanetId, row.id)
+    ok++
+  }
+  console.error(`orquestra: claim-datanet backfill — ${ok}/${rows.length} historical claim(s) attributed`)
+}
+
 /** Back-fill reppoSpent for historical mint rows that predate the column (upgrading operators).
  *  Runs once at startup, fire-and-forget. Requires rpcUrl; logs a one-time warning without it.
  *  Safe to re-run: skips rows already having reppoSpent or missing txHash. */

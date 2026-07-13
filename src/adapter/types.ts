@@ -1,5 +1,5 @@
 // src/adapter/types.ts
-import type { DatanetRubric } from '../rubric/types.js'
+import type { DatanetRubric, MintRubric } from '../rubric/types.js'
 import type { PanelTranscript } from '../panel/types.js'
 
 /** A mint candidate an adapter produced for a datanet. */
@@ -23,23 +23,27 @@ export interface AdapterContext {
   rubric: DatanetRubric
   /** how many top wallets / items to pull (adapter-specific budget). */
   topN: number
-  /** optional per-operator strategy params (e.g. gdelt focus/angle/brief). Adapter-specific. */
+  /** RAW per-operator strategy params (config adapterParams + the live brief). Deliberately
+   *  untyped at this boundary: each adapter parses/validates its own params with safe
+   *  defaults (e.g. parseGdeltParams, parseSportsParams) — wrong-typed operator config
+   *  degrades to defaults inside the adapter instead of throwing out of discover. */
   strategy?: Record<string, unknown>
   /** names of pods already on-chain for this datanet, for novelty dedup. */
   existingPodNames?: string[]
 }
 
-/** A pluggable per-datanet data source. The reference impl is `hyperliquid`. */
+/** A pluggable per-datanet data source. The reference impl is `hyperliquid`.
+ *  Routing is by `id` from the strategy config (see wiring.ts getAdapter). */
 export interface DatanetAdapter {
   id: string
-  /** does this adapter serve the given datanet? (by id mapping or domain) */
-  matches(datanetId: string, rubric: DatanetRubric): boolean
   /** source + label domain data into mint candidates. */
   discover(ctx: AdapterContext): Promise<CandidatePod[]>
 }
 
 /** Scores a candidate 1-10 against the datanet's publisher spec. LLM by default.
- *  `panel` is present when a multi-agent panel produced the score (see src/panel). */
+ *  `panel` is present when a multi-agent panel produced the score (see src/panel).
+ *  Takes a MintRubric — structurally incapable of carrying the vote-only yield, so a
+ *  mint prompt can never render datanet economics (rubric/types.ts). */
 export interface CandidateScorer {
-  scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric): Promise<{ score: number; reason: string; panel?: PanelTranscript }>
+  scoreCandidate(candidate: CandidatePod, rubric: MintRubric): Promise<{ score: number; reason: string; panel?: PanelTranscript }>
 }

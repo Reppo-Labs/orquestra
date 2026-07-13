@@ -55,8 +55,10 @@ export function readEarnStatus(dataDir: string): PersistedEarn | null {
   }
 }
 
-/** Per-pod vote tallies for our own pods (leading earn signal — emissions follow votes). */
-export interface OwnPodVote { podId: string; name: string; validityEpoch: string; upVotes: number; downVotes: number }
+// OwnPodVote moved to the reppo read seam (src/reppo/reader.ts) — the query that
+// produces it owns the type. Re-exported so existing dashboard consumers keep compiling.
+export type { OwnPodVote } from '../reppo/reader.js'
+import type { OwnPodVote } from '../reppo/reader.js'
 
 export interface EarnSummary {
   /** count of executed mints in the activity log (pods we published). */

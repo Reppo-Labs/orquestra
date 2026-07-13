@@ -36,7 +36,8 @@ import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
 import { startDashboard } from './dashboard/server.js'
-import { backfillMintReppoSpent } from './dashboard/activityLog.js'
+import { backfillMintReppoSpent, backfillClaimDatanets } from './dashboard/activityLog.js'
+import { defaultReppoReader } from './reppo/reader.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -313,15 +314,38 @@ async function start(): Promise<void> {
   // Fire-and-forget: reconcile reppoSpent for historical mints that predate the column.
   // Upgrading operators get accurate lifetime PnL without manual intervention.
   backfillMintReppoSpent(DATA_DIR, rpcUrl || undefined).catch(() => {/* already logged inside */})
+  // Fire-and-forget: attribute historical owner claims recorded with datanetId=''
+  // (mint-pod --json returns no podId, so the runtime enrichment couldn't map our own
+  // pods) — per-datanet earn views under-counted while the claimed total was correct.
+  backfillClaimDatanets(
+    DATA_DIR,
+    Object.keys(config.datanets),
+    async (id) => (await defaultReppoReader.datanetPodVotes(id)).map((p) => p.podId),
+  ).catch(() => {/* best-effort backfill; the runtime enrichment covers new claims */})
+  // Live node-default model for the adapters: resolved at each discover() from the
+  // SAME tick-reloaded, last-good config every other live-model consumer uses
+  // (buildTick keeps w.config on a failed reload), so adapters never diverge from the
+  // scorers mid-cycle. Falls back to the startup env model when the live default has
+  // no key (parity with the old boot-frozen behavior). Late-bound: reads `wiring`
+  // lazily at discover time, after it is constructed below.
+  const liveDefaultModel = () => {
+    const eff = effectiveDefault({
+      configDefault: wiring.config.defaultModel,
+      registry: providerKeyRegistry,
+      envProvider,
+      envModel,
+    })
+    return eff.key ? resolve(eff.provider, eff.key, eff.model) : model
+  }
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
-    model,
     providerKeyRegistry,
     resolveModel: resolve,
     defaultProvider: envProvider,
     defaultModel: envModel,
     // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
-    // not the on-chain budget). Default (4) lives in buildCycleDeps. NaN-safe: a non-numeric
+    // not the on-chain budget). Default (4) lives in the VideoPodPipeline
+    // (voter/videoPipeline.ts). NaN-safe: a non-numeric
     // value falls back to undefined (the default) rather than passing NaN through, which
     // would make `videoBudget > 0` always false and silently disable the whole video feature.
     videoPodsPerCycle: parsePositiveInt(process.env.VIDEO_PODS_PER_CYCLE),
@@ -333,7 +357,11 @@ async function start(): Promise<void> {
     ledger, executor,
     dedup: new DedupState(DATA_DIR),
     // Adapter registry — add new adapters here; routing is by adapter id from config.
-    adapters: [createHyperliquidAdapter(), createGdeltAdapter({ model }), createSportsAdapter({ model })],
+    adapters: [
+      createHyperliquidAdapter(),
+      createGdeltAdapter({ getModel: liveDefaultModel }),
+      createSportsAdapter({ getModel: liveDefaultModel }),
+    ],
   }
 
   // Node-unique agent name so each operator is distinguishable on the Reppo platform

@@ -134,9 +134,6 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
 
   return {
     id: 'hyperliquid',
-    matches(datanetId: string): boolean {
-      return datanetId === '9' || datanetId === 'hyperliquid'
-    },
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
       // A failed epoch/leaderboard fetch throws out of discover by design: runCycle wraps
       // each datanet's mint in per-datanet try/catch, so this datanet is skipped and logged

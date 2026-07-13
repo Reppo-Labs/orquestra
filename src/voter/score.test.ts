@@ -1,7 +1,7 @@
 // src/voter/score.test.ts
 import { describe, it, expect } from 'vitest'
 import type { FilePart } from 'ai'
-import type { DatanetRubric } from '../rubric/types.js'
+import { toVoteRubric, toMintRubric, type DatanetRubric } from '../rubric/types.js'
 import { buildVotePrompt } from './score.js'
 
 describe('buildVotePrompt', () => {
@@ -31,17 +31,18 @@ describe('buildVotePrompt datanet economics', () => {
   } as DatanetRubric
   const pod = { podId: '1', validityEpoch: '1', name: 'p', description: 'd' }
 
+  const yld = {
+    datanetId: 'D',
+    emissionsPerEpochReppo: 500,
+    epoch: 42,
+    epochVoteVolume: 2_000_000,
+    yieldPerVote: 500 / 2_000_000,
+    uncontested: false,
+  }
+
   it('renders the economics block when rubric.economics.currentYield is set', () => {
-    // Clone economics so this mutation never leaks into other tests sharing baseRubric.
-    const rubric = { ...baseRubric, economics: { ...baseRubric.economics } }
-    rubric.economics.currentYield = {
-      datanetId: 'D',
-      emissionsPerEpochReppo: 500,
-      epoch: 42,
-      epochVoteVolume: 2_000_000,
-      yieldPerVote: 500 / 2_000_000,
-      uncontested: false,
-    }
+    // toVoteRubric clones, so the yield never leaks into other tests sharing baseRubric.
+    const rubric = toVoteRubric(baseRubric, yld)
     const built = buildVotePrompt(pod, rubric) as { system: string; prompt: string }
     expect(built.prompt).toContain('## Datanet economics')
     expect(built.prompt).toContain('500 REPPO per epoch')
@@ -51,6 +52,15 @@ describe('buildVotePrompt datanet economics', () => {
 
   it('omits the block when currentYield is absent (back-compat)', () => {
     const built = buildVotePrompt(pod, baseRubric) as { prompt: string }
+    expect(built.prompt).not.toContain('## Datanet economics')
+  })
+
+  it('a mint-scoped rubric (toMintRubric) never renders the block, even from a yield-carrying vote rubric', () => {
+    // Mirrors wiring.ts's mint screen path, which scores candidates through this same
+    // prompt builder: MintRubric structurally cannot carry currentYield, so the mint
+    // prompt is economics-free by type, not by convention.
+    const mintRubric = toMintRubric(toVoteRubric(baseRubric, yld))
+    const built = buildVotePrompt(pod, mintRubric) as { prompt: string }
     expect(built.prompt).not.toContain('## Datanet economics')
   })
 })

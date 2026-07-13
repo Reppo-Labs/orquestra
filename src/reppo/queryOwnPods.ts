@@ -1,6 +1,9 @@
 // src/reppo/queryOwnPods.ts
 import { runReppoStdout } from './exec.js'
-import type { OwnPodVote } from '../dashboard/earnStatus.js'
+
+/** Per-pod vote tallies for our own pods (leading earn signal — emissions follow votes).
+ *  Defined here (the query that produces it); consumers import it from reader.ts. */
+export interface OwnPodVote { podId: string; name: string; validityEpoch: string; upVotes: number; downVotes: number }
 
 const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
 

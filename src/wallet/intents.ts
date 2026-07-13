@@ -1,6 +1,6 @@
 // src/wallet/intents.ts
 import type { PanelTranscript } from '../panel/types.js'
-import type { ClaimToken } from '../reppo/queryEmissionsDue.js'
+import type { ClaimToken } from '../reppo/reader.js'
 
 export interface VoteIntent {
   kind: 'vote'

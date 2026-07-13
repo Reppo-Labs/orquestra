@@ -105,7 +105,8 @@ function NetCard({ id, d, name, edit, providers, econ, maxYield, flash }: {
   const setModel = (provider: string, model: string) =>
     upd((n) => {
       if (!provider) delete n.model
-      else n.model = { provider, model }
+      // the <select> only offers LlmProvider values; the DOM hands them back as string
+      else n.model = { provider, model } as DatanetEntry['model']
     })
   // Provider (re)selection: auto-fill a sensible default slug for the new provider. This is
   // the ONLY place models[0] is substituted — slug keystrokes go through setModel untouched.
@@ -141,7 +142,7 @@ function NetCard({ id, d, name, edit, providers, econ, maxYield, flash }: {
         </label>
         <label className="field">
           <span>strictness <Tip label="what strictness means">{strictnessTip()}</Tip></span>
-          <select value={d.strictness} onChange={(e) => upd((n) => { n.strictness = e.target.value })}>
+          <select value={d.strictness} onChange={(e) => upd((n) => { n.strictness = e.target.value as DatanetEntry['strictness'] })}>
             {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
           </select>
         </label>
@@ -224,7 +225,8 @@ function DefaultModelPicker({ candidate, edit, providers }: {
   const setModel = (provider: string, model: string) =>
     edit((c) => {
       if (!provider || model.trim() === '') delete c.defaultModel
-      else c.defaultModel = { provider, model }
+      // the <select> only offers LlmProvider values; the DOM hands them back as string
+      else c.defaultModel = { provider, model } as Candidate['defaultModel']
     })
   // Provider (re)selection auto-fills a sensible default slug — the only place models[0]
   // is substituted; slug keystrokes go through setModel untouched.

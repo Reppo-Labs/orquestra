@@ -10,6 +10,7 @@ import type { VoterPod } from '../voter/types.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import type { CandidatePod } from '../adapter/types.js'
+import type { ReppoReader } from '../reppo/reader.js'
 
 // Mocks for the post-cycle reporting/learning path (the reporting=false tests below
 // never reach these). Shared spies via vi.hoisted so the factories can reference them.
@@ -28,9 +29,6 @@ const h = vi.hoisted(() => ({
   attachSnapshotLlm: vi.fn(),
   snap: { ts: 't', cycleId: 'c', balance: {}, votingPower: {}, emissionsDue: { totalReppo: 0, pods: [] }, budget: {}, epoch: { epoch: 5, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 } },
 }))
-// Stub the datanet catalog so discovery + token-enrichment never spawn the real `reppo`
-// CLI in unit tests (its variable spawn latency intermittently blew the 5s tick timeout).
-vi.mock('../reppo/listDatanets.js', () => ({ listDatanetsJson: vi.fn(async () => []) }))
 // Passthrough spy on readActivity so tests can assert the activity table is scanned a
 // BOUNDED number of times per cycle (the per-datanet full re-scan was the dominant
 // per-cycle cost). appendActivity and the rest stay real (SQLite in the test tmpdir).
@@ -40,11 +38,7 @@ vi.mock('../dashboard/activityLog.js', async (orig) => {
 })
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
 vi.mock('../learn/econ.js', () => ({ collectEconomics: h.collectEconomics }))
-// The tick reads the epoch ONCE via queryEpochJson (shared by snapshot + econ collector);
-// stub it so unit ticks never spawn the real `reppo` CLI.
-vi.mock('../reppo/queryEpoch.js', () => ({ queryEpochJson: h.queryEpochJson }))
 vi.mock('../learn/reflect.js', () => ({ runReflection: h.runReflection }))
-vi.mock('../reppo/queryOwnPods.js', () => ({ queryDatanetPodVotes: h.queryDatanetPodVotes }))
 vi.mock('../dashboard/snapshot.js', () => ({
   collectSnapshot: vi.fn(async () => h.snap),
   writeSnapshot: h.writeSnapshot,
@@ -82,17 +76,39 @@ let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-wire-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
+// Reusable ReppoReader fake — the one collaborator fake shared by every test here, so no
+// unit test ever spawns the real `reppo` CLI. Quiet-chain defaults (empty lists, zero
+// balances); the epoch + pod-votes reads default to the shared h spies the learn-path
+// tests assert on. Override only what a test exercises.
+function fakeReader(over: Partial<ReppoReader> = {}): ReppoReader {
+  return {
+    listPods: async () => [],
+    datanetPodVotes: h.queryDatanetPodVotes as unknown as ReppoReader['datanetPodVotes'],
+    emissionsDue: async () => ({ totalReppo: 0, pods: [] }),
+    balance: async () => ({ eth: 0, reppo: 0, veReppo: 0, usdc: 0 }),
+    votingPower: async () => ({ power: 0, lockupCount: 0 }),
+    epoch: h.queryEpochJson,
+    listDatanets: async () => [],
+    subnetEmissionInfo: async () => ({ primaryToken: '0x0', primaryEmissionsPerEpoch: 0n, reppoEmissionsPerEpoch: 0n }),
+    tokenBalance: async () => 0n,
+    epochVoteVolume: async () => ({ epoch: 0, totalRaw: 0n }),
+    claimableOnchain: async () => [],
+    voterClaimableOnchain: async () => [],
+    ...over,
+  }
+}
+
 function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
   return {
     dataDir: dir, config,
-    model: {} as CycleWiring['model'], // scorers aren't exercised in these tests
     providerKeyRegistry: new Map<LlmProvider, string>([['virtuals', 'acp-v']]),
     defaultProvider: 'virtuals',
     defaultModel: 'claude-opus-4-8',
     ledger: { startCycle: vi.fn(), state: {} } as unknown as CycleWiring['ledger'],
     executor: {} as CycleWiring['executor'],
     dedup: new DedupState(dir),
-    adapters: [{ id: 'gdelt', matches: () => true, discover: async () => [] }],
+    adapters: [{ id: 'gdelt', discover: async () => [] }],
+    reader: fakeReader(),
     ...over,
   }
 }
@@ -104,14 +120,14 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'fetched content')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('p1', { url: 'https://x/1' }), pod('own1', { url: 'https://x/own' }), pod('voted1', { url: 'https://x/v' }), pod('old', { validityEpoch: '99', url: 'https://x/old' })]
           : [pod('own1')],
-        fetchContent,
-      },
+      }),
+      io: { fetchContent },
     })
-    const { pods, filter } = await deps.getPodsAndFilter('2')
+    const { pods, filter } = await deps.reads.getPodsAndFilter('2')
     expect(fetchContent).toHaveBeenCalledTimes(1) // only p1 — own/voted/stale-epoch excluded
     expect(fetchContent).toHaveBeenCalledWith('https://x/1')
     expect(pods.find((p) => p.podId === 'p1')!.description).toContain('fetched content')
@@ -125,15 +141,15 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => '<!doctype html> app shell junk')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('withWriteup', { url: 'https://araistotle/spa/1', description: 'ArAIstotle YES 0.45 | full analysis + sources' }),
              pod('titleOnly', { url: 'https://x/2' })]
           : [],
-        fetchContent,
-      },
+      }),
+      io: { fetchContent },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     // Only the title-only pod is fetched; the one with a writeup keeps its CLI description.
     expect(fetchContent).toHaveBeenCalledTimes(1)
     expect(fetchContent).toHaveBeenCalledWith('https://x/2')
@@ -150,14 +166,14 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'content')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('p1', { url: 'https://x/1' }), pod('mine', { name: 'US sanctions Chinese firms over Iran arms', url: 'https://x/mine' })]
           : [], // creator-based query returns NOTHING (the live failure mode)
-        fetchContent,
-      },
+      }),
+      io: { fetchContent },
     })
-    const { filter } = await deps.getPodsAndFilter('2')
+    const { filter } = await deps.reads.getPodsAndFilter('2')
     expect(filter.ownPodIds).toContain('mine')          // name-matched into the own set
     expect(fetchContent).toHaveBeenCalledTimes(1)       // 'mine' NOT enriched (no wasted fetch/scoring)
     expect(fetchContent).toHaveBeenCalledWith('https://x/1')
@@ -165,21 +181,21 @@ describe('buildCycleDeps', () => {
 
   it('own-pods query failure disables the guard for the cycle instead of throwing', async () => {
     const deps = buildCycleDeps(wiring({
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => {
           if (!opts.all) throw new Error('rpc down')
           return [pod('p1')]
         },
-        fetchContent: async () => '',
-      },
+      }),
+      io: { fetchContent: async () => '' },
     }))
-    const { filter } = await deps.getPodsAndFilter('2')
+    const { filter } = await deps.reads.getPodsAndFilter('2')
     expect(filter.ownPodIds).toEqual([]) // tolerated, not thrown
   })
 
   it('strategyFor merges the brief with per-datanet adapterParams (params win)', () => {
     const deps = buildCycleDeps(wiring())
-    const s = deps.strategyFor!('2')
+    const s = deps.adapters.strategyFor('2')
     expect(s.brief).toBe('the brief')
     expect(s.focus).toBe('energy')
     expect(s.topN).toBe(3)
@@ -188,28 +204,28 @@ describe('buildCycleDeps', () => {
   it('reads the operator brief live from config.notes (hot-reload, not captured at build)', () => {
     const w = wiring()
     const deps = buildCycleDeps(w)
-    expect(deps.strategyFor!('2').brief).toBe('the brief')
+    expect(deps.adapters.strategyFor('2').brief).toBe('the brief')
     // Simulate buildTick swapping in a freshly-reloaded config with edited notes.
     w.config = { ...w.config, notes: 'edited via dashboard' }
-    expect(deps.strategyFor!('2').brief).toBe('edited via dashboard')
+    expect(deps.adapters.strategyFor('2').brief).toBe('edited via dashboard')
   })
 
-  it('dedup closures thread through to DedupState (vote, mint, grant, revoke)', async () => {
+  it('dedup collaborator threads through to DedupState (vote, mint, grant, revoke)', async () => {
     const w = wiring()
     const deps = buildCycleDeps(w)
-    deps.recordVote('2', 'p9')
-    deps.recordMint('2', 'k9')
-    deps.recordGrant!('2')
+    deps.dedup.recordVote('2', 'p9')
+    deps.dedup.recordMint('2', 'k9')
+    deps.dedup.grants!.record('2')
     expect(w.dedup.getVotedPodIds('2')).toContain('p9')
     expect(w.dedup.getMintedKeys('2')).toContain('k9')
-    expect(await deps.grantedSubnets!()).toEqual(new Set(['2']))
-    deps.revokeGrant!('2')
-    expect(await deps.grantedSubnets!()).toEqual(new Set())
+    expect(await deps.dedup.grants!.granted()).toEqual(new Set(['2']))
+    deps.dedup.grants!.revoke('2')
+    expect(await deps.dedup.grants!.granted()).toEqual(new Set())
   })
 
   it('registerVoteOnPlatform is always wired (cred check deferred to call time)', () => {
     const deps = buildCycleDeps(wiring())
-    expect(deps.registerVoteOnPlatform).toBeDefined()
+    expect(deps.activity.registerVoteOnPlatform).toBeDefined()
   })
 
   it('registerVoteOnPlatform is a no-op when REPPO_AGENT_ID / REPPO_API_KEY are absent', async () => {
@@ -219,7 +235,7 @@ describe('buildCycleDeps', () => {
     delete process.env.REPPO_API_KEY
     try {
       const deps = buildCycleDeps(wiring())
-      await expect(deps.registerVoteOnPlatform!('pod-1', '0xtx')).resolves.toBeUndefined()
+      await expect(deps.activity.registerVoteOnPlatform!('pod-1', '0xtx')).resolves.toBeUndefined()
     } finally {
       if (savedId !== undefined) process.env.REPPO_AGENT_ID = savedId
       if (savedKey !== undefined) process.env.REPPO_API_KEY = savedKey
@@ -228,15 +244,15 @@ describe('buildCycleDeps', () => {
 
   it('getExistingPodNames tolerates a failing list (returns [])', async () => {
     const deps = buildCycleDeps(wiring({
-      io: { listPods: async () => { throw new Error('boom') }, fetchContent: async () => '' },
+      reader: fakeReader({ listPods: async () => { throw new Error('boom') } }),
     }))
-    expect(await deps.getExistingPodNames!('2')).toEqual([])
+    expect(await deps.adapters.existingPodNames('2')).toEqual([])
   })
 
   it('getAdapter routes by id; unknown id is undefined', () => {
     const deps = buildCycleDeps(wiring())
-    expect(deps.getAdapter('gdelt')?.id).toBe('gdelt')
-    expect(deps.getAdapter('nope')).toBeUndefined()
+    expect(deps.adapters.get('gdelt')?.id).toBe('gdelt')
+    expect(deps.adapters.get('nope')).toBeUndefined()
   })
 
   it('detects a video pod: sets mediaUrl/mediaType and does NOT text-enrich it', async () => {
@@ -246,15 +262,14 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('vid', { url: 'https://x/clip.mp4' }), pod('txt', { url: 'https://x/doc.json' })]
           : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
     const txt = pods.find((p) => p.podId === 'txt')!
     expect(vid.mediaUrl).toBe('https://x/clip.mp4')
@@ -275,15 +290,14 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('vid', { url: 'https://drive.google.com/file/d/1AbC_dEfGhI/view?usp=sharing' })]
           : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
     // detectType was probed with the RESOLVED url, and the resolved url is what ingestVideo will fetch.
     expect(detectType).toHaveBeenCalledWith('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
@@ -299,15 +313,14 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all
           ? [pod('vid', { url: 'https://drive.google.com/file/d/1AbC_dEfGhI/view' })]
           : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
     expect(vid.mediaUrl).toBe('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
     expect(vid.mediaType).toBe('video/mp4') // coerced: Gemini needs a concrete video mime
@@ -320,13 +333,12 @@ describe('buildCycleDeps', () => {
     const fetchContent = vi.fn(async () => 'TEXT')
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all ? [pod('bin', { url: 'https://cdn.example.com/blob' })] : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const bin = pods.find((p) => p.podId === 'bin')!
     expect(bin.mediaUrl).toBeUndefined()           // octet-stream alone is NOT video
     expect(fetchContent).toHaveBeenCalledWith('https://cdn.example.com/blob')
@@ -339,13 +351,12 @@ describe('buildCycleDeps', () => {
     const deps = buildCycleDeps({
       ...w,
       videoPodsPerCycle: 1,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all ? [pod('v1', { url: 'https://x/a.mp4' }), pod('v2', { url: 'https://x/b.mp4' })] : [],
-        fetchContent,
-        detectType,
-      },
+      }),
+      io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const marked = pods.filter((p) => p.mediaUrl).length
     expect(marked).toBe(1) // second video pod left unmarked (over the per-cycle cap)
     // The OVER-cap detected video is NOT text-fetched (binary would be sliced into text).
@@ -356,14 +367,108 @@ describe('buildCycleDeps', () => {
     const w = wiring({ providerKeyRegistry: new Map<LlmProvider, string>([['google', 'gk']]) })
     const deps = buildCycleDeps({
       ...w,
-      io: {
+      reader: fakeReader({
         listPods: async (_id, opts) => opts.all ? [pod('vid', { url: 'https://x/c.mp4' })] : [],
+      }),
+      io: {
         fetchContent: async () => '',
         detectType: async () => ({ mediaType: 'video/mp4', contentLength: 123456 }),
       },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     expect(pods.find((p) => p.podId === 'vid')!.contentLength).toBe(123456)
+  })
+
+  it('attributes an owner claim to its datanet via the datanet pod list when activity cannot (mint rows carry no podId)', async () => {
+    // reppo CLI ≤0.12.x mint-pod --json returns NO podId, so our own mints never enter
+    // the activity-derived pod→datanet map — exactly the pods whose owner emissions we
+    // claim. The enrichment must fall back to datanet membership (list the configured
+    // datanets' pods and find the claim's podId).
+    const podVotes = vi.fn(async (id: string) =>
+      id === '2' ? [{ podId: 'p77', name: 'ours', validityEpoch: '3', upVotes: 1, downVotes: 0 }] : [])
+    const deps = buildCycleDeps(wiring({
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    const due = await deps.reads.getEmissionsDue()
+    expect(due[0]!.datanetId).toBe('2')
+  })
+
+  it('stops listing datanet pods once every claim podId is resolved (early exit)', async () => {
+    const cfg2 = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: {
+        '2': { vote: true, mint: false, strictness: 'balanced' },
+        '5': { vote: true, mint: false, strictness: 'balanced' },
+      },
+      notes: '',
+    })
+    const podVotes = vi.fn(async (id: string) =>
+      id === '2' ? [{ podId: 'p77', name: 'ours', validityEpoch: '3', upVotes: 1, downVotes: 0 }] : [])
+    const deps = buildCycleDeps(wiring({
+      config: cfg2,
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    await deps.reads.getEmissionsDue()
+    expect(podVotes.mock.calls.map((c) => c[0])).toEqual(['2']) // '5' never fetched
+  })
+
+  it('does NOT list datanet pods when every claim already carries a datanet', async () => {
+    // Pins the `!em.datanetId` half of the cost gate: an already-attributed claim
+    // must not trigger the membership sweep even when the activity map is empty.
+    const podVotes = vi.fn(async () => [])
+    const deps = buildCycleDeps(wiring({
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '5', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    const due = await deps.reads.getEmissionsDue()
+    expect(due[0]!.datanetId).toBe('5')
+    expect(podVotes).not.toHaveBeenCalled()
+  })
+
+  it('attributes voter claims to their datanet from vote activity (datanetId only, never token)', async () => {
+    // The voter-claim path bypasses enrichTokens (token enrichment breaks voter claims);
+    // it must still attribute the DATANET from this cycle's vote rows — otherwise voter
+    // claim rows sit unattributed until the next boot's backfill.
+    appendActivity(dir, {
+      ts: 't', cycleId: 'c', kind: 'vote', datanetId: '2', podId: 'pv', status: 'executed',
+    })
+    const deps = buildCycleDeps(wiring({
+      rpcUrl: 'http://rpc', walletAddress: '0xW',
+      reader: fakeReader({
+        voterClaimableOnchain: async () => [{ podId: 'pv', datanetId: '', epoch: 3, reppo: 1 }],
+      }),
+    }))
+    const due = await deps.onchain!.wallet!.getVoterEmissionsDue()
+    expect(due[0]!.datanetId).toBe('2')
+    expect(due[0]!.token).toBeUndefined() // voter emissions always pay REPPO — never token-enriched
+  })
+
+  it('does NOT list datanet pods when the claim is already attributable from activity', async () => {
+    // Cost guard: the membership fallback is per-cycle CLI work — it must not run when
+    // the activity map (vote/mint rows with podId+datanetId) already resolves every claim.
+    appendActivity(dir, {
+      ts: 't', cycleId: 'c', kind: 'vote', datanetId: '2', podId: 'p77', status: 'executed',
+    })
+    const podVotes = vi.fn(async () => [])
+    const deps = buildCycleDeps(wiring({
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    const due = await deps.reads.getEmissionsDue()
+    expect(due[0]!.datanetId).toBe('2')
+    expect(podVotes).not.toHaveBeenCalled()
   })
 
   it('reads the activity history at most ONCE per cycle (snapshot memo, re-armed by beginCycle)', async () => {
@@ -371,20 +476,44 @@ describe('buildCycleDeps', () => {
     // getPodsAndFilter (PER DATANET), the claim-token enrichment, and the voter-claim pod
     // set. All must now share one per-cycle snapshot; beginCycle invalidates it.
     const deps = buildCycleDeps(wiring({
-      io: {
+      reader: fakeReader({
         listPods: async (id, opts) => opts.all ? [pod(`p-${id}`, { url: `https://x/${id}` })] : [],
-        fetchContent: async () => '',
-        emissionsDue: async () => ({ pods: [{ podId: 'p9', datanetId: '', epoch: 1, reppo: 1 }] }),
-      },
+        emissionsDue: async () => ({ totalReppo: 1, pods: [{ podId: 'p9', datanetId: '', epoch: 1, reppo: 1 }] }),
+      }),
+      io: { fetchContent: async () => '' },
     }))
     vi.mocked(readActivity).mockClear()
-    await deps.getPodsAndFilter('2')  // minted-name backstop (datanet 1 of 2)
-    await deps.getPodsAndFilter('5')  // …must NOT re-scan for datanet 2
-    await deps.getEmissionsDue()      // claim-token enrichment shares the snapshot too
+    await deps.reads.getPodsAndFilter('2')  // minted-name backstop (datanet 1 of 2)
+    await deps.reads.getPodsAndFilter('5')  // …must NOT re-scan for datanet 2
+    await deps.reads.getEmissionsDue()      // claim-token enrichment shares the snapshot too
     expect(readActivity).toHaveBeenCalledTimes(1)
-    deps.beginCycle!()                // next cycle re-arms the snapshot
-    await deps.getPodsAndFilter('2')
+    deps.activity.beginCycle!()                // next cycle re-arms the snapshot
+    await deps.reads.getPodsAndFilter('2')
     expect(readActivity).toHaveBeenCalledTimes(2)
+  })
+
+  it('wires onchain reads as a UNIT: absent without RPC; RPC-only gets the read tier; RPC+wallet adds the wallet tier', async () => {
+    // No RPC → no onchain collaborator at all (yield, voter claims, fee pre-check all off).
+    expect(buildCycleDeps(wiring()).onchain).toBeUndefined()
+    // RPC only (wallet address underivable) → read tier present, wallet tier absent.
+    const rpcOnly = buildCycleDeps(wiring({ rpcUrl: 'http://rpc' }))
+    expect(rpcOnly.onchain).toBeDefined()
+    expect(rpcOnly.onchain!.wallet).toBeUndefined()
+    // RPC + wallet → both tiers; reads route through the reader with the wired RPC/wallet.
+    const epochVoteVolume = vi.fn(async () => ({ epoch: 3, totalRaw: 5n }))
+    const tokenBalance = vi.fn(async () => 7n)
+    const voterClaimableOnchain = vi.fn(async () => [])
+    const full = buildCycleDeps(wiring({
+      rpcUrl: 'http://rpc', walletAddress: '0xW',
+      reader: fakeReader({ epochVoteVolume, tokenBalance, voterClaimableOnchain }),
+    }))
+    expect(await full.onchain!.getEpochVoteVolume(['1'])).toEqual({ epoch: 3, totalRaw: 5n })
+    expect(epochVoteVolume).toHaveBeenCalledWith('http://rpc', ['1'])
+    expect(full.onchain!.wallet!.address).toBe('0xW')
+    expect(await full.onchain!.wallet!.readTokenBalance('0xT', '0xW')).toBe(7n)
+    expect(tokenBalance).toHaveBeenCalledWith('http://rpc', '0xT', '0xW')
+    await full.onchain!.wallet!.getVoterEmissionsDue()
+    expect(voterClaimableOnchain).toHaveBeenCalledWith('http://rpc', '0xW', [], dir, { floorEpoch: undefined })
   })
 
   it('video cap is GLOBAL per cycle, not per-datanet: beginCycle arms it once', async () => {
@@ -395,20 +524,22 @@ describe('buildCycleDeps', () => {
     const deps = buildCycleDeps({
       ...w,
       videoPodsPerCycle: 1,
-      io: {
+      reader: fakeReader({
         listPods: async (id, opts) => opts.all ? [pod(`v-${id}`, { url: `https://x/${id}.mp4` })] : [],
+      }),
+      io: {
         fetchContent: async () => '',
         detectType: async () => ({ mediaType: 'video/mp4', contentLength: 1000 }),
       },
     })
     // Same cycle: datanet A consumes the single video slot; datanet B's video is over-budget.
-    const a = await deps.getPodsAndFilter('2')
-    const b = await deps.getPodsAndFilter('5')
+    const a = await deps.reads.getPodsAndFilter('2')
+    const b = await deps.reads.getPodsAndFilter('5')
     expect(a.pods.filter((p) => p.mediaUrl).length).toBe(1)
     expect(b.pods.filter((p) => p.mediaUrl).length).toBe(0) // budget already spent this cycle
     // New cycle: beginCycle re-arms the global budget → the next datanet can mark again.
-    deps.beginCycle!()
-    const c = await deps.getPodsAndFilter('5')
+    deps.activity.beginCycle!()
+    const c = await deps.reads.getPodsAndFilter('5')
     expect(c.pods.filter((p) => p.mediaUrl).length).toBe(1)
   })
 })
@@ -450,7 +581,7 @@ describe('buildTick config hot-reload', () => {
     const updateCaps = vi.fn()
     w.ledger = { startCycle: vi.fn(), updateCaps, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
     const ranWith: string[][] = []
-    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    const deps = buildCycleDeps({ ...w, io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } } })
     return { w, deps, updateCaps, ranWith, reload }
   }
 
@@ -493,7 +624,7 @@ describe('buildTick budget-cap hot-swap (security boundary)', () => {
     const updateCaps = vi.fn()
     const updateHorizonDays = vi.fn()
     w.ledger = { startCycle: vi.fn(), updateCaps, updateHorizonDays, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
-    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    const deps = buildCycleDeps({ ...w, io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } } })
     return { w, deps, updateCaps, updateHorizonDays }
   }
 
@@ -542,11 +673,11 @@ describe('buildTick self-learning (reporting path)', () => {
 
   const learnDeps = (w: CycleWiring) => buildCycleDeps({
     ...w,
-    io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) },
+    io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } },
   })
 
   it('collects outcomes per learn-datanet and reflects once per epoch when a learnModel is set', async () => {
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await tick()
     expect(h.collectOutcomes).toHaveBeenCalledWith(dir, '2', [], 5)
@@ -566,7 +697,7 @@ describe('buildTick self-learning (reporting path)', () => {
   it('attaches per-cycle LLM usage to the snapshot AND re-attaches after reflection', async () => {
     h.writeSnapshot.mockClear()
     h.attachSnapshotLlm.mockClear()
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await tick()
     // The snapshot written mid-tick carries the llm usage block (cycle-window spend)…
@@ -583,13 +714,13 @@ describe('buildTick self-learning (reporting path)', () => {
 
   it('a thrown collectOutcomes never aborts the tick (best-effort)', async () => {
     h.collectOutcomes.mockImplementation(() => { throw new Error('boom') })
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
   })
 
   it('collects economics ONCE per tick with an own-pod-id Map and the already-fetched epoch info', async () => {
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await tick()
     expect(h.collectEconomics).toHaveBeenCalledTimes(1)
@@ -602,14 +733,14 @@ describe('buildTick self-learning (reporting path)', () => {
 
   it('a thrown collectEconomics never aborts the tick (best-effort)', async () => {
     h.collectEconomics.mockImplementation(() => { throw new Error('boom') })
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
   })
 
   it('defers econ collection when the epoch read fails (stale-epoch guard) and resumes next tick', async () => {
     h.queryEpochJson.mockRejectedValueOnce(new Error('rpc down'))
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined() // cycle unaffected by the failed read
     expect(h.collectEconomics).not.toHaveBeenCalled() // never bucket into a stale merged epoch
@@ -630,13 +761,37 @@ describe('buildCycleDeps voteScorerFor', () => {
   it('resolves a scorer for a datanet using the node default provider', () => {
     const w = wiring({ config: cfgWith({}) })
     const deps = buildCycleDeps(w)
-    expect('scorer' in deps.voteScorerFor('9')).toBe(true)
+    expect('scorer' in deps.scorers.voteScorerFor('9')).toBe(true)
+  })
+
+  it('threads the shared VideoPodPipeline into the scorers (mutation guard)', async () => {
+    // Kills the `buildScorers(w, video)` → `buildScorers(w)` mutation the wave-C review
+    // proved invisible: with the pipeline WIRED, a marked video pod on a keyless-google
+    // registry reaches the pipeline and throws ITS skip ("Google API key"); with the
+    // pipeline dropped, the scorer throws "no model context" instead — distinct message,
+    // no network touched (the skip fires before ingest).
+    const w = wiring({ config: cfgWith({}) }) // registry has no google key
+    const deps = buildCycleDeps(w)
+    const r = deps.scorers.voteScorerFor('9')
+    expect('scorer' in r).toBe(true)
+    const videoPod = {
+      podId: 'v1', validityEpoch: '7', name: 'clip', description: '',
+      mediaUrl: 'https://cdn.example/v.mp4', mediaType: 'video/mp4',
+    }
+    const rubric = {
+      datanetId: '9', name: 'net', goal: 'g', publisherSpec: '', voterRubric: 'quality',
+      subnetUuid: '', canVote: true, canMint: false, status: 'active',
+      economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+    }
+    await expect(
+      (r as { scorer: { scorePod: (p: unknown, ru: unknown) => Promise<unknown> } }).scorer.scorePod(videoPod, rubric),
+    ).rejects.toThrow(/Google API key/)
   })
 
   it('skips a datanet whose policy model has no key in the registry', () => {
     const w = wiring({ config: cfgWith({ model: { provider: 'google', model: 'gemini-3-pro' } }) })
     const deps = buildCycleDeps(w)
-    const r = deps.voteScorerFor('9')
+    const r = deps.scorers.voteScorerFor('9')
     expect('skip' in r).toBe(true)
     expect((r as { skip: string }).skip).toContain('google')
   })
@@ -654,11 +809,11 @@ describe('buildCycleDeps voteScorerFor', () => {
       notes: '',
     })
     const deps = buildCycleDeps(wiring({ config: cfg }))
-    const a = deps.voteScorerFor('9'), b = deps.voteScorerFor('10')
+    const a = deps.scorers.voteScorerFor('9'), b = deps.scorers.voteScorerFor('10')
     expect('scorer' in a && 'scorer' in b).toBe(true)
     expect((a as { scorer: unknown }).scorer).toBe((b as { scorer: unknown }).scorer)
     // a repeat call for the same datanet returns the same cached object
-    expect((deps.voteScorerFor('9') as { scorer: unknown }).scorer).toBe((a as { scorer: unknown }).scorer)
+    expect((deps.scorers.voteScorerFor('9') as { scorer: unknown }).scorer).toBe((a as { scorer: unknown }).scorer)
   })
 
   it('distinct resolved models get distinct scorers', () => {
@@ -673,7 +828,7 @@ describe('buildCycleDeps voteScorerFor', () => {
       notes: '',
     })
     const deps = buildCycleDeps(wiring({ config: cfg }))
-    const a = deps.voteScorerFor('9'), c = deps.voteScorerFor('11')
+    const a = deps.scorers.voteScorerFor('9'), c = deps.scorers.voteScorerFor('11')
     expect((a as { scorer: unknown }).scorer).not.toBe((c as { scorer: unknown }).scorer)
   })
 
@@ -695,7 +850,7 @@ describe('buildCycleDeps voteScorerFor', () => {
       defaultProvider: 'virtuals',
       defaultModel: 'claude-opus-4-8',
     })
-    const r = buildCycleDeps(w).voteScorerFor('9')
+    const r = buildCycleDeps(w).scorers.voteScorerFor('9')
     expect('scorer' in r).toBe(true) // resolves via the config default (usepod, keyed)
   })
 })
@@ -731,7 +886,7 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
       economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
     } as unknown as DatanetRubric
     const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
-    await deps.candidateScorer.scoreCandidate(candidate, rubric)
+    await deps.scorers.candidateScorer.scoreCandidate(candidate, rubric)
     // resolveModel was driven by the LIVE effective default (config.defaultModel = usepod),
     // NOT the env default (virtuals). Before the change it captured w.model (virtuals).
     expect(h.resolveModel).toHaveBeenCalledWith('usepod', 'tok', 'deepseek-v3.2')
@@ -740,11 +895,11 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
   })
 
   it('mint screen prompts never render the vote-economics block (yield lives only on the vote-scoped clone)', async () => {
-    // The cycle attaches economics.currentYield to a vote-scoped rubric CLONE (cycle.ts) and
-    // never mutates the shared rubric, so the rubric reaching the mint scorer carries no
-    // yield — no defensive strip at this boundary. Yield is a where-to-vote signal; the mint
-    // prompt must never render it. (The never-mutated invariant itself is asserted in
-    // cycle.test.ts's "vote-scoped rubric clone" test.)
+    // The rubric reaching the mint scorer is a MintRubric, which structurally cannot carry
+    // economics.currentYield (rubric/types.ts) — a compile-time guarantee, no defensive
+    // strip at this boundary. Yield is a where-to-vote signal; the mint prompt must never
+    // render it. (The never-mutated shared rubric is asserted in cycle.test.ts's
+    // "vote-scoped rubric clone" test; this test keeps the end-to-end runtime proof.)
     const cfg = StrategyConfigSchema.parse({
       horizonDays: 7, cadenceHours: 1,
       stake: { lockReppo: 0, lockDurationDays: 7 },
@@ -767,7 +922,7 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
       economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 500, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
     } as unknown as DatanetRubric
     const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
-    await deps.candidateScorer.scoreCandidate(candidate, rubric)
+    await deps.scorers.candidateScorer.scoreCandidate(candidate, rubric)
     expect(h.generateObjectWithRetry).toHaveBeenCalled()
     // generateObjectWithRetry(model, schema, system, { prompt }) — the block must appear nowhere.
     const [, , system, gen] = h.generateObjectWithRetry.mock.calls[0] as unknown as [unknown, unknown, string, { prompt?: string }]
