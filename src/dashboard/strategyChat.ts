@@ -61,7 +61,11 @@ export async function runStrategyChat(deps: StrategyChatDeps): Promise<StrategyC
   if (!parsed.success) {
     return { reply: out.reply, warning: `the assistant's proposed config was invalid and was discarded: ${parsed.error.issues[0]?.message ?? 'schema error'}` }
   }
-  return { reply: out.reply, proposedConfig: parsed.data }
+  // The kill switch is NOT the assistant's to move. The prompt only ASKS the model to preserve
+  // fields, so a proposal that drops `paused` parses back to the schema default (false) — the
+  // operator would then review a diff about something else entirely and Save a resume they never
+  // asked for. Pin it to the live value in both directions: only POST /api/pause changes it.
+  return { reply: out.reply, proposedConfig: { ...parsed.data, paused: deps.currentConfig.paused } }
 }
 
 /** Pure: build the (system, prompt) for one chat turn. Exposed for testing. */

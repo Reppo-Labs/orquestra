@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { DatanetEntry, ModelProvider } from '../api'
+import type { DatanetEntry, DatanetPnl, ModelProvider, Snapshot } from '../api'
 import { Tip } from './Tip'
+import { buildMintEstimate } from '../lib/mintEstimate'
+import { MintEstimate } from './MintEstimate'
 import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
@@ -8,10 +10,15 @@ const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
 // "Add a datanet" dialog. The datanet is picked BY NAME from the live catalog
 // (/api/datanets id→name map) — ids never surface in the UI. Already-configured
 // datanets are excluded from the list.
-export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose }: {
+//
+// Adding a datanet with MINT on is a spending decision (a one-time access fee plus a REPPO
+// fee per mint), so the price appears in the dialog, next to the toggle that commits to it.
+export function AddDatanetModal({ existing, netNames, providers, snapshot, datanetPnl, onAdd, onClose }: {
   existing: string[]
   netNames: Record<string, string>
   providers: ModelProvider[]
+  snapshot: Snapshot | null
+  datanetPnl: DatanetPnl[]
   onAdd: (id: string, entry: DatanetEntry) => void
   onClose: () => void
 }) {
@@ -95,6 +102,15 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMint((v) => !v) } }}>mint</span>
             </div>
           </div>
+
+          {/* The price of the decision, at the decision. Only once a datanet is actually
+              picked — an estimate with no subject would be theatre. */}
+          {mint && selectedId && (
+            <MintEstimate
+              est={buildMintEstimate({ datanetId: selectedId, snapshot, datanetPnl })}
+              name={netNames[selectedId]}
+            />
+          )}
 
           <label className="field">
             <span>adapter {mint && !adapter ? '(required to mint)' : ''}</span>

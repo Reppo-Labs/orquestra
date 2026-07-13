@@ -21,6 +21,54 @@ describe('runStrategyChat', () => {
     expect(out.proposedConfig?.datanets['11']).toMatchObject({ vote: true, mint: true, adapter: 'sports' })
   })
 
+  // The assistant is only ASKED to preserve fields; an LLM that drops `paused` would have it
+  // parsed back to the schema default (false). The proposal the operator reviews and saves must
+  // never carry a resume decision the operator did not make — the pause is /api/pause's alone.
+  it('a proposal that DROPPED paused cannot propose un-pausing a paused node', async () => {
+    const paused = StrategyConfigSchema.parse({ ...current, paused: true })
+    const { paused: _dropped, ...withoutPaused } = { ...paused, notes: 'turn off datanet 2' }
+    const out = await runStrategyChat({
+      messages: [{ role: 'user', content: 'turn off datanet 2, it is losing money' }],
+      currentConfig: paused,
+      generate: async () => ({ reply: 'Disabled datanet 2.', proposedConfig: withoutPaused }),
+    })
+    expect(out.proposedConfig?.paused).toBe(true)
+    expect(out.proposedConfig?.notes).toBe('turn off datanet 2') // the real change still lands
+  })
+
+  it('a proposal cannot pause a running node either — the assistant never touches the kill switch', async () => {
+    const out = await runStrategyChat({
+      messages: [{ role: 'user', content: 'stop everything' }],
+      currentConfig: current, // paused: false
+      generate: async () => ({ reply: 'Paused.', proposedConfig: { ...current, paused: true } }),
+    })
+    expect(out.proposedConfig?.paused).toBe(false)
+  })
+
+  // The assistant is only ASKED to preserve fields; an LLM that drops `paused` would have it
+  // parsed back to the schema default (false). The proposal the operator reviews and saves must
+  // never carry a resume decision the operator did not make — the pause is /api/pause's alone.
+  it('a proposal that DROPPED paused cannot propose un-pausing a paused node', async () => {
+    const paused = StrategyConfigSchema.parse({ ...current, paused: true })
+    const { paused: _dropped, ...withoutPaused } = { ...paused, notes: 'turn off datanet 2' }
+    const out = await runStrategyChat({
+      messages: [{ role: 'user', content: 'turn off datanet 2, it is losing money' }],
+      currentConfig: paused,
+      generate: async () => ({ reply: 'Disabled datanet 2.', proposedConfig: withoutPaused }),
+    })
+    expect(out.proposedConfig?.paused).toBe(true)
+    expect(out.proposedConfig?.notes).toBe('turn off datanet 2') // the real change still lands
+  })
+
+  it('a proposal cannot pause a running node either — the assistant never touches the kill switch', async () => {
+    const out = await runStrategyChat({
+      messages: [{ role: 'user', content: 'stop everything' }],
+      currentConfig: current, // paused: false
+      generate: async () => ({ reply: 'Paused.', proposedConfig: { ...current, paused: true } }),
+    })
+    expect(out.proposedConfig?.paused).toBe(false)
+  })
+
   it('drops an INVALID proposedConfig but keeps the reply (no partial garbage to the grid)', async () => {
     const out = await runStrategyChat({
       messages: [{ role: 'user', content: 'do something weird' }],

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Pnl, Earn, Snapshot } from '../api'
-import { fmt, netLabel } from '../lib/format'
+import { fmt, fmtCount, netLabel } from '../lib/format'
 
 /** Prominent Overview panel: the node's emissions at a glance — all-time claimed +
  *  currently claimable REPPO. Both come straight from /api/pnl (claimedReppo = sum of
@@ -28,9 +28,11 @@ export function EmissionsSummary({ pnl, earn, snapshot, netNames }: {
         <div className="card hero">
           <div className="k">Claimable now</div>
           <div className="v">
-            <span className={pnl.claimableReppo > 0 || (pnl.claimablePairs ?? 0) > 0 ? 'pos' : ''}>
+            {/* Green means money in hand: only a non-zero amount earns it. A pending pair
+                with an unknown amount is a neutral fact, not a gain. */}
+            <span className={pnl.claimableReppo > 0 ? 'pos' : ''}>
               {fmt(pnl.claimableReppo)} REPPO
-              {(pnl.claimablePairs ?? 0) > 0 ? ` · ${pnl.claimablePairs} pending` : ''}
+              {(pnl.claimablePairs ?? 0) > 0 ? ` · ${fmtCount(pnl.claimablePairs)} pending` : ''}
             </span>
           </div>
         </div>

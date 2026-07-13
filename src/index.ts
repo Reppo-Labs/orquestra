@@ -17,7 +17,7 @@ import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler, type SchedulerHandle } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
 import { WalletExecutor, MINT_REPPO_FALLBACK } from './wallet/executor.js'
-import { planStakeTopUp, stakeTopUpKey, markStakeTargetAttempted } from './wallet/stakeTopUp.js'
+import { setupStake } from './runtime/setupStake.js'
 import { defaultReppoCli } from './reppo/cli.js'
 import { readMintReppoFee, readClaimedReppo, readClaimedToken } from './reppo/mintFee.js'
 import { getDatanetRubric } from './rubric/load.js'
@@ -80,41 +80,16 @@ async function onboard(): Promise<void> {
   }
 }
 
-/** One-time idempotent setup: veREPPO lock + Reppo agent identity for minting. */
+/** One-time idempotent setup: veREPPO lock + Reppo agent identity for minting.
+ *  The lock is the only SPENDING step here (agent registration is a free platform call), and
+ *  it is gated on `config.paused` inside setupStake — a restart on a paused node signs nothing. */
 async function setupNode(config: StrategyConfig, executor: WalletExecutor, agentName: string): Promise<void> {
-  if (config.stake.lockReppo > 0) {
-    // The lock is a TARGET, not one-time: top up to config.stake.lockReppo by locking
-    // the difference as an additional lockup. Skip when already at/above target. A lock
-    // error is non-fatal — the node still runs/votes on existing veREPPO.
-    const existing = await queryBalanceJson().catch(() => null)
-    if (existing === null) {
-      // A failed balance read is NOT zero — locking against current=0 would lock the FULL
-      // target on top of whatever the wallet already holds (over-lock). Skip the lock here;
-      // the per-cycle top-up retries once the balance query recovers.
-      console.error('orquestra: could not read veREPPO balance — skipping stake setup')
-    } else {
-      const plan = planStakeTopUp(existing.veReppo, config.stake)
-      if (!plan) {
-        console.error(`orquestra: veREPPO ${existing.veReppo} ≥ target ${config.stake.lockReppo} — no lock needed.`)
-        // Nothing to retry — seed the latch so cycle-1 doesn't re-evaluate the same target.
-        markStakeTargetAttempted(config.stake.lockReppo)
-      } else {
-        console.error(`orquestra: topping up veREPPO ${existing.veReppo} → ${config.stake.lockReppo} (+${plan.lockAmount}, ${config.stake.lockDurationDays}d)`)
-        const r = await executor.lock({
-          amountReppo: plan.lockAmount,
-          durationSeconds: plan.durationSeconds,
-          idempotencyKey: stakeTopUpKey(config.stake),
-        })
-        console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
-        // Seed the latch ONLY on a confirmed lock, so cycle-1 doesn't re-attempt the same target
-        // with a slightly different `current` reading (→ IDEMPOTENCY_ARGS_MISMATCH in reppo-cli).
-        // A FAILED startup lock is deliberately LEFT unlatched so the per-cycle top-up retries it
-        // (and records the reason to the dashboard) instead of leaving the node at zero veREPPO
-        // with no explanation until a manual restart.
-        if (r.status === 'executed') markStakeTargetAttempted(config.stake.lockReppo)
-      }
-    }
-  }
+  await setupStake(config, {
+    // `?? null` only fires when the query itself failed: veReppo 0 stays 0 (a real reading).
+    getVeReppo: async () => (await queryBalanceJson().catch(() => null))?.veReppo ?? null,
+    lock: (args) => executor.lock(args),
+    log: (m) => console.error(m),
+  })
 
   // Reppo agent identity — EVERY node registers one (not just minting nodes): the
   // agent is the node's platform identity. mint-pod requires it (reppo >=0.8.0), and

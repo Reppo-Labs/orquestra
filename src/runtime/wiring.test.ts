@@ -38,6 +38,13 @@ vi.mock('../dashboard/activityLog.js', async (orig) => {
   const actual = await orig<typeof import('../dashboard/activityLog.js')>()
   return { ...actual, readActivity: vi.fn(actual.readActivity) }
 })
+// Passthrough spy on readActivity so tests can assert the activity table is scanned a
+// BOUNDED number of times per cycle (the per-datanet full re-scan was the dominant
+// per-cycle cost). appendActivity and the rest stay real (SQLite in the test tmpdir).
+vi.mock('../dashboard/activityLog.js', async (orig) => {
+  const actual = await orig<typeof import('../dashboard/activityLog.js')>()
+  return { ...actual, readActivity: vi.fn(actual.readActivity) }
+})
 vi.mock('../learn/collect.js', () => ({ collectOutcomes: h.collectOutcomes }))
 vi.mock('../learn/econ.js', () => ({ collectEconomics: h.collectEconomics }))
 // The tick reads the epoch ONCE via queryEpochJson (shared by snapshot + econ collector);
@@ -471,6 +478,61 @@ describe('buildTick config hot-reload', () => {
     await tick()
     boom = true
     await expect(tick()).resolves.toBeUndefined() // tolerated, last-good used
+  })
+})
+
+describe('buildTick budget-cap hot-swap (security boundary)', () => {
+  // The dashboard is the ONLY way an operator can lower a cap to stop spend. buildTick
+  // must re-arm the live ledger when the reloaded budget/horizon differs — otherwise the
+  // node keeps signing at the OLD ceiling after the operator tightened it. These prove the
+  // re-arm fires on a lowered cap, is skipped when nothing changed, and covers horizonDays.
+  const mkConfig = (over: { budget?: Record<string, number>; horizonDays?: number }) =>
+    StrategyConfigSchema.parse({
+      horizonDays: over.horizonDays ?? 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: over.budget ?? { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'balanced' } },
+      notes: '',
+    })
+
+  function armedWiring(initial: ReturnType<typeof StrategyConfigSchema.parse>) {
+    const w = wiring({ config: initial })
+    const updateCaps = vi.fn()
+    const updateHorizonDays = vi.fn()
+    w.ledger = { startCycle: vi.fn(), updateCaps, updateHorizonDays, state: { mintReppoSpent: 0, mintGasSpentEth: 0, voteGasSpentEth: 0, claimGasSpentEth: 0 } } as unknown as CycleWiring['ledger']
+    const deps = buildCycleDeps({ ...w, io: { listPods: async () => [], fetchContent: async () => '', getRubric: async () => { throw new Error('skip') }, emissionsDue: async () => ({ pods: [] }) } })
+    return { w, deps, updateCaps, updateHorizonDays }
+  }
+
+  it('CRITICAL: lowering the mint REPPO cap in the dashboard re-arms the ledger on the next tick', async () => {
+    const start = mkConfig({ budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 } })
+    const lowered = mkConfig({ budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 10, mintGasEthMax: 1 } })
+    const { w, deps, updateCaps } = armedWiring(start)
+    const tick = buildTick(w, deps, { reloadConfig: () => lowered, reporting: false })
+    await tick()
+    // The ledger's caps were swapped to the LOWERED budget — not left at the old ceiling.
+    expect(updateCaps).toHaveBeenCalledWith(lowered.budget)
+    expect((updateCaps.mock.calls[0][0] as { mintReppoMax: number }).mintReppoMax).toBe(10)
+  })
+
+  it('does NOT re-arm the ledger when the budget is unchanged (guarded by a deep compare)', async () => {
+    const cfg = mkConfig({})
+    const { w, deps, updateCaps } = armedWiring(cfg)
+    // reload returns the SAME budget shape each tick → the guard must skip updateCaps entirely.
+    const tick = buildTick(w, deps, { reloadConfig: () => mkConfig({}), reporting: false })
+    await tick()
+    await tick()
+    expect(updateCaps).not.toHaveBeenCalled()
+  })
+
+  it('re-arms the horizon window when horizonDays changes', async () => {
+    const start = mkConfig({ horizonDays: 7 })
+    const shortened = mkConfig({ horizonDays: 3 })
+    const { w, deps, updateHorizonDays, updateCaps } = armedWiring(start)
+    const tick = buildTick(w, deps, { reloadConfig: () => shortened, reporting: false })
+    await tick()
+    expect(updateHorizonDays).toHaveBeenCalledWith(3)
+    expect(updateCaps).not.toHaveBeenCalled() // budget unchanged → only the horizon re-armed
   })
 })
 

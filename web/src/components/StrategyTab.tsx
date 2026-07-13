@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { type DatanetEntry, type DatanetYield, loadModels, type ModelProvider, type AgentInfo, getAgent, renameAgent } from '../api'
 import type { Strategy, Candidate } from '../lib/useStrategy'
-import { netLabel } from '../lib/format'
+import { fmt, fmtPerVote, netLabel } from '../lib/format'
 import { AddDatanetModal } from './AddDatanetModal'
 import { Tip } from './Tip'
 import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
@@ -57,7 +57,7 @@ type Params = { focus?: string; angle?: string; topN?: number; minImportance?: n
 function EconChips({ y, maxYield }: { y?: DatanetYield; maxYield: number }) {
   if (!y) return null // pre-feature snapshot, or the datanet didn't reach vote scoring yet
   const rate = y.emissionsPerEpochReppo > 0
-    ? `${y.emissionsPerEpochReppo.toLocaleString()} REPPO/epoch`
+    ? `${fmt(y.emissionsPerEpochReppo)} REPPO/epoch`
     : y.nativeTokenSymbol ? `${y.nativeTokenSymbol} (native)` : 'pays nothing'
   const heat = y.yieldPerVote !== null && maxYield > 0
     ? y.yieldPerVote >= maxYield * (2 / 3) ? 'hot' : y.yieldPerVote >= maxYield / 3 ? 'warm' : ''
@@ -74,8 +74,9 @@ function EconChips({ y, maxYield }: { y?: DatanetYield; maxYield: number }) {
           uncontested · epoch {y.epoch}
         </span>
       ) : y.yieldPerVote !== null ? (
-        <span className={`econ-chip yield ${heat}`} title={`epoch ${y.epoch} vote volume ${y.epochVoteVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}>
-          ⚡ {y.yieldPerVote.toExponential(2)}/vote
+        <span className={`econ-chip yield ${heat}`}
+          title={`epoch ${y.epoch}: ${fmt(y.epochVoteVolume)} votes so far · exactly ${y.yieldPerVote} REPPO per vote`}>
+          ⚡ {fmtPerVote(y.yieldPerVote)}
         </span>
       ) : null /* rate 0 (native/pays-nothing): the rate chip already says it — no dead "⚡ —" chip */}
     </div>

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import type { Pnl, Snapshot } from '../api'
-import { fmt, sign } from '../lib/format'
+import { fmt, fmtCount, fmtUsd, sign } from '../lib/format'
 import { Tip } from './Tip'
 
 function VeReppoLabel() {
@@ -40,9 +40,9 @@ function LlmCostLabel() {
 function llmCost(s: Snapshot): { v: ReactNode; sub?: string } {
   const u = s.llm
   if (!u || u.calls === 0) return { v: '—' }
-  if (u.estCostUsd === null) return { v: `${u.calls} calls`, sub: `${fmt(u.inputTokens + u.outputTokens)} tok` }
+  if (u.estCostUsd === null) return { v: `${fmtCount(u.calls)} calls`, sub: `${fmtCount(u.inputTokens + u.outputTokens)} tokens` }
   const approx = u.unpricedCalls > 0 ? '≥' : '~'
-  return { v: `${approx}$${u.estCostUsd.toFixed(2)}`, sub: `${u.calls} calls` }
+  return { v: `${approx}${fmtUsd(u.estCostUsd)}`, sub: `${fmtCount(u.calls)} calls` }
 }
 
 export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapshot | null }) {
@@ -52,7 +52,7 @@ export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapsho
   const loading = pnl === null && snapshot === null
   const skel = <span className="skel" aria-hidden="true" />
   if (loading) {
-    const labels: ReactNode[] = ['Net REPPO', 'Spent (mint)', 'Gas (ETH)', <LlmCostLabel key="llm" />, 'REPPO balance', <VeReppoLabel key="ve" />, 'Epoch']
+    const labels: ReactNode[] = ['Net REPPO', 'Spent minting (REPPO)', 'Gas spent (ETH)', <LlmCostLabel key="llm" />, 'REPPO balance', <VeReppoLabel key="ve" />, 'Epoch']
     return (
       <div className="cards stagger">
         {labels.map((k, i) => (
@@ -68,9 +68,11 @@ export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapsho
   const ep = snapshot?.epoch
   // [label, value, hero?, sub?] — sub renders small under the value so values never wrap.
   const cards: [ReactNode, ReactNode, boolean?, string?][] = [
-    ['Net REPPO', pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—', true],
-    ['Spent (mint)', pnl ? fmt(pnl.spentReppo) : '—'],
-    ['Gas (ETH)', pnl ? fmt(pnl.gasSpentEth) : '—'],
+    // Net REPPO is the one place green/red are earned: they mean profit and loss.
+    ['Net REPPO', pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—', true,
+      pnl ? `${fmt(pnl.earnedReppo)} earned − ${fmt(pnl.spentReppo)} spent` : undefined],
+    ['Spent minting (REPPO)', pnl ? fmt(pnl.spentReppo) : '—'],
+    ['Gas spent (ETH)', pnl ? fmt(pnl.gasSpentEth) : '—'],
     [<LlmCostLabel key="llm" />, llm.v, false, llm.sub],
     ['REPPO balance', snapshot ? fmt(snapshot.balance.reppo) : '—'],
     [<VeReppoLabel key="ve" />, snapshot ? fmt(snapshot.balance.veReppo) : '—'],
@@ -109,12 +111,12 @@ export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapsho
                     <tr key={model}>
                       <td className="mono net-cell" title={model}>{model}</td>
                       <td className="mono">{m.calls}</td>
-                      <td className="mono">{fmt(m.inputTokens)}</td>
-                      <td className="mono">{fmt(m.outputTokens)}</td>
+                      <td className="mono">{fmtCount(m.inputTokens)}</td>
+                      <td className="mono">{fmtCount(m.outputTokens)}</td>
                       <td className="mono">
                         {m.estCostUsd === null
                           ? <span className="faint">no list price</span>
-                          : m.estCostUsd > 0 && m.estCostUsd < 0.01 ? '<$0.01' : `$${m.estCostUsd.toFixed(2)}`}
+                          : fmtUsd(m.estCostUsd)}
                       </td>
                     </tr>
                   ))}

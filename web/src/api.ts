@@ -21,6 +21,11 @@ export interface BudgetCaps {
   mintReppoMax?: number
   mintGasEthMax?: number
   claimGasEthMax?: number
+  /** Per-cycle action ceilings. Served by the node (snapshot.budget.caps) and load-bearing
+   *  for the pre-spend estimate: mint cost per cycle is capped at mintRateMaxPerCycle mints
+   *  NODE-WIDE, not per datanet. */
+  voteRateMaxPerCycle?: number
+  mintRateMaxPerCycle?: number
 }
 
 export interface SnapshotBudget {
@@ -60,7 +65,9 @@ export interface LlmUsage {
 export interface Snapshot {
   ts: string | number
   epoch?: EpochInfo | null
-  balance: { reppo: number; veReppo: number }
+  /** eth/usdc are served by the node but were unused until the "fund the wallet" remedy
+   *  needed to show what the wallet actually holds. Optional: older snapshots lack them. */
+  balance: { reppo: number; veReppo: number; eth?: number; usdc?: number }
   votingPower?: { power: number; lockupCount: number }
   budget?: SnapshotBudget
   emissionsDue: { pods: EmissionPod[] }
@@ -91,11 +98,39 @@ export interface ActivityRow {
   podName?: string
   epoch?: string | number
   reppoClaimed?: number
+  /** REPPO paid to mint this pod (executed mints only). Served since the mint-fee migration;
+   *  absent on pre-migration rows. Together with `reppoClaimed` this is the ONLY money that
+   *  moves in REPPO terms — src/dashboard/activityLog.ts sums exactly these two to get
+   *  lifetime spent/earned, so the profit-over-time series must use the same definition. */
+  reppoSpent?: number
+  /** Gas paid for this transaction, in ETH. Present on executed vote/mint/claim rows. NOT
+   *  part of netReppo (different unit) — it prices the wallet's remaining gas runway, and
+   *  must never be mixed into a REPPO total. */
+  gasEth?: number
   panel?: PanelTranscript
 }
 
 export interface HealthCounts { executed: number; refused: number; error: number }
 export interface TxRate { rate: number | null; executed: number; failed: number }
+
+/** Mirrors src/dashboard/errorClass.ts ErrorCode — a closed set, each emitted by a real
+ *  code path. Anything unrecognised arrives as 'unknown'. */
+export type ErrorCode =
+  | 'rpc_unavailable' | 'datanet_metadata_missing' | 'budget_exhausted' | 'insufficient_funds'
+  | 'subnet_access_missing' | 'no_adapter' | 'model_unavailable' | 'scoring_failed'
+  | 'no_candidates' | 'cli_outdated' | 'own_pod' | 'unknown'
+
+/** Mirrors src/dashboard/errorClass.ts SuggestedAction — the remedy the operator can perform. */
+export type SuggestedAction = 'retry' | 'disable_datanet' | 'raise_budget' | 'check_rpc' | 'fund_wallet' | 'none'
+
+/** Operator-facing translation of a datanet's last failure. `operatorMessage` is plain
+ *  English and already redacted server-side — the raw stderr NEVER reaches the UI. */
+export interface Classification {
+  code: ErrorCode
+  operatorMessage: string
+  suggestedAction: SuggestedAction
+}
+
 export interface HealthDatanet {
   datanetId: string
   votes: HealthCounts
@@ -107,6 +142,8 @@ export interface HealthDatanet {
   topErrors: { code: string; count: number }[]
   idle?: boolean
   lastSkipReason?: string
+  /** absent on older nodes (no classifier) — the UI then falls back to "no signal yet". */
+  classification?: Classification
 }
 export interface Health { datanets: HealthDatanet[]; txRate?: TxRate; entriesScanned?: number }
 
@@ -144,6 +181,10 @@ export interface StrategyConfig {
   horizonDays?: number
   cadenceHours?: number
   claimEmissions?: boolean
+  /** Kill switch. While true the node signs NOTHING (no votes/mints/claims/grants/locks)
+   *  and keeps running. Served here AND round-tripped on save — a save that dropped it
+   *  would parse back to the schema default (false) and silently un-pause the node. */
+  paused?: boolean
   datanets?: Record<string, DatanetEntry>
   notes?: string
   budget?: Record<string, number | undefined>
@@ -156,6 +197,21 @@ export interface StrategyConfig {
 
 export interface ChatMsg { role: 'user' | 'assistant'; content: string }
 
+/** Per-datanet lifetime profit (mirrors src/dashboard/datanetPnl.ts). The single most
+ *  actionable number an operator has: "datanet 11 spent 5,200 REPPO over 28 mints and
+ *  earned 0 back". Server sorts worst-net-first. */
+export interface DatanetPnl {
+  datanetId: string
+  reppoSpent: number
+  reppoEarned: number
+  /** earned − spent. Negative = this datanet is costing the operator money. */
+  net: number
+  /** earned/spent × 100. NULL when nothing was spent — render "—", NEVER "0%". */
+  roi: number | null
+  votesCast: number
+  mintsExecuted: number
+}
+
 export interface DashData {
   pnl: Pnl | null
   snapshot: Snapshot | null
@@ -163,6 +219,8 @@ export interface DashData {
   config: StrategyConfig
   earn: Earn | null
   netNames: Record<string, string>
+  /** worst-net-first; [] on an older node with no /api/datanet-pnl. */
+  datanetPnl: DatanetPnl[]
 }
 
 /** Fetch JSON, returning `fallback` on any HTTP error or network/parse failure.
@@ -189,12 +247,13 @@ async function getJsonOrThrow<T>(url: string, fallback: T): Promise<T> {
 }
 
 export async function loadAll(): Promise<DashData> {
-  const [pnlRes, activity, config, earn, netNames] = await Promise.all([
+  const [pnlRes, activity, config, earn, netNames, dnPnl] = await Promise.all([
     getJsonOrThrow<{ pnl?: Pnl | null; snapshot?: Snapshot | null }>('/api/pnl', {}),
     getJson<ActivityRow[]>('/api/activity', []),
     getJson<StrategyConfig>('/api/config', {}),
     getJson<Earn | null>('/api/earn', null),
     getJson<Record<string, string>>('/api/datanets', {}),
+    getJson<{ datanets?: DatanetPnl[] }>('/api/datanet-pnl', {}),
   ])
   return {
     pnl: pnlRes.pnl ?? null,
@@ -204,7 +263,38 @@ export async function loadAll(): Promise<DashData> {
     config: config ?? {},
     earn,
     netNames: netNames || {},
+    datanetPnl: Array.isArray(dnPnl.datanets) ? dnPnl.datanets : [],
   }
+}
+
+/** Emergency kill switch (POST /api/pause). While paused the node signs nothing but keeps
+ *  running. `appliesNextCycle` is always true and must be surfaced, not hidden: a cycle
+ *  already in flight finishes under the old flag.
+ *
+ *  NEVER REJECTS. This is the "stop spending my money" control: a rejected promise leaves
+ *  the caller's `setBusy(false)` unreached, so the button locks on "…" forever and the
+ *  operator is told nothing while the node keeps signing. A network failure is a RESULT
+ *  here ({ ok: false }), not an exception. */
+export async function setPaused(paused: boolean): Promise<{ ok: boolean; paused?: boolean; appliesNextCycle?: boolean; error?: string }> {
+  let r: Response
+  try {
+    r = await fetch('/api/pause', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paused }),
+    })
+  } catch {
+    return { ok: false, error: 'could not reach the node — nothing changed' }
+  }
+  const out = (await r.json().catch(() => ({}))) as { paused?: boolean; appliesNextCycle?: boolean; error?: string }
+  return r.ok ? { ok: true, ...out } : { ok: false, error: out.error ?? `HTTP ${r.status}` }
+}
+
+/** 7-day reliability view (mirrors GET /api/health → src/dashboard/health.ts buildHealth).
+ *  Degrades to null on any error — the Health tab shows an unavailable state, and a
+ *  transiently failing poll never wipes an already-rendered panel with a crash. */
+export async function loadHealth(): Promise<Health | null> {
+  return getJson<Health | null>('/api/health', null)
 }
 
 /** 7-day reliability view (mirrors GET /api/health → src/dashboard/health.ts buildHealth).
@@ -234,20 +324,51 @@ export async function renameAgent(name: string): Promise<{ ok: boolean; error?: 
 /** Trigger an off-schedule cycle. started:false (HTTP 409) means a cycle is already
  *  running or the node is still starting — not an error, surfaced as `reason`. */
 export async function runNow(): Promise<{ started: boolean; reason?: string; error?: string }> {
-  const r = await fetch('/api/run-now', { method: 'POST' })
+  let r: Response
+  try {
+    r = await fetch('/api/run-now', { method: 'POST' })
+  } catch {
+    // Never reject: this is awaited between setBusy(true) and setBusy(false) by the "retry"
+    // remedy, and a rejection would strand that button on "working…" with no message.
+    return { started: false, error: 'could not reach the node' }
+  }
   const out = (await r.json().catch(() => ({}))) as { started?: boolean; reason?: string; error?: string }
   if (r.ok) return { started: true }
   return { started: false, reason: out.reason, error: out.error }
 }
 
+/** NEVER REJECTS, for the same reason setPaused does not: the one-click remedies await this
+ *  between setBusy(true) and setBusy(false). A rejection there strands the button on
+ *  "working…" and the operator never learns the save failed. */
 export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {
-  const r = await fetch('/api/strategy', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(candidate),
-  })
+  let r: Response
+  try {
+    r = await fetch('/api/strategy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(candidate),
+    })
+  } catch {
+    return { ok: false, error: 'could not reach the node — nothing was saved' }
+  }
   const out = await r.json().catch(() => ({}))
   return r.ok ? { ok: true } : { ok: false, error: out.error || String(r.status) }
+}
+
+/** The config the node holds RIGHT NOW. The one-click remedies read this immediately before
+ *  they write, so they mutate the live config rather than a candidate loaded minutes ago —
+ *  a whole-config POST built on a stale copy silently reverts anything the node or another
+ *  surface (a learning proposal, a pause, another tab) has written since page load.
+ *  null = unreachable or no config; the caller must NOT fall back to a stale copy. */
+export async function fetchConfig(): Promise<StrategyConfig | null> {
+  try {
+    const r = await fetch('/api/config')
+    if (!r.ok) return null
+    const c = (await r.json()) as StrategyConfig | null
+    return c && typeof c === 'object' ? c : null
+  } catch {
+    return null
+  }
 }
 
 // ── Model picker (mirrors GET /api/models — names only, never keys) ──

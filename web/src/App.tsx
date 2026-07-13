@@ -1,34 +1,34 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { loadAll, loadHealth, onboardingStatus, type ActivityRow, type DashData, type Health, type OnboardingStatus } from './api'
 import { useStrategy } from './lib/useStrategy'
+import { alertSummary, deriveAlerts } from './lib/alerts'
+import { buildNetSeries } from './lib/pnlSeries'
 import { Nav, type TabId } from './components/Nav'
-import { PnlCards } from './components/PnlCards'
-import { EmissionsSummary } from './components/EmissionsSummary'
-import { BudgetBurn } from './components/BudgetBurn'
-import { DatanetEconomics } from './components/DatanetEconomics'
-import { StrategyTab } from './components/StrategyTab'
+import { HomeTab } from './components/HomeTab'
+import { DatanetsTab } from './components/DatanetsTab'
+import { DiagnosticsTab } from './components/DiagnosticsTab'
 import { ChatTab } from './components/ChatTab'
-import { Activity } from './components/Activity'
-import { HealthTab } from './components/HealthTab'
-import { LearningTab } from './components/LearningTab'
 import { PanelDrawer } from './components/PanelDrawer'
 import { Onboarding } from './components/Onboarding'
-import { FirstRunCard } from './components/FirstRunCard'
-import { fmt } from './lib/format'
-
-function SecHead({ title }: { title: string }) {
-  return <div className="sec-head"><h2>{title}</h2><div className="rule" /></div>
-}
+import { PausedBanner } from './components/PauseControl'
+import { useDismissed } from './components/AlertsPanel'
 
 export function App() {
   const [data, setData] = useState<DashData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [obStatus, setObStatus] = useState<OnboardingStatus | null>(null)
   const [reconfiguring, setReconfiguring] = useState(false)
-  const [tab, setTab] = useState<TabId>('overview')
+  const [tab, setTab] = useState<TabId>('home')
   const [panelRow, setPanelRow] = useState<ActivityRow | null>(null)
   const [health, setHealth] = useState<Health | null>(null)
   const [healthLoaded, setHealthLoaded] = useState(false)
+  // Bumped by the "Raise spending caps" remedy: it must land the operator ON the caps, not
+  // merely on the tab that contains them.
+  const [capsSignal, setCapsSignal] = useState(0)
+  // The datanet a yield-leaderboard row click is asking for. DatanetsTab scrolls to it,
+  // flashes it, and CONSUMES it (→ null) — so coming back to the tab later does not
+  // re-scroll to a datanet the operator has long since stopped thinking about.
+  const [focusNet, setFocusNet] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     const healthP = loadHealth() // in parallel with loadAll; never rejects (degrades to null)
@@ -49,9 +49,54 @@ export function App() {
 
   const cfg = data?.config
   const snap = data?.snapshot ?? null
-  const earn = data?.earn
   const netNames = data?.netNames ?? {}
   const strategy = useStrategy(cfg) // hooks run unconditionally — before any early return
+
+  // Profit OVER TIME and the alert set are derived ONCE, here, and shared: the header badge
+  // and Home must never disagree about how many things are wrong.
+  const series = useMemo(
+    () => buildNetSeries(data?.activity ?? [], data?.pnl),
+    [data?.activity, data?.pnl],
+  )
+  const alerts = useMemo(
+    () => deriveAlerts({
+      health: health?.datanets ?? [],
+      config: data?.config ?? {},
+      snapshot: snap,
+      datanetPnl: data?.datanetPnl ?? [],
+      activity: data?.activity ?? [],
+      series,
+      netNames,
+      now: Date.now(),
+    }),
+    [health, data, snap, netNames, series],
+  )
+  // The badge counts DISMISSED alerts too — dismissing tidies the screen, it does not fix
+  // the node, and the header must not pretend otherwise.
+  const { count, worst } = alertSummary(alerts)
+  const dismissal = useDismissed()
+
+  // "Raise spending caps", from anywhere: go to Datanets AND open the caps.
+  const openCaps = useCallback(() => {
+    setTab('datanets')
+    setCapsSignal((n) => n + 1)
+  }, [])
+
+  // Go to Datanets. With an id (a leaderboard row), land the operator ON that row; without
+  // one ("adjust vote shares →", "N need your attention"), just open the tab.
+  const goToDatanets = useCallback((datanetId?: string) => {
+    setTab('datanets')
+    setFocusNet(datanetId ?? null)
+  }, [])
+
+  // Pause is SERVER state (POST /api/pause writes the config itself). The candidate carries
+  // it too, so a later Save cannot silently un-pause the node — syncPaused moves the
+  // candidate AND the baseline, so the pause is never mistaken for an unsaved edit.
+  const paused = strategy.candidate?.paused ?? cfg?.paused ?? false
+  const onPauseChange = useCallback((next: boolean) => {
+    strategy.syncPaused(next)
+    void refresh()
+  }, [strategy, refresh])
 
   // Fresh node (or reconfigure): the dashboard IS the onboarding until a config exists.
   if (obStatus && (obStatus.needed || reconfiguring)) {
@@ -69,53 +114,62 @@ export function App() {
 
   return (
     <div className="app">
-      <Nav data={data} asof={asof} tab={tab} onTab={setTab} activityCount={data?.activity.length ?? 0} onRefresh={() => void refresh()} />
+      <Nav data={data} asof={asof} tab={tab} onTab={setTab} paused={paused} onPauseChange={onPauseChange}
+        onRefresh={() => void refresh()}
+        alertCount={count} alertWorst={worst} onOpenAlerts={() => setTab('home')} />
       <main className="shell">
-        {tab === 'overview' && (
-          <div key="ov">
-            <FirstRunCard
-              cadenceHours={cfg?.cadenceHours}
-              hasActivity={(data?.activity.length ?? 0) > 0}
-              onGoToActivity={() => setTab('activity')}
-              onGoToStrategy={() => setTab('strategy')}
-            />
-            <div className="earn-banner">
-              <span className={`dot ${earn?.earning ? 'on' : earn && earn.totalUpVotes > 0 ? 'warm' : 'off'}`} />
-              {earn ? (
-                // Segmented metadata strip: hairline separators, not ·-chains.
-                <>
-                  <span className="bseg">{earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'}</span>
-                  <span className="bseg">{earn.mintedPods} pod(s)</span>
-                  <span className="bseg">{fmt(earn.claimableReppo)} claimable{(earn.claimablePairs ?? 0) > 0 ? ` (${earn.claimablePairs} pending)` : ''} + {fmt(earn.claimedReppo)} claimed</span>
-                  <span className="bseg">{earn.totalUpVotes}↑/{earn.totalDownVotes}↓</span>
-                </>
-              ) : 'earn-test pending first cycle'}
-            </div>
-            <SecHead title="Emissions" />
-            <EmissionsSummary pnl={data?.pnl ?? null} earn={earn} snapshot={snap} netNames={netNames} />
-            <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
-            <SecHead title="Budget burn" />
-            <BudgetBurn snapshot={snap} />
-            <DatanetEconomics snapshot={snap} netNames={netNames} onGoToStrategy={() => setTab('strategy')} />
-          </div>
+        {/* Impossible to miss, on every tab: a quiet dashboard must never be a mystery. */}
+        <PausedBanner paused={paused} onChanged={onPauseChange} />
+
+        {tab === 'home' && (
+          <HomeTab
+            data={data}
+            health={health?.datanets ?? []}
+            strategy={strategy}
+            paused={paused}
+            series={series}
+            alerts={alerts}
+            dismissal={dismissal}
+            onOpenCaps={openCaps}
+            onResume={() => onPauseChange(false)}
+            onGoToDatanets={goToDatanets}
+            onGoToDiagnostics={() => setTab('diagnostics')}
+            onRunNow={() => void refresh()}
+          />
         )}
-        {tab === 'strategy' && (
-          <StrategyTab strategy={strategy} netNames={netNames} economics={snap?.datanetEconomics}
-            onReconfigure={() => setReconfiguring(true)} />
+        {tab === 'datanets' && (
+          <DatanetsTab
+            strategy={strategy}
+            netNames={netNames}
+            health={health?.datanets ?? []}
+            datanetPnl={data?.datanetPnl ?? []}
+            snapshot={snap}
+            pnl={data?.pnl ?? null}
+            activity={data?.activity ?? []}
+            capsSignal={capsSignal}
+            focusDatanet={focusNet}
+            onFocusConsumed={() => setFocusNet(null)}
+            onReconfigure={() => setReconfiguring(true)}
+          />
         )}
-        {/* Kept mounted (hidden when off-tab) so the conversation, draft input, and
-            scroll position survive switching tabs. */}
-        <div style={{ display: tab === 'chat' ? 'block' : 'none' }}>
-          <ChatTab strategy={strategy} onGoToStrategy={() => setTab('strategy')} />
+        {/* Kept mounted (hidden when off-tab) so the conversation, draft input, and scroll
+            position survive switching tabs. */}
+        <div style={{ display: tab === 'assistant' ? 'block' : 'none' }}>
+          <ChatTab strategy={strategy} onGoToStrategy={() => setTab('datanets')} />
         </div>
-        {tab === 'activity' && (
-          <Activity activity={data?.activity ?? []} netNames={netNames} onOpenPanel={setPanelRow} />
-        )}
-        {tab === 'health' && (
-          <HealthTab health={health} loaded={healthLoaded} netNames={netNames} />
-        )}
-        {tab === 'learning' && (
-          <LearningTab netNames={netNames} onConfigChanged={() => void refresh()} />
+        {tab === 'diagnostics' && (
+          <DiagnosticsTab
+            activity={data?.activity ?? []}
+            health={health}
+            healthLoaded={healthLoaded}
+            // The reliability headline must be the SAME derivation as Home's coverage — two
+            // headline numbers for the health of one node is one too many.
+            datanets={cfg?.datanets ?? {}}
+            netNames={netNames}
+            onOpenPanel={setPanelRow}
+            onConfigChanged={() => void refresh()}
+            onBack={() => setTab('home')}
+          />
         )}
       </main>
       {panelRow && <PanelDrawer row={panelRow} onClose={() => setPanelRow(null)} />}

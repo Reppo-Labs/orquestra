@@ -68,6 +68,22 @@ export const StrategyConfigSchema = z
       claimGasEthMax: z.number().nonnegative().max(10).default(1),
     }),
     claimEmissions: z.boolean().default(true),
+    // Emergency kill switch. TRUE ⇒ the cycle signs NOTHING: no vote, mint, claim, subnet
+    // grant, or veREPPO lock (src/runtime/cycle.ts refuses at the top of runCycle, before
+    // any executor call). The node keeps running and the dashboard stays up, so the operator
+    // can unpause without touching a config file or the container. Config is hot-reloaded
+    // each cycle, so a pause takes effect on the NEXT cycle.
+    // This is an ADDITIONAL refusal layered on top of the budget ledger — never a
+    // replacement for it. Defaulted so every pre-existing config loads unchanged (unpaused).
+    paused: z.boolean().default(false),
+    // Emergency kill switch. TRUE ⇒ the cycle signs NOTHING: no vote, mint, claim, subnet
+    // grant, or veREPPO lock (src/runtime/cycle.ts refuses at the top of runCycle, before
+    // any executor call). The node keeps running and the dashboard stays up, so the operator
+    // can unpause without touching a config file or the container. Config is hot-reloaded
+    // each cycle, so a pause takes effect on the NEXT cycle.
+    // This is an ADDITIONAL refusal layered on top of the budget ledger — never a
+    // replacement for it. Defaulted so every pre-existing config loads unchanged (unpaused).
+    paused: z.boolean().default(false),
     // Multi-agent panel deliberation (personas + judge; see src/panel/).
     // Defaulted so configs written before this feature load unchanged.
     deliberation: z

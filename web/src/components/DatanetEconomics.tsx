@@ -1,5 +1,5 @@
 import type { DatanetYield, Snapshot } from '../api'
-import { netLabel } from '../lib/format'
+import { fmt, fmtPerVote, netLabel } from '../lib/format'
 
 /** Rank for the "best places to vote" board: uncontested datanets first (nobody has
  *  voted this epoch — the first voter takes the whole epoch's emissions), then by
@@ -47,13 +47,16 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
                   // even when contested — never assert non-null here (crashed the SPA).
                   : y.yieldPerVote === null
                     ? <span className="yield-num mono muted">pays {y.nativeTokenSymbol ?? '?'} (native)</span>
-                    : <span className="yield-num mono">⚡ {y.yieldPerVote.toExponential(2)}/vote</span>}
+                    // Never scientific notation: fmtPerVote renders a readable amount, or a
+                    // "<0.001 REPPO/vote" bound when the yield is too small to be meaningful.
+                    // The exact value stays available on hover.
+                    : <span className="yield-num mono" title={`${y.yieldPerVote} REPPO per vote`}>⚡ {fmtPerVote(y.yieldPerVote)}</span>}
                 <span className="yield-ctx muted">
                   {y.emissionsPerEpochReppo > 0
-                    ? `${y.emissionsPerEpochReppo.toLocaleString()} REPPO/epoch`
+                    ? `${fmt(y.emissionsPerEpochReppo)} REPPO/epoch`
                     : `${y.nativeTokenSymbol} (native)`}
                   {!y.uncontested && y.epochVoteVolume !== null
-                    ? ` · vol ${y.epochVoteVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                    ? ` · ${fmt(y.epochVoteVolume)} votes this epoch`
                     : ''}
                 </span>
               </button>

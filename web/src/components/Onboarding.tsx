@@ -25,6 +25,20 @@ export function onboardingStep(started: boolean, finalized: unknown, confirmMsg:
   return !started ? 1 : !finalized ? 2 : confirmMsg.startsWith('saved') ? 4 : 3
 }
 
+/** Stepper state for the Connect(1) → Interview(2) → Review(3) → Start(4) progress bar.
+ *  Pure so the transition logic is unit-testable without rendering (web tests run node-env,
+ *  no DOM). Review only advances to Start once the confirm POST reports a saved strategy. */
+export function onboardingStep(started: boolean, finalized: unknown, confirmMsg: string): 1 | 2 | 3 | 4 {
+  return !started ? 1 : !finalized ? 2 : confirmMsg.startsWith('saved') ? 4 : 3
+}
+
+/** Stepper state for the Connect(1) → Interview(2) → Review(3) → Start(4) progress bar.
+ *  Pure so the transition logic is unit-testable without rendering (web tests run node-env,
+ *  no DOM). Review only advances to Start once the confirm POST reports a saved strategy. */
+export function onboardingStep(started: boolean, finalized: unknown, confirmMsg: string): 1 | 2 | 3 | 4 {
+  return !started ? 1 : !finalized ? 2 : confirmMsg.startsWith('saved') ? 4 : 3
+}
+
 function Field({ label, value }: { label: string; value: string | number | undefined | null }) {
   const set = value !== undefined && value !== null && value !== ''
   return (

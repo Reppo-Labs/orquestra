@@ -12,6 +12,54 @@ export const STRICT_LABEL: Record<string, string> = {
   aggressive: 'aggressive (up ≥6)',
 }
 
+/** The operator-facing preset. This is a RENAMING, not a new setting: each preset writes
+ *  exactly one of the three existing `strictness` values — no new config value is invented.
+ *  The 1-10 thresholds stay available (strictnessTip) but they are no longer the default
+ *  surface: an operator chooses how picky the node should be, not a number. */
+export interface StrictPreset {
+  /** the value persisted to config.datanets[id].strictness */
+  value: (typeof STRICT)[number]
+  /** what the operator sees */
+  name: string
+  /** the trade-off, in one line */
+  blurb: string
+}
+
+export const PRESETS: StrictPreset[] = [
+  { value: 'conservative', name: 'Cautious', blurb: 'Acts only on strong pods. Fewest votes and mints, lowest spend.' },
+  { value: 'balanced', name: 'Balanced', blurb: 'Acts on clearly good pods, skips the doubtful ones.' },
+  { value: 'aggressive', name: 'Aggressive', blurb: 'Acts on merely decent pods. Most votes and mints, highest spend.' },
+]
+
+/** config value → operator-facing preset name. An unknown value (hand-edited config) falls
+ *  back to the raw string rather than lying about which preset is active. */
+export const presetName = (strictness: string): string =>
+  PRESETS.find((p) => p.value === strictness)?.name ?? strictness
+
+/** The operator-facing preset. This is a RENAMING, not a new setting: each preset writes
+ *  exactly one of the three existing `strictness` values — no new config value is invented.
+ *  The thresholds stay available (strictnessTip) but they are not the default surface: an
+ *  operator picks how picky the node should be, not a number between 1 and 10. */
+export interface StrictPreset {
+  /** the value persisted to config.datanets[id].strictness */
+  value: (typeof STRICT)[number]
+  /** what the operator sees */
+  name: string
+  /** the trade-off, in one line */
+  blurb: string
+}
+
+export const PRESETS: StrictPreset[] = [
+  { value: 'conservative', name: 'Cautious', blurb: 'Acts only on strong pods. Fewest votes and mints, lowest spend.' },
+  { value: 'balanced', name: 'Balanced', blurb: 'The default. Acts on clearly good pods, skips the doubtful ones.' },
+  { value: 'aggressive', name: 'Aggressive', blurb: 'Acts on merely decent pods. Most votes and mints, highest spend.' },
+]
+
+/** config value → operator-facing preset name. Unknown values (a hand-edited config) fall
+ *  back to the raw value rather than lying about which preset is active. */
+export const presetName = (strictness: string): string =>
+  PRESETS.find((p) => p.value === strictness)?.name ?? strictness
+
 /** Tooltip body explaining how a 1-10 score becomes an action. */
 export function strictnessTip(): ReactNode {
   return (

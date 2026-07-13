@@ -1,4 +1,5 @@
 import type { LearnDatanetView } from '../api'
+import { fmt, fmtPerVote } from '../lib/format'
 
 /** Per-datanet learned-lessons panel: calibration stats line, the active lessons, and
  *  the operator controls — enable/disable learning and clear (veto) the lessons. */
@@ -30,9 +31,10 @@ export function LessonsPanel({ id, label, view, busy, onToggle, onVeto }: {
       {view.econ && (
         <div className="dim" style={{ fontSize: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span>
-            mint ROI {view.econ.mintRoiPct ?? '—'}% ({view.econ.ownerClaimedReppo}/{view.econ.mintCostReppo} REPPO)
-            {' · voter '}{view.econ.voterReppoPerVote?.toExponential(1) ?? '—'} REPPO/vote
-            {' · yield '}{view.econ.latestYieldPerVote?.toExponential(1) ?? '—'}
+            mint ROI {view.econ.mintRoiPct === null ? '—' : `${fmt(view.econ.mintRoiPct)}%`}
+            {' '}({fmt(view.econ.ownerClaimedReppo)} earned / {fmt(view.econ.mintCostReppo)} REPPO spent)
+            {' · voter earns '}{fmtPerVote(view.econ.voterReppoPerVote)}
+            {' · current yield '}{fmtPerVote(view.econ.latestYieldPerVote)}
           </span>
           {view.econ.latestUncontested && <span className="econ-badge uncontested">uncontested</span>}
         </div>

@@ -271,16 +271,162 @@ textarea { resize: vertical; font-family: var(--body); min-height: 0; }
 .switch input:checked + .track { background: var(--accent-soft); border-color: var(--accent-line); }
 .switch input:checked + .track::after { left: 18px; background: var(--accent); }
 
+/* ── Pause: the kill switch ───────────────────────────────────────────── */
+/* Amber, never red. A paused node has not lost money — it is simply not acting.
+   Red/green stay reserved for profit and loss. */
+.pause-ctl { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; }
+.pause-err { font-family: var(--mono); font-size: 11px; color: var(--warn); white-space: nowrap; }
+.btn.resume {
+  background: var(--warn); border-color: var(--warn); color: #1c1608; font-weight: 700;
+}
+.btn.resume:hover { background: #eec25e; border-color: #eec25e; }
+.paused-banner {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding: 13px 16px;
+  border: 1px solid rgba(224, 179, 74, 0.45); background: rgba(224, 179, 74, 0.08);
+  border-radius: var(--r-md);
+}
+.paused-head { font-family: var(--display); font-size: 15px; font-weight: 700; color: var(--warn); }
+.paused-detail { font-size: 12px; margin-top: 2px; }
+.paused-main { flex: 1; min-width: 0; }
+
+/* ── Home: coverage + the one next action ─────────────────────────────── */
+.home-coverage { font-family: var(--display); font-size: 16px; font-weight: 700; margin: 0 0 14px; }
+.cov-num { color: var(--text); }
+.cov-txt { color: var(--muted); font-weight: 600; }
+.cov-warn {
+  background: none; border: 0; cursor: pointer; margin-left: 10px; padding: 0;
+  font-family: var(--body); font-size: 13px; font-weight: 600; color: var(--warn);
+}
+.cov-warn:hover { text-decoration: underline; }
+/* Switched-off datanets: reported, never counted against the node's coverage. Neutral —
+   the operator chose this, and a choice is not a fault. */
+.cov-off { font-size: 13px; font-weight: 600; }
+
+.next-action {
+  display: flex; align-items: center; gap: 16px; padding: 16px 18px; margin-bottom: 22px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel);
+}
+/* Only an action that costs money to ignore gets the accent. "Nothing to do" is calm. */
+.next-action.stop_minting, .next-action.resume { border-color: var(--accent-line); background: var(--accent-soft); }
+.next-action.fix_blocked { border-color: rgba(224, 179, 74, 0.4); }
+.na-body { flex: 1; min-width: 0; }
+.na-head { font-family: var(--display); font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+.na-detail { font-size: 13px; line-height: 1.5; }
+.na-done { font-size: 12px; margin-top: 6px; font-family: var(--mono); }
+
+/* ── Disclosures (details / advanced / node settings) ─────────────────── */
+.disclosure {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: 0; cursor: pointer; padding: 12px 0;
+  font-family: var(--body); font-size: 13px; font-weight: 600; color: var(--text);
+}
+.disclosure:hover { color: var(--accent); }
+.disclosure-caret {
+  display: grid; place-items: center; width: 18px; height: 18px; flex: none;
+  border: 1px solid var(--border-2); border-radius: 5px; color: var(--muted); font-family: var(--mono); font-size: 12px;
+}
+.disclosure .muted { font-weight: 400; }
+.details-block, .node-settings { border-top: 1px solid var(--border); margin-top: 30px; }
+.node-settings-body { padding-bottom: 10px; }
+.settings-head {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+  font-weight: 700; margin: 22px 0 10px; outline: none;
+}
+
+/* ── Datanet rows (Strategy + Health + economics, merged) ─────────────── */
+.dn-list { display: flex; flex-direction: column; gap: 10px; }
+.dn-row {
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--panel); padding: 14px 16px;
+}
+.dn-row.losing { border-color: rgba(236, 109, 126, 0.35); }
+.dn-row.off { opacity: 0.55; }
+/* One-shot highlight when a click-through from Home's yield leaderboard lands here (the row
+   replaced the old Strategy card; the treatment is main's, unchanged). Last, so it wins over
+   .losing's border. The row is focused programmatically, so its plain :focus ring is
+   suppressed — the flash IS the "you are here"; keyboard focus still shows one. */
+.dn-row.flash { animation: net-flash 1.6s ease-out; }
+.dn-row:focus { outline: none; }
+.dn-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Less motion, not less information: the same highlight, held static instead of animated. */
+@media (prefers-reduced-motion: reduce) {
+  .dn-row.flash {
+    animation: none;
+    border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+}
+.dn-main { display: grid; grid-template-columns: 1.4fr 1.1fr 0.8fr 1.2fr; gap: 14px; align-items: start; }
+.dn-name { font-weight: 600; font-size: 14px; line-height: 1.25; }
+.dn-sub { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.dn-label { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 5px; }
+.dn-val { font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.dn-alert {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 12px; padding: 10px 12px; border-radius: var(--r-sm);
+  background: rgba(224, 179, 74, 0.07); border: 1px solid rgba(224, 179, 74, 0.28);
+}
+.dn-alert-msg { flex: 1; min-width: 220px; font-size: 13px; line-height: 1.5; color: var(--text); }
+.remedy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.remedy-note {
+  flex-basis: 100%; font-size: 12px; line-height: 1.6; color: var(--muted);
+  border-top: 1px dashed var(--border-2); padding-top: 8px; margin-top: 4px;
+}
+
+.dn-controls {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 13px; padding-top: 12px; border-top: 1px dashed var(--border-2);
+}
+.dn-acts { display: flex; align-items: center; gap: 6px; }
+.dn-adv-btn { margin-left: auto; }
+.dn-advanced { margin-top: 13px; border-top: 1px dashed var(--border-2); padding-top: 12px; display: grid; gap: 10px; }
+.dn-advanced-foot { display: flex; justify-content: flex-end; }
+
+/* Vote weight as a share, not a bare integer. */
+.weight { display: inline-flex; align-items: center; gap: 8px; }
+.weight-val { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.step {
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  background: var(--panel-hi); border: 1px solid var(--border-2); color: var(--muted); font-size: 13px; line-height: 1;
+}
+.step:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-line); }
+.step:disabled { opacity: 0.35; cursor: default; }
+
+/* ── Diagnostics sub-tabs ─────────────────────────────────────────────── */
+.diag-head { display: flex; align-items: center; gap: 18px; margin-bottom: 6px; }
+.subtabs { display: flex; gap: 4px; }
+.subtab {
+  background: none; border: 1px solid transparent; border-radius: 999px; cursor: pointer;
+  padding: 5px 13px; font-family: var(--body); font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.subtab:hover { color: var(--text); }
+.subtab.active { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+
 /* ── Overview helpers ─────────────────────────────────────────────────── */
 .earn-banner {
   display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px;
   color: var(--muted); padding: 11px 15px; border: 1px solid var(--border); border-radius: var(--r-md);
   background: var(--panel); margin-bottom: 22px;
 }
+.earn-banner.loss { border-color: rgba(236, 109, 126, 0.35); }
+.earn-banner.profit { border-color: rgba(87, 211, 155, 0.3); }
+.earn-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.earn-head { font-family: var(--display); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.earn-detail { font-size: 12px; }
+.earn-facts { display: flex; flex-wrap: wrap; align-items: center; margin-left: auto; font-size: 11px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dot.on { background: var(--pos); box-shadow: 0 0 10px var(--pos); }
 .dot.warm { background: var(--warn); }
+/* loss — the only other colour the banner may take, and it means money lost. */
+.dot.bad { background: var(--neg); box-shadow: 0 0 10px var(--neg); }
 .dot.off { background: var(--faint); }
+
+/* Health coverage headline + operational pills. Deliberately NOT green/red: those
+   are reserved for profit/loss, and an "active" datanet is not a profitable one. */
+.health-headline { font-family: var(--display); font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.health-cover { color: var(--text); }
+.health-idle { color: var(--warn); }
+.pill.active { background: var(--panel-hi); color: var(--text); }
+.pill.idle { background: var(--panel-hi); color: var(--warn); }
 .skipreason { color: var(--warn); font-family: var(--mono); font-size: 12px; padding: 4px 0; }
 
 /* ── Tooltip ──────────────────────────────────────────────────────────── */
@@ -608,8 +754,17 @@ input:focus-visible, select:focus-visible, textarea:focus-visible,
 .panel-box { overflow-x: auto; }
 .panel-box table { min-width: 640px; }
 
+@media (max-width: 900px) {
+  /* The four-column datanet row stacks rather than crushing its numbers. */
+  .dn-main { grid-template-columns: 1fr 1fr; }
+  .dn-controls { gap: 12px; }
+  .dn-adv-btn { margin-left: 0; }
+}
+
 @media (max-width: 760px) {
   .shell, .nav-inner, .ticker-inner, .tabs-wrap { padding-left: 16px; padding-right: 16px; }
+  .dn-main { grid-template-columns: 1fr; }
+  .next-action, .paused-banner { flex-wrap: wrap; }
   .shell { padding-bottom: 56px; }
   .sec-head { margin: 24px 0 12px; }
   .card { padding: 15px 16px; }
@@ -636,3 +791,64 @@ input:focus-visible, select:focus-visible, textarea:focus-visible,
   .skel { animation: none; background: var(--panel-hi); }
   * { transition-duration: 0.01ms !important; }
 }
+
+
+/* ── AlertsPanel + diagnostics styles, recovered from the compiled orquestra:rewrite bundle
+   (source edits lived in since-deleted subagent worktrees) ─────────────────────────── */
+td.detail-cell{max-width:480px}
+.detail-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;cursor:pointer}
+.detail-clamp.open{display:block;-webkit-line-clamp:unset;overflow:visible}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.netchart{margin:14px 0 0;padding:14px 16px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--r-md)}
+.nc-caption{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.nc-title{font-family:var(--display);font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.nc-now{font-size:17px;font-weight:600;margin-left:auto}
+.nc-trend,.nc-owed{font-size:12px}
+.nc-svg{display:block;width:100%;height:132px;overflow:visible}
+.nc-zero{stroke:var(--border-2);stroke-width:1;stroke-dasharray:3 3}
+.nc-line{fill:none;stroke:var(--text);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round;opacity:.85}
+.nc-dot{stroke:var(--panel);stroke-width:2;fill:var(--text)}
+.nc-dot.pos{fill:var(--pos)}
+.nc-dot.neg{fill:var(--neg)}
+.nc-axis{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px;margin-top:6px}
+.nc-zero-key{color:var(--faint);text-align:center}
+.nc-summary{font-size:12px;line-height:1.5;margin:8px 0 0}
+.alerts{margin:14px 0 0}
+.alert-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.alert-card{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--border-2);border-radius:var(--r-md);padding:12px 14px}
+.alert-card.critical{border-left-color:var(--accent);background:linear-gradient(90deg,var(--accent-soft),var(--panel) 55%)}
+.alert-card.warning{border-left-color:var(--warn)}
+.ac-head{display:flex;align-items:center;gap:10px}
+.ac-sev{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;padding:2px 7px;border-radius:999px;flex:none;background:var(--panel-hi);color:var(--muted)}
+.ac-sev.critical{background:var(--accent-soft);color:var(--accent-hi)}
+.ac-sev.warning{background:#e0b34a24;color:var(--warn)}
+.ac-title{font-weight:600;font-size:14px;flex:1;min-width:0}
+.ac-dismiss{background:none;border:0;color:var(--faint);cursor:pointer;font-size:17px;line-height:1;padding:0 2px;flex:none}
+.ac-dismiss:hover{color:var(--text)}
+.ac-detail{font-size:13px;line-height:1.55;margin-top:5px}
+.ac-foot{display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap}
+.alerts-hidden{font-size:12px;margin-top:8px}
+.alert-badge{display:inline-flex;align-items:center;gap:6px;background:var(--panel-hi);border:1px solid var(--border-2);color:var(--text);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--body);transition:border-color .2s var(--ease)}
+.alert-badge:hover{border-color:var(--faint)}
+.alert-badge .ab-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none}
+.alert-badge.warning .ab-dot{background:var(--warn)}
+.alert-badge.critical{border-color:var(--accent-line);background:var(--accent-soft);color:var(--accent-hi)}
+.alert-badge.critical .ab-dot{background:var(--accent);animation:ab-pulse 2s var(--ease) infinite}
+.mint-est{background:var(--panel-2);border:1px solid var(--border-2);border-radius:var(--r-md);padding:12px 14px;margin:10px 0}
+.me-head{font-family:var(--display);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
+.me-sec+.me-sec{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.me-sec-head{font-size:12px;font-weight:600;color:var(--text);margin-bottom:7px}
+.me-row{display:flex;gap:12px;align-items:baseline;padding:3px 0;font-size:12.5px;flex-wrap:wrap}
+.me-label{color:var(--muted);min-width:175px;flex:none}
+.me-val{flex:1;min-width:200px;line-height:1.5}
+.me-unknown{color:var(--warn)}
+.me-uncontested{color:var(--accent-hi)}
+.me-note{font-size:11.5px;line-height:1.5;margin-top:7px}
+.me-warn{font-size:11.5px;line-height:1.55;margin:6px 0 8px;padding:8px 10px;background:#e0b34a14;border:1px solid rgba(224,179,74,.28);border-radius:var(--r-sm);color:var(--text)}
+.dn-confirm{border-top:1px solid var(--border);padding:4px 14px 12px}
+.dn-confirm-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.alert-badge:focus-visible,.ac-dismiss:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.nc-area.profit{fill:var(--pos);opacity:.16}
+.nc-area.loss{fill:var(--neg);opacity:.16}
+.netchart.empty .nc-empty{font-size:13px;padding:10px 0 2px}
