@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runCycle, type CycleDeps } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
 import type { LockArgs } from '../reppo/cli.js'
 import { markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
@@ -888,7 +888,7 @@ describe('datanet yield', () => {
   it('computes yield onto a vote-scoped rubric clone (shared rubric NOT mutated); yield is snapshot-only, writes NO activity row', async () => {
     const recordActivity = vi.fn()
     let sharedRubric: DatanetRubric | undefined
-    let scorerRubric: DatanetRubric | undefined
+    let scorerRubric: VoteRubric | undefined
     const d = deps({
       recordActivity,
       // Capture BOTH the shared (process-cached in production) rubric object and the
@@ -916,7 +916,7 @@ describe('datanet yield', () => {
     expect(scorerRubric?.economics.currentYield?.epoch).toBe(7)
     expect(scorerRubric).not.toBe(sharedRubric)
     // …while the shared rubric stayed untouched (mint path + later cycles reuse it).
-    expect(sharedRubric?.economics.currentYield).toBeUndefined()
+    expect(sharedRubric && 'currentYield' in sharedRubric.economics).toBe(false)
   })
 
   it('volume read throws: yield unavailable with the error, datanet still votes', async () => {

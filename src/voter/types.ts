@@ -1,5 +1,5 @@
 // src/voter/types.ts
-import type { DatanetRubric } from '../rubric/types.js'
+import type { VoteRubric } from '../rubric/types.js'
 import type { PanelTranscript } from '../panel/types.js'
 
 /** A pod as listed by `reppo list pods --all --datanet <id>`. */
@@ -46,7 +46,8 @@ export interface ScoreThresholds {
 }
 
 /** Scores a pod against a datanet's rubric. Default impl is an LLM; injected in tests.
- *  `thresholds` is optional context for tiered scorers; plain scorers ignore it. */
+ *  `thresholds` is optional context for tiered scorers; plain scorers ignore it.
+ *  Takes a VoteRubric — the only rubric type that can carry economics.currentYield. */
 export interface PodScorer {
-  scorePod(pod: VoterPod, rubric: DatanetRubric, thresholds?: ScoreThresholds): Promise<PodScore>
+  scorePod(pod: VoterPod, rubric: VoteRubric, thresholds?: ScoreThresholds): Promise<PodScore>
 }

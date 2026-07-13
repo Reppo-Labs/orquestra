@@ -8,7 +8,7 @@
 import type { LanguageModel } from 'ai'
 import type { PodScorer, PodScore } from '../voter/types.js'
 import type { CandidateScorer, CandidatePod } from '../adapter/types.js'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { MintRubric } from '../rubric/types.js'
 import { candidateScoreInput } from '../minter/score.js'
 import { runPanel, type PanelGenerate } from './deliberate.js'
 import { redactSecrets } from '../util/redact.js'
@@ -63,7 +63,7 @@ export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): Po
  *  that candidate, same as a single-scorer failure). */
 export function createPanelCandidateScorer(base: CandidateScorer, opts: PanelScorerOpts): CandidateScorer {
   return {
-    async scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric) {
+    async scoreCandidate(candidate: CandidatePod, rubric: MintRubric) {
       if (!opts.getDeliberation().enabled) return base.scoreCandidate(candidate, rubric)
       const { name, description } = candidateScoreInput(candidate)
       const r = await runPanel(opts.model, { name, description, rubric }, { brief: opts.getBrief?.(), lessons: opts.getLessons?.(rubric.datanetId), generate: opts.generate })

@@ -1,5 +1,5 @@
 // src/adapter/types.ts
-import type { DatanetRubric } from '../rubric/types.js'
+import type { DatanetRubric, MintRubric } from '../rubric/types.js'
 import type { PanelTranscript } from '../panel/types.js'
 
 /** A mint candidate an adapter produced for a datanet. */
@@ -39,7 +39,9 @@ export interface DatanetAdapter {
 }
 
 /** Scores a candidate 1-10 against the datanet's publisher spec. LLM by default.
- *  `panel` is present when a multi-agent panel produced the score (see src/panel). */
+ *  `panel` is present when a multi-agent panel produced the score (see src/panel).
+ *  Takes a MintRubric — structurally incapable of carrying the vote-only yield, so a
+ *  mint prompt can never render datanet economics (rubric/types.ts). */
 export interface CandidateScorer {
-  scoreCandidate(candidate: CandidatePod, rubric: DatanetRubric): Promise<{ score: number; reason: string; panel?: PanelTranscript }>
+  scoreCandidate(candidate: CandidatePod, rubric: MintRubric): Promise<{ score: number; reason: string; panel?: PanelTranscript }>
 }

@@ -1,6 +1,6 @@
 // src/voter/select.ts
 import { STRICTNESS_THRESHOLDS, type StrictnessLevel } from '../config/schema.js'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { VoteRubric } from '../rubric/types.js'
 import type { VoteIntent } from '../wallet/intents.js'
 import type { VoterPod, VoteFilter, PodScorer } from './types.js'
 import { redactSecrets } from '../util/redact.js'
@@ -13,7 +13,7 @@ import { redactSecrets } from '../util/redact.js'
 export async function selectVotes(
   datanetId: string,
   pods: VoterPod[],
-  rubric: DatanetRubric,
+  rubric: VoteRubric,
   strictness: StrictnessLevel,
   filter: VoteFilter,
   scorer: PodScorer,

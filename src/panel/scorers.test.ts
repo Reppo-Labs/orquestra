@@ -1,6 +1,6 @@
 // src/panel/scorers.test.ts
 import { describe, it, expect, vi } from 'vitest'
-import type { DatanetRubric } from '../rubric/types.js'
+import { toVoteRubric, type DatanetRubric } from '../rubric/types.js'
 import type { PodScorer } from '../voter/types.js'
 import type { CandidateScorer, CandidatePod } from '../adapter/types.js'
 import { createPanelPodScorer, createPanelCandidateScorer, type PanelScorerOpts } from './scorers.js'
@@ -94,18 +94,11 @@ describe('createPanelPodScorer (votes, all-or-none)', () => {
       personaPrompt = prompt
       return { score: 6, argument: 'a' }
     }) as PanelGenerate
-    // Clone the shared fixture — don't pollute it for the other tests.
-    const rub = {
-      ...rubric,
-      datanetId: '9',
-      economics: {
-        ...rubric.economics,
-        currentYield: {
-          datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
-          epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false,
-        },
-      },
-    } as DatanetRubric
+    // toVoteRubric clones the shared fixture — don't pollute it for the other tests.
+    const rub = toVoteRubric({ ...rubric, datanetId: '9' }, {
+      datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
+      epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false,
+    })
     const o: PanelScorerOpts = { model, getDeliberation: () => ({ enabled: true, votePanel: true }), generate: capGen }
     await createPanelPodScorer(basePod(8), o).scorePod(pod, rub, { like: 7, dislike: 3 })
     for (const p of [personaPrompt, judgePrompt]) {
