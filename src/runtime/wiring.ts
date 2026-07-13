@@ -24,7 +24,6 @@ import {
 } from '../reppo/reader.js'
 import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
-import { candidateScoreInput } from '../minter/score.js'
 import { appendActivity, readActivity, type ActivityEntry } from '../dashboard/activityLog.js'
 import { collectSnapshot, writeSnapshot, readSnapshot, attachSnapshotLlm, type SnapshotBudget } from '../dashboard/snapshot.js'
 import { resetLlmUsage, snapshotLlmUsage } from '../llm/usage.js'
@@ -32,7 +31,6 @@ import { earnSummary, formatEarnStatus, writeEarnStatus, selectOurPods } from '.
 import { collectOutcomes } from '../learn/collect.js'
 import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
-import { buildLessonsBlock } from '../learn/inject.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
 import { registerVoteOnPlatform } from '../reppo/platformApi.js'
@@ -242,7 +240,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
 
   return {
     dataDir: w.dataDir,
-    topN: 12,
     // Activity log + per-cycle arming + platform vote registration, as one collaborator.
     activity: {
       record: (entry) => {
@@ -258,72 +255,106 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
       },
     },
-    getRubric: (id) => io.getRubric(id),
-    getPodsAndFilter: async (id) => {
-      const pods = await reader.listPods(id, { all: true })
-      const own = await reader.listPods(id, { all: false })
-        .then((p) => p.map((x) => x.podId))
-        .catch((e) => {
-          console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
-          return [] as string[]
-        })
-      const currentEpoch = deriveCurrentEpoch(pods)
-      const voted = w.dedup.getVotedPodIds(id)
-      const ownSet = new Set(own), votedSet = new Set(voted)
-      // Name-based own-pod backstop: the platform's creator field is empty on our
-      // pods, so the creator-based query above misses some — each miss wastes an
-      // LLM scoring call and burns a one-time CANNOT_VOTE_FOR_OWN_POD error. Our
-      // executed mints' names (the earn-attribution source) close the gap.
-      const minted = mintedNames() // per-cycle memo — was a full activity re-scan PER DATANET
-      for (const p of pods) if (p.name && minted.has(p.name)) ownSet.add(p.podId)
-      // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
-      // — content fetches are the slow part of a cycle. For each, probe Content-Type:
-      // a video/* pod is marked (mediaUrl/mediaType/contentLength) for the Gemini video
-      // path instead of text-fetched; a per-CYCLE cap (videoBudget, shared across datanets)
-      // bounds how many videos we score. A DETECTED video is NEVER text-fetched — under the
-      // cap it is marked; over the cap it is left unmarked and skipped (continue) this cycle.
-      for (const p of pods) {
-        const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
-        if (!eligible || !p.url) continue
-        // A Google Drive viewer/share link (drive.google.com/file/d/<ID>/view) serves an
-        // HTML shell, not bytes — detectType would see text/html and the pod would be
-        // text-fetched (model scores the page chrome, not the video). Rewrite it to a
-        // direct-download URL FIRST so the probe sees video/* and ingestVideo can fetch it.
-        // Non-Drive URLs pass through unchanged.
-        const mediaSrc = resolveDriveUrl(p.url)
-        const resolvedFromDrive = mediaSrc !== p.url
-        let info: { mediaType: string; contentLength: number | null } | null = null
-        try { info = await io.detectType(mediaSrc) } catch { info = null }
-        // video/* routes to the Gemini path. A Drive-resolved URL whose download endpoint
-        // reports a generic binary type (application/octet-stream — common for Drive file
-        // downloads) is also treated as the clip: we only rewrite Drive links, and a binary
-        // body on a video datanet IS the video. Gemini needs a concrete video mime to ingest,
-        // so a coerced type defaults to video/mp4 when detection didn't give a video/* type.
-        const isVideo = info && (isVideoType(info.mediaType) || (resolvedFromDrive && isGenericBinaryType(info.mediaType)))
-        if (info && isVideo) {
-          // A detected video MUST NOT be text-fetched (binary sliced into description = junk
-          // votes), whether or not it fits the cap. Under the cap → mark for the video path;
-          // over the cap → leave unmarked and skip it entirely this cycle (retried next cycle).
-          if (videoBudget > 0) {
-            p.mediaUrl = mediaSrc
-            p.mediaType = isVideoType(info.mediaType) ? info.mediaType : 'video/mp4'
-            if (info.contentLength !== null) p.contentLength = info.contentLength
-            videoBudget--
+    reads: {
+      getRubric: (id) => io.getRubric(id),
+      getPodsAndFilter: async (id) => {
+        const pods = await reader.listPods(id, { all: true })
+        const own = await reader.listPods(id, { all: false })
+          .then((p) => p.map((x) => x.podId))
+          .catch((e) => {
+            console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
+            return [] as string[]
+          })
+        const currentEpoch = deriveCurrentEpoch(pods)
+        const voted = w.dedup.getVotedPodIds(id)
+        const ownSet = new Set(own), votedSet = new Set(voted)
+        // Name-based own-pod backstop: the platform's creator field is empty on our
+        // pods, so the creator-based query above misses some — each miss wastes an
+        // LLM scoring call and burns a one-time CANNOT_VOTE_FOR_OWN_POD error. Our
+        // executed mints' names (the earn-attribution source) close the gap.
+        const minted = mintedNames() // per-cycle memo — was a full activity re-scan PER DATANET
+        for (const p of pods) if (p.name && minted.has(p.name)) ownSet.add(p.podId)
+        // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
+        // — content fetches are the slow part of a cycle. For each, probe Content-Type:
+        // a video/* pod is marked (mediaUrl/mediaType/contentLength) for the Gemini video
+        // path instead of text-fetched; a per-CYCLE cap (videoBudget, shared across datanets)
+        // bounds how many videos we score. A DETECTED video is NEVER text-fetched — under the
+        // cap it is marked; over the cap it is left unmarked and skipped (continue) this cycle.
+        for (const p of pods) {
+          const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
+          if (!eligible || !p.url) continue
+          // A Google Drive viewer/share link (drive.google.com/file/d/<ID>/view) serves an
+          // HTML shell, not bytes — detectType would see text/html and the pod would be
+          // text-fetched (model scores the page chrome, not the video). Rewrite it to a
+          // direct-download URL FIRST so the probe sees video/* and ingestVideo can fetch it.
+          // Non-Drive URLs pass through unchanged.
+          const mediaSrc = resolveDriveUrl(p.url)
+          const resolvedFromDrive = mediaSrc !== p.url
+          let info: { mediaType: string; contentLength: number | null } | null = null
+          try { info = await io.detectType(mediaSrc) } catch { info = null }
+          // video/* routes to the Gemini path. A Drive-resolved URL whose download endpoint
+          // reports a generic binary type (application/octet-stream — common for Drive file
+          // downloads) is also treated as the clip: we only rewrite Drive links, and a binary
+          // body on a video datanet IS the video. Gemini needs a concrete video mime to ingest,
+          // so a coerced type defaults to video/mp4 when detection didn't give a video/* type.
+          const isVideo = info && (isVideoType(info.mediaType) || (resolvedFromDrive && isGenericBinaryType(info.mediaType)))
+          if (info && isVideo) {
+            // A detected video MUST NOT be text-fetched (binary sliced into description = junk
+            // votes), whether or not it fits the cap. Under the cap → mark for the video path;
+            // over the cap → leave unmarked and skip it entirely this cycle (retried next cycle).
+            if (videoBudget > 0) {
+              p.mediaUrl = mediaSrc
+              p.mediaType = isVideoType(info.mediaType) ? info.mediaType : 'video/mp4'
+              if (info.contentLength !== null) p.contentLength = info.contentLength
+              videoBudget--
+            }
+            continue
           }
-          continue
+          // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
+          // When we already have that real writeup (description differs from the bare title),
+          // do NOT fetch the url — for SPA-backed datanets (e.g. ArAIstotle) a server-side
+          // fetch returns the app-shell HTML, which would CLOBBER good content with junk and
+          // produce bad votes. Only fetch to enrich when we have title-only (no writeup).
+          if (p.description.trim() !== p.name.trim()) continue
+          const c = await io.fetchContent(p.url)
+          if (c) p.description = `${p.name}\n\n${c}`
         }
-        // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
-        // When we already have that real writeup (description differs from the bare title),
-        // do NOT fetch the url — for SPA-backed datanets (e.g. ArAIstotle) a server-side
-        // fetch returns the app-shell HTML, which would CLOBBER good content with junk and
-        // produce bad votes. Only fetch to enrich when we have title-only (no writeup).
-        if (p.description.trim() !== p.name.trim()) continue
-        const c = await io.fetchContent(p.url)
-        if (c) p.description = `${p.name}\n\n${c}`
-      }
-      return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
+        return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
+      },
+      // Live veREPPO for the per-cycle stake top-up — same balance query setupNode/snapshot use.
+      // null on a failed read (NOT 0): maybeTopUpStake skips this cycle's top-up rather than
+      // treating a read miss as zero veREPPO, which would lock the FULL target on top of whatever
+      // the wallet already holds (over-lock). The top-up retries next cycle.
+      getVeReppo: async () => (await reader.balance().catch(() => null))?.veReppo ?? null,
+      // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
+      // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
+      // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
+      // cycle's claim phase (it skips claiming that cycle). The owner-scan watermark makes
+      // the first run backfill history from REPPO_EMISSIONS_FLOOR_EPOCH — without it, the
+      // fixed 3-epoch window permanently hid older unclaimed emissions (operator report:
+      // "claimed once, then only manual claims worked").
+      getEmissionsDue: async () => enrichTokens((rpcUrl && walletAddress)
+        ? await reader.claimableOnchain(rpcUrl, walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+        : (await reader.emissionsDue()).pods),
     },
-    getAdapter: (id) => w.adapters.find((a) => a.id === id),
+    // Adapter routing + the per-datanet inputs the cycle threads into adapter.discover.
+    adapters: {
+      get: (id) => w.adapters.find((a) => a.id === id),
+      topN: 12,
+      strategyFor,
+      existingPodNames: async (id) => {
+        const pods = await reader.listPods(id, { all: true }).catch(() => [] as VoterPod[])
+        const currentEpoch = deriveCurrentEpoch(pods)
+        // Current-epoch pods are the most likely semantic duplicates of new candidates;
+        // sort them first, then cap to avoid flooding the LLM judge with stale history.
+        const MAX_EXISTING = 50
+        const sorted = currentEpoch === null ? pods : [
+          ...pods.filter((p) => p.validityEpoch === currentEpoch),
+          ...pods.filter((p) => p.validityEpoch !== currentEpoch),
+        ]
+        return sorted.slice(0, MAX_EXISTING).map((p) => p.name).filter(Boolean)
+      },
+    },
     scorers,
     // Persistent dedup — thin views over DedupState (SQLite). Grants are always
     // supported in production wiring, so the grant cache is always present.
@@ -339,36 +370,8 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         revoke: (id) => w.dedup.removeGrant(id),
       },
     },
-    // Live veREPPO for the per-cycle stake top-up — same balance query setupNode/snapshot use.
-    // null on a failed read (NOT 0): maybeTopUpStake skips this cycle's top-up rather than
-    // treating a read miss as zero veREPPO, which would lock the FULL target on top of whatever
-    // the wallet already holds (over-lock). The top-up retries next cycle.
-    getVeReppo: async () => (await reader.balance().catch(() => null))?.veReppo ?? null,
     executor: w.executor,
     ledger: w.ledger,
-    // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
-    // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
-    // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
-    // cycle's claim phase (it skips claiming that cycle). The owner-scan watermark makes
-    // the first run backfill history from REPPO_EMISSIONS_FLOOR_EPOCH — without it, the
-    // fixed 3-epoch window permanently hid older unclaimed emissions (operator report:
-    // "claimed once, then only manual claims worked").
-    getEmissionsDue: async () => enrichTokens((rpcUrl && walletAddress)
-      ? await reader.claimableOnchain(rpcUrl, walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
-      : (await reader.emissionsDue()).pods),
-    strategyFor,
-    getExistingPodNames: async (id) => {
-      const pods = await reader.listPods(id, { all: true }).catch(() => [] as VoterPod[])
-      const currentEpoch = deriveCurrentEpoch(pods)
-      // Current-epoch pods are the most likely semantic duplicates of new candidates;
-      // sort them first, then cap to avoid flooding the LLM judge with stale history.
-      const MAX_EXISTING = 50
-      const sorted = currentEpoch === null ? pods : [
-        ...pods.filter((p) => p.validityEpoch === currentEpoch),
-        ...pods.filter((p) => p.validityEpoch !== currentEpoch),
-      ]
-      return sorted.slice(0, MAX_EXISTING).map((p) => p.name).filter(Boolean)
-    },
     supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
     ...(onchain ? { onchain } : {}),
   }

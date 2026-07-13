@@ -127,7 +127,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent },
     })
-    const { pods, filter } = await deps.getPodsAndFilter('2')
+    const { pods, filter } = await deps.reads.getPodsAndFilter('2')
     expect(fetchContent).toHaveBeenCalledTimes(1) // only p1 — own/voted/stale-epoch excluded
     expect(fetchContent).toHaveBeenCalledWith('https://x/1')
     expect(pods.find((p) => p.podId === 'p1')!.description).toContain('fetched content')
@@ -149,7 +149,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     // Only the title-only pod is fetched; the one with a writeup keeps its CLI description.
     expect(fetchContent).toHaveBeenCalledTimes(1)
     expect(fetchContent).toHaveBeenCalledWith('https://x/2')
@@ -173,7 +173,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent },
     })
-    const { filter } = await deps.getPodsAndFilter('2')
+    const { filter } = await deps.reads.getPodsAndFilter('2')
     expect(filter.ownPodIds).toContain('mine')          // name-matched into the own set
     expect(fetchContent).toHaveBeenCalledTimes(1)       // 'mine' NOT enriched (no wasted fetch/scoring)
     expect(fetchContent).toHaveBeenCalledWith('https://x/1')
@@ -189,13 +189,13 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent: async () => '' },
     }))
-    const { filter } = await deps.getPodsAndFilter('2')
+    const { filter } = await deps.reads.getPodsAndFilter('2')
     expect(filter.ownPodIds).toEqual([]) // tolerated, not thrown
   })
 
   it('strategyFor merges the brief with per-datanet adapterParams (params win)', () => {
     const deps = buildCycleDeps(wiring())
-    const s = deps.strategyFor!('2')
+    const s = deps.adapters.strategyFor('2')
     expect(s.brief).toBe('the brief')
     expect(s.focus).toBe('energy')
     expect(s.topN).toBe(3)
@@ -204,10 +204,10 @@ describe('buildCycleDeps', () => {
   it('reads the operator brief live from config.notes (hot-reload, not captured at build)', () => {
     const w = wiring()
     const deps = buildCycleDeps(w)
-    expect(deps.strategyFor!('2').brief).toBe('the brief')
+    expect(deps.adapters.strategyFor('2').brief).toBe('the brief')
     // Simulate buildTick swapping in a freshly-reloaded config with edited notes.
     w.config = { ...w.config, notes: 'edited via dashboard' }
-    expect(deps.strategyFor!('2').brief).toBe('edited via dashboard')
+    expect(deps.adapters.strategyFor('2').brief).toBe('edited via dashboard')
   })
 
   it('dedup collaborator threads through to DedupState (vote, mint, grant, revoke)', async () => {
@@ -246,13 +246,13 @@ describe('buildCycleDeps', () => {
     const deps = buildCycleDeps(wiring({
       reader: fakeReader({ listPods: async () => { throw new Error('boom') } }),
     }))
-    expect(await deps.getExistingPodNames!('2')).toEqual([])
+    expect(await deps.adapters.existingPodNames('2')).toEqual([])
   })
 
   it('getAdapter routes by id; unknown id is undefined', () => {
     const deps = buildCycleDeps(wiring())
-    expect(deps.getAdapter('gdelt')?.id).toBe('gdelt')
-    expect(deps.getAdapter('nope')).toBeUndefined()
+    expect(deps.adapters.get('gdelt')?.id).toBe('gdelt')
+    expect(deps.adapters.get('nope')).toBeUndefined()
   })
 
   it('detects a video pod: sets mediaUrl/mediaType and does NOT text-enrich it', async () => {
@@ -269,7 +269,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
     const txt = pods.find((p) => p.podId === 'txt')!
     expect(vid.mediaUrl).toBe('https://x/clip.mp4')
@@ -297,7 +297,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
     // detectType was probed with the RESOLVED url, and the resolved url is what ingestVideo will fetch.
     expect(detectType).toHaveBeenCalledWith('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
@@ -320,7 +320,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const vid = pods.find((p) => p.podId === 'vid')!
     expect(vid.mediaUrl).toBe('https://drive.usercontent.google.com/download?id=1AbC_dEfGhI&export=download&confirm=t')
     expect(vid.mediaType).toBe('video/mp4') // coerced: Gemini needs a concrete video mime
@@ -338,7 +338,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const bin = pods.find((p) => p.podId === 'bin')!
     expect(bin.mediaUrl).toBeUndefined()           // octet-stream alone is NOT video
     expect(fetchContent).toHaveBeenCalledWith('https://cdn.example.com/blob')
@@ -356,7 +356,7 @@ describe('buildCycleDeps', () => {
       }),
       io: { fetchContent, detectType },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     const marked = pods.filter((p) => p.mediaUrl).length
     expect(marked).toBe(1) // second video pod left unmarked (over the per-cycle cap)
     // The OVER-cap detected video is NOT text-fetched (binary would be sliced into text).
@@ -375,7 +375,7 @@ describe('buildCycleDeps', () => {
         detectType: async () => ({ mediaType: 'video/mp4', contentLength: 123456 }),
       },
     })
-    const { pods } = await deps.getPodsAndFilter('2')
+    const { pods } = await deps.reads.getPodsAndFilter('2')
     expect(pods.find((p) => p.podId === 'vid')!.contentLength).toBe(123456)
   })
 
@@ -391,12 +391,12 @@ describe('buildCycleDeps', () => {
       io: { fetchContent: async () => '' },
     }))
     vi.mocked(readActivity).mockClear()
-    await deps.getPodsAndFilter('2')  // minted-name backstop (datanet 1 of 2)
-    await deps.getPodsAndFilter('5')  // …must NOT re-scan for datanet 2
-    await deps.getEmissionsDue()      // claim-token enrichment shares the snapshot too
+    await deps.reads.getPodsAndFilter('2')  // minted-name backstop (datanet 1 of 2)
+    await deps.reads.getPodsAndFilter('5')  // …must NOT re-scan for datanet 2
+    await deps.reads.getEmissionsDue()      // claim-token enrichment shares the snapshot too
     expect(readActivity).toHaveBeenCalledTimes(1)
     deps.activity.beginCycle!()                // next cycle re-arms the snapshot
-    await deps.getPodsAndFilter('2')
+    await deps.reads.getPodsAndFilter('2')
     expect(readActivity).toHaveBeenCalledTimes(2)
   })
 
@@ -441,13 +441,13 @@ describe('buildCycleDeps', () => {
       },
     })
     // Same cycle: datanet A consumes the single video slot; datanet B's video is over-budget.
-    const a = await deps.getPodsAndFilter('2')
-    const b = await deps.getPodsAndFilter('5')
+    const a = await deps.reads.getPodsAndFilter('2')
+    const b = await deps.reads.getPodsAndFilter('5')
     expect(a.pods.filter((p) => p.mediaUrl).length).toBe(1)
     expect(b.pods.filter((p) => p.mediaUrl).length).toBe(0) // budget already spent this cycle
     // New cycle: beginCycle re-arms the global budget → the next datanet can mark again.
     deps.activity.beginCycle!()
-    const c = await deps.getPodsAndFilter('5')
+    const c = await deps.reads.getPodsAndFilter('5')
     expect(c.pods.filter((p) => p.mediaUrl).length).toBe(1)
   })
 })

@@ -26,7 +26,7 @@ import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTarget
  *  existing veREPPO. */
 async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<void> {
   try {
-    const current = await deps.getVeReppo()
+    const current = await deps.reads.getVeReppo()
     if (current === null) {
       // A failed balance read is NOT zero — treating it as 0 would lock the FULL target on
       // top of whatever the wallet already holds (over-lock). Skip; retry next cycle.
@@ -151,30 +151,49 @@ export interface ActivityStore {
   registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
 }
 
-export interface CycleDeps {
-  dataDir: string
-  topN: number
+/** The per-datanet / per-cycle reads runCycle decides from — always available (each has
+ *  a CLI path), unlike the RPC-gated OnchainReads. */
+export interface CycleReads {
   getRubric(datanetId: string): Promise<DatanetRubric>
   getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
-  getAdapter(adapterId: string): DatanetAdapter | undefined
+  /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
+   *  top-up rather than coercing to 0 (which would over-lock the full target). */
+  getVeReppo(): Promise<number | null>
+  /** Claimable OWNER emissions (on-chain detection when RPC+wallet are wired, else the
+   *  platform CLI fallback — the choice is wiring's, invisible here). */
+  getEmissionsDue(): Promise<ClaimableEmission[]>
+}
+
+/** Adapter routing plus the per-datanet inputs the cycle threads into adapter.discover. */
+export interface AdapterHub {
+  get(adapterId: string): DatanetAdapter | undefined
+  /** max candidates an adapter should return per discovery. */
+  topN: number
+  /** per-datanet operator strategy passed to the adapter (e.g. gdelt focus/angle/brief). */
+  strategyFor(datanetId: string): Record<string, unknown>
+  /** existing on-chain pod names for a datanet (novelty dedup backstop). */
+  existingPodNames(datanetId: string): Promise<string[]>
+}
+
+/** Everything runCycle needs, as named collaborators (built by wiring.ts buildCycleDeps).
+ *  runCycle is pure policy over these: per-datanet isolation, vote-slot allocation and
+ *  redistribution, mint selection, the claim phase. */
+export interface CycleDeps {
+  dataDir: string
+  /** Per-datanet / per-cycle reads. */
+  reads: CycleReads
+  /** Adapter routing + discover inputs (minting). */
+  adapters: AdapterHub
   /** LLM scoring (vote scorer routing + mint candidate scoring). */
   scorers: Scorers
   /** Persistent already-done state (votes/mints/claims/grants). */
   dedup: Dedup
-  /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
-   *  top-up rather than coercing to 0 (which would over-lock the full target). */
-  getVeReppo(): Promise<number | null>
+  /** Activity log + per-cycle arming + platform vote registration. */
+  activity: ActivityStore
   /** On-chain reads — absent as a unit on an RPC-less node. */
   onchain?: OnchainReads
   executor: WalletExecutor
   ledger: BudgetLedger
-  getEmissionsDue(): Promise<ClaimableEmission[]>
-  /** Activity log + per-cycle arming + platform vote registration. */
-  activity: ActivityStore
-  /** per-datanet operator strategy passed to the adapter (e.g. gdelt focus/angle/brief). */
-  strategyFor?(datanetId: string): Record<string, unknown>
-  /** existing on-chain pod names for a datanet (novelty dedup backstop). */
-  getExistingPodNames?(datanetId: string): Promise<string[]>
   /** Whether the reppo CLI on PATH can pay a NON-REPPO access fee (`grant-access
    *  --token primary`, reppo >=0.8.5). Computed ONCE at startup from the CLI version
    *  (src/reppo/capabilities.ts) and threaded in via wiring. When false, a datanet that
@@ -449,7 +468,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // older reppo CLI, a flaky adapter) skips THIS datanet and is recorded — it
     // never aborts the whole cycle or the other datanets.
     try {
-      const rubric = await deps.getRubric(datanetId)
+      const rubric = await deps.reads.getRubric(datanetId)
 
       // One-time subnet access grant (fee gating, balance pre-check, grant, breadcrumb) —
       // see ensureSubnetAccess. A skip here stops the datanet BEFORE pod fetching and LLM
@@ -479,7 +498,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // never aborts the cycle. Record when otherwise idle so the dashboard explains it.
           recordSkip(`vote skipped — ${scorerResult.skip}`, { activity: votes.length === 0 })
         } else {
-        const { pods, filter } = await deps.getPodsAndFilter(datanetId)
+        const { pods, filter } = await deps.reads.getPodsAndFilter(datanetId)
 
         // Datanet economics: this epoch's REAL vote volume on-chain (the catalog's
         // upVoteVolume is lifetime-cumulative — useless for yield). Attached to a
@@ -548,7 +567,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       } else if (policy.mint && policy.adapter && !rubric.canMint) {
         recordSkip('mint enabled but this datanet has no on-chain publisher spec (onboardingPublishers) — minting not possible', { activity: idleThisCycle })
       } else if (policy.mint && policy.adapter && rubric.canMint) {
-        const adapter = deps.getAdapter(policy.adapter)
+        const adapter = deps.adapters.get(policy.adapter)
         if (!adapter) {
           recordSkip(`mint enabled but adapter "${policy.adapter}" is not registered on this node`, { activity: idleThisCycle })
         } else if (!deps.ledger.canMint(MINT_REPPO_FALLBACK)) {
@@ -560,9 +579,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
         } else {
           const candidates = await adapter.discover({
-            datanetId, rubric, topN: deps.topN,
-            strategy: deps.strategyFor?.(datanetId),
-            existingPodNames: (await deps.getExistingPodNames?.(datanetId)) ?? [],
+            datanetId, rubric, topN: deps.adapters.topN,
+            strategy: deps.adapters.strategyFor(datanetId),
+            existingPodNames: await deps.adapters.existingPodNames(datanetId),
           })
           const seenKeys = await deps.dedup.seenKeysFor(datanetId)
           const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
@@ -661,7 +680,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   if (config.claimEmissions) {
     let due: ClaimableEmission[] = []
     try {
-      due = await deps.getEmissionsDue()
+      due = await deps.reads.getEmissionsDue()
     } catch (e) {
       console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
     }
