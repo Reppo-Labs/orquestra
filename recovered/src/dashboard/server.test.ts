@@ -1,0 +1,867 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { request as httpRequest } from 'node:http'
+import { startDashboard, type DashboardHandle } from './server.js'
+import { appendActivity } from './activityLog.js'
+import { writeEarnStatus } from './earnStatus.js'
+import { writeConfig, readConfigText } from '../config/load.js'
+
+let dir: string
+let handle: DashboardHandle
+beforeEach(async () => {
+  dir = mkdtempSync(join(tmpdir(), 'orq-srv-'))
+  writeConfig(dir, {
+    horizonDays: 30, cadenceHours: 1, claimEmissions: true,
+    stake: { lockReppo: 0, lockDurationDays: 30 },
+    budget: { voteRateMaxPerCycle: 30, mintReppoMax: 500, claimGasEthMax: 0.05 },
+    datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } }, notes: '',
+  } as never)
+  appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'vote', datanetId: '9', podId: '1', direction: 'up', conviction: 9, reason: 'r', status: 'executed', txHash: '0x1' })
+  handle = await startDashboard(dir, 0)
+})
+afterEach(async () => { await handle.close(); rmSync(dir, { recursive: true, force: true }) })
+
+const get = async (path: string) => {
+  const res = await fetch(`http://127.0.0.1:${handle.port}${path}`)
+  return { status: res.status, body: await res.text() }
+}
+
+describe('dashboard server', () => {
+  it('serves html at /', async () => {
+    const r = await get('/')
+    expect(r.status).toBe(200)
+    expect(r.body.toLowerCase()).toContain('orquestra')
+  })
+  it('/api/activity returns recorded entries', async () => {
+    const r = await get('/api/activity')
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)[0].podId).toBe('1')
+  })
+  it('/api/pnl returns a {pnl,snapshot} object (null snapshot tolerated)', async () => {
+    const r = await get('/api/pnl')
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toHaveProperty('pnl')
+  })
+  it('/api/config is a COMPLETE strategy config (grid Save must round-trip)', async () => {
+    const r = await get('/api/config')
+    const body = JSON.parse(r.body)
+    expect(body).toHaveProperty('budget')
+    expect(body).toHaveProperty('stake')
+  })
+
+  it('/api/config strips secrets', async () => {
+    const r = await get('/api/config')
+    expect(r.status).toBe(200)
+    expect(r.body).not.toMatch(/PRIVATE_KEY|inf_|0x[a-fA-F0-9]{64}/)
+    expect(JSON.parse(r.body)).toHaveProperty('cadenceHours')
+  })
+  it('/api/earn returns the persisted earn status', async () => {
+    writeEarnStatus(dir, { ts: 't', mintedPods: 1, claimedReppo: 0, claimedTokens: [], claimableReppo: 5, totalUpVotes: 2, totalDownVotes: 0, pods: [], earning: true })
+    const r = await get('/api/earn')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    expect(body).toMatchObject({ mintedPods: 1, claimableReppo: 5, earning: true })
+  })
+
+  it('/api/health aggregates activity into per-datanet counts', async () => {
+    appendActivity(dir, {
+      ts: 't2', cycleId: 'c2', kind: 'skip', datanetId: '2',
+      reason: 'subnet access not granted (grant-access refused-budget: grant REPPO budget exhausted)',
+      status: 'skipped',
+    })
+    const r = await get('/api/health')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    const d9 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '9')
+    expect(d9.votes.executed).toBe(1)
+    const d2 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '2')
+    expect(d2.skips).toBe(1)
+    expect(d2.lastSkipReason).toMatch(/subnet access not granted/)
+  })
+
+  it('unknown path → 404', async () => {
+    expect((await get('/nope')).status).toBe(404)
+  })
+})
+
+const VALID_STRATEGY = {
+  horizonDays: 7, cadenceHours: 1,
+  stake: { lockReppo: 0, lockDurationDays: 7 },
+  budget: { voteRateMaxPerCycle: 13, mintReppoMax: 50, mintGasEthMax: 0.01 },
+  datanets: { '2': { vote: true, mint: false, strictness: 'balanced' } },
+  notes: 'from dashboard test',
+}
+
+const post = async (path: string, body: unknown, headers: Record<string, string> = {}) => {
+  const res = await fetch(`http://127.0.0.1:${handle.port}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+  })
+  return { status: res.status, body: await res.text() }
+}
+
+describe('write layer (unauthenticated — localhost-bound by default)', () => {
+  it('accepts a valid strategy without any token, writes atomically, GET reflects it', async () => {
+    const r = await post('/api/strategy', VALID_STRATEGY)
+    expect(r.status).toBe(200)
+    const saved = JSON.parse(readConfigText(dir)!)
+    expect(saved.notes).toBe('from dashboard test')
+    const cfg = await get('/api/config')
+    expect(JSON.parse(cfg.body).notes).toBe('from dashboard test')
+  })
+
+  it('rejects an invalid strategy with 400 + zod detail, file untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await post('/api/strategy', { horizonDays: -1 })
+    expect(r.status).toBe(400)
+    expect(readConfigText(dir)).toBe(before) // no write
+  })
+
+  it('POST to a read-only route → 405', async () => {
+    expect((await post('/api/health', {})).status).toBe(405)
+  })
+})
+
+describe('cross-site write defense (CSRF / DNS-rebinding)', () => {
+  // Raw http request: fetch()/undici sets Host itself and strips Sec-* headers,
+  // so forged-header cases need node:http.
+  const rawPost = (path: string, headers: Record<string, string>, body?: string) =>
+    new Promise<{ status: number; body: string }>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path, method: 'POST', headers }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP({ status: res.statusCode ?? 0, body: s }))
+      })
+      req.on('error', rejectP)
+      if (body !== undefined) req.write(body)
+      req.end()
+    })
+
+  it('rejects a foreign Host (DNS rebinding) with 403, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'attacker.example.com:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/host .* not allowed/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a raw non-loopback IP Host', async () => {
+    const r = await rawPost('/api/strategy', { host: '10.0.0.5:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+  })
+
+  it('rejects Sec-Fetch-Site: cross-site even with a localhost Host', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/cross-site/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a non-JSON content-type (text/plain defeats CORS preflight)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'text/plain' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/application\/json/)
+  })
+
+  it('accepts a normal localhost JSON POST (browser same-origin metadata included)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json; charset=utf-8', 'sec-fetch-site': 'same-origin' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).notes).toBe('from dashboard test')
+  })
+
+  it('accepts the IPv6 loopback bracket Host form', async () => {
+    const r = await rawPost('/api/strategy', { host: '[::1]:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+  })
+
+  it('bodyless POST /api/run-now without a content-type is NOT blocked by the guard', async () => {
+    // 503 (no scheduler wired), NOT 403 — the guard must not break the trigger.
+    const r = await rawPost('/api/run-now', { host: 'localhost:7070' })
+    expect(r.status).toBe(503)
+  })
+
+  it('DASHBOARD_ALLOWED_HOSTS extends the write allowlist for deliberate exposure', async () => {
+    const saved = process.env.DASHBOARD_ALLOWED_HOSTS
+    process.env.DASHBOARD_ALLOWED_HOSTS = 'panel.internal'
+    try {
+      const r = await rawPost('/api/strategy', { host: 'panel.internal:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+      expect(r.status).toBe(200)
+    } finally {
+      if (saved === undefined) delete process.env.DASHBOARD_ALLOWED_HOSTS
+      else process.env.DASHBOARD_ALLOWED_HOSTS = saved
+    }
+  })
+
+  it('GET routes stay untouched by the guard (foreign Host still reads)', async () => {
+    // Reads are not the write boundary; only mutating routes are gated.
+    const status = await new Promise<number>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path: '/api/config', headers: { host: 'attacker.example.com' } }, (res) => {
+        res.resume()
+        res.on('end', () => resolveP(res.statusCode ?? 0))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(status).toBe(200)
+  })
+})
+
+describe('cross-site write defense (CSRF / DNS-rebinding)', () => {
+  // Raw http request: fetch()/undici sets Host itself and strips Sec-* headers,
+  // so forged-header cases need node:http.
+  const rawPost = (path: string, headers: Record<string, string>, body?: string) =>
+    new Promise<{ status: number; body: string }>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path, method: 'POST', headers }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP({ status: res.statusCode ?? 0, body: s }))
+      })
+      req.on('error', rejectP)
+      if (body !== undefined) req.write(body)
+      req.end()
+    })
+
+  it('rejects a foreign Host (DNS rebinding) with 403, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'attacker.example.com:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/host .* not allowed/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a raw non-loopback IP Host', async () => {
+    const r = await rawPost('/api/strategy', { host: '10.0.0.5:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+  })
+
+  it('rejects Sec-Fetch-Site: cross-site even with a localhost Host', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/cross-site/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a non-JSON content-type (text/plain defeats CORS preflight)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'text/plain' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/application\/json/)
+  })
+
+  it('accepts a normal localhost JSON POST (browser same-origin metadata included)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json; charset=utf-8', 'sec-fetch-site': 'same-origin' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).notes).toBe('from dashboard test')
+  })
+
+  it('accepts the IPv6 loopback bracket Host form', async () => {
+    const r = await rawPost('/api/strategy', { host: '[::1]:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+  })
+
+  it('bodyless POST /api/run-now without a content-type is NOT blocked by the guard', async () => {
+    // 503 (no scheduler wired), NOT 403 — the guard must not break the trigger.
+    const r = await rawPost('/api/run-now', { host: 'localhost:7070' })
+    expect(r.status).toBe(503)
+  })
+
+  it('DASHBOARD_ALLOWED_HOSTS extends the write allowlist for deliberate exposure', async () => {
+    const saved = process.env.DASHBOARD_ALLOWED_HOSTS
+    process.env.DASHBOARD_ALLOWED_HOSTS = 'panel.internal'
+    try {
+      const r = await rawPost('/api/strategy', { host: 'panel.internal:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+      expect(r.status).toBe(200)
+    } finally {
+      if (saved === undefined) delete process.env.DASHBOARD_ALLOWED_HOSTS
+      else process.env.DASHBOARD_ALLOWED_HOSTS = saved
+    }
+  })
+
+  it('GET routes stay untouched by the guard (foreign Host still reads)', async () => {
+    // Reads are not the boundary (no secrets in GET bodies); only writes are gated.
+    const body = await new Promise<{ status: number }>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path: '/api/config', headers: { host: 'attacker.example.com' } }, (res) => {
+        res.resume()
+        res.on('end', () => resolveP({ status: res.statusCode ?? 0 }))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(body.status).toBe(200)
+  })
+})
+
+describe('cross-site write defense (CSRF / DNS-rebinding)', () => {
+  // Raw http request: fetch()/undici sets Host itself and strips Sec-* headers,
+  // so forged-header cases need node:http.
+  const rawPost = (path: string, headers: Record<string, string>, body?: string) =>
+    new Promise<{ status: number; body: string }>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path, method: 'POST', headers }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP({ status: res.statusCode ?? 0, body: s }))
+      })
+      req.on('error', rejectP)
+      if (body !== undefined) req.write(body)
+      req.end()
+    })
+
+  it('rejects a foreign Host (DNS rebinding) with 403, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'attacker.example.com:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/host .* not allowed/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a raw non-loopback IP Host', async () => {
+    const r = await rawPost('/api/strategy', { host: '10.0.0.5:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+  })
+
+  it('rejects Sec-Fetch-Site: cross-site even with a localhost Host', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/cross-site/)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('rejects a non-JSON content-type (text/plain defeats CORS preflight)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'text/plain' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(403)
+    expect(JSON.parse(r.body).error).toMatch(/application\/json/)
+  })
+
+  it('accepts a normal localhost JSON POST (browser same-origin metadata included)', async () => {
+    const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'application/json; charset=utf-8', 'sec-fetch-site': 'same-origin' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).notes).toBe('from dashboard test')
+  })
+
+  it('accepts the IPv6 loopback bracket Host form', async () => {
+    const r = await rawPost('/api/strategy', { host: '[::1]:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+    expect(r.status).toBe(200)
+  })
+
+  it('bodyless POST /api/run-now without a content-type is NOT blocked by the guard', async () => {
+    // 503 (no scheduler wired), NOT 403 — the guard must not break the trigger.
+    const r = await rawPost('/api/run-now', { host: 'localhost:7070' })
+    expect(r.status).toBe(503)
+  })
+
+  it('DASHBOARD_ALLOWED_HOSTS extends the write allowlist for deliberate exposure', async () => {
+    const saved = process.env.DASHBOARD_ALLOWED_HOSTS
+    process.env.DASHBOARD_ALLOWED_HOSTS = 'panel.internal'
+    try {
+      const r = await rawPost('/api/strategy', { host: 'panel.internal:7070', 'content-type': 'application/json' }, JSON.stringify(VALID_STRATEGY))
+      expect(r.status).toBe(200)
+    } finally {
+      if (saved === undefined) delete process.env.DASHBOARD_ALLOWED_HOSTS
+      else process.env.DASHBOARD_ALLOWED_HOSTS = saved
+    }
+  })
+
+  it('GET routes stay untouched by the guard (foreign Host still reads)', async () => {
+    // Reads are not the write boundary; only mutating routes are gated.
+    const status = await new Promise<number>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: handle.port, path: '/api/config', headers: { host: 'attacker.example.com' } }, (res) => {
+        res.resume()
+        res.on('end', () => resolveP(res.statusCode ?? 0))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(status).toBe(200)
+  })
+})
+
+describe('POST /api/run-now', () => {
+  it('503 when no triggerCycle is wired (scheduler not up yet)', async () => {
+    // The default handle (this file's beforeEach) has no triggerCycle.
+    expect((await post('/api/run-now', {})).status).toBe(503)
+  })
+
+  it('200 { started:true } when the trigger starts a cycle', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'orq-run-'))
+    const h = await startDashboard(d, 0, { triggerCycle: () => ({ started: true }) })
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/run-now`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).started).toBe(true)
+    await h.close(); rmSync(d, { recursive: true, force: true })
+  })
+
+  it('409 { started:false, reason } when a cycle is already running', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'orq-run-'))
+    const h = await startDashboard(d, 0, { triggerCycle: () => ({ started: false, reason: 'a cycle is already running' }) })
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/run-now`, { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect((await res.json()).reason).toMatch(/already running/)
+    await h.close(); rmSync(d, { recursive: true, force: true })
+  })
+})
+
+describe('POST /api/strategy/chat', () => {
+  it('503 when the server has no chat model (this test server passes none)', async () => {
+    const r = await post('/api/strategy/chat', { messages: [{ role: 'user', content: 'hi' }] })
+    expect(r.status).toBe(503)
+    expect(r.body).toMatch(/chat unavailable/i)
+  })
+
+  it('strategy chat uses resolveChatModel() per request (503 when it returns null)', async () => {
+    const cdir = mkdtempSync(join(tmpdir(), 'orq-chat-'))
+    writeConfig(cdir, {
+      horizonDays: 30, cadenceHours: 1, claimEmissions: true,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteRateMaxPerCycle: 30, mintReppoMax: 500, claimGasEthMax: 0.05 },
+      datanets: { '9': { vote: true, mint: false, strictness: 'balanced' } }, notes: '',
+    } as never)
+    const ch = await startDashboard(cdir, 0, { resolveChatModel: () => null })
+    try {
+      const res = await fetch(`http://127.0.0.1:${ch.port}/api/strategy/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      expect(res.status).toBe(503)
+    } finally { await ch.close(); rmSync(cdir, { recursive: true, force: true }) }
+  })
+})
+
+describe('static SPA serving (publicDir)', () => {
+  let pub: string
+  let spa: DashboardHandle
+  beforeEach(async () => {
+    pub = mkdtempSync(join(tmpdir(), 'orq-pub-'))
+    writeFileSync(join(pub, 'index.html'), '<html><body>orquestra spa</body></html>')
+    mkdirSync(join(pub, 'assets'))
+    writeFileSync(join(pub, 'assets', 'app.js'), 'console.log("spa")')
+    spa = await startDashboard(dir, 0, { publicDir: pub })
+  })
+  afterEach(async () => { await spa.close(); rmSync(pub, { recursive: true, force: true }) })
+
+  const getSpa = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${spa.port}${path}`)
+    return { status: res.status, type: res.headers.get('content-type') ?? '', body: await res.text() }
+  }
+
+  it('serves index.html at / with html content type', async () => {
+    const r = await getSpa('/')
+    expect(r.status).toBe(200)
+    expect(r.type).toMatch(/text\/html/)
+    expect(r.body).toContain('orquestra spa')
+  })
+
+  it('serves assets with their content type', async () => {
+    const r = await getSpa('/assets/app.js')
+    expect(r.status).toBe(200)
+    expect(r.type).toMatch(/javascript/)
+    expect(r.body).toContain('spa')
+  })
+
+  it('falls back to index.html for unknown non-API routes (SPA deep links)', async () => {
+    const r = await getSpa('/some/client/route')
+    expect(r.status).toBe(200)
+    expect(r.body).toContain('orquestra spa')
+  })
+
+  it('API routes are NOT swallowed by the SPA fallback', async () => {
+    const r = await getSpa('/api/config')
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toHaveProperty('cadenceHours')
+  })
+
+  it('path traversal cannot escape the public dir', async () => {
+    // raw http request: fetch() would normalize the .. segments client-side
+    const body = await new Promise<string>((resolveP, rejectP) => {
+      const req = httpRequest({ host: '127.0.0.1', port: spa.port, path: '/../strategy.config.json' }, (res) => {
+        let s = ''
+        res.on('data', (c) => { s += c })
+        res.on('end', () => resolveP(s))
+      })
+      req.on('error', rejectP)
+      req.end()
+    })
+    expect(body).not.toContain('horizonDays') // must not leak the data dir
+  })
+})
+
+const VALID_ANSWERS = {
+  datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
+  lockReppo: 0, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+  mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'dashboard onboarding test',
+}
+
+describe('onboarding API', () => {
+  let freshDir: string
+  let onb: DashboardHandle
+  const fakeTurn = async (messages: { role: string; content: unknown }[]) => {
+    const users = messages.filter((m) => m.role === 'user').length
+    if (String(messages[messages.length - 1]?.content).includes('finalize now')) {
+      return { text: 'Done — review and confirm.', responseMessages: [{ role: 'assistant' as const, content: 'Done — review and confirm.' }], finalized: VALID_ANSWERS as never, draft: null }
+    }
+    return {
+      text: `turn with ${users} user message(s)`,
+      responseMessages: [{ role: 'assistant' as const, content: 'ok' }],
+      finalized: null,
+      draft: users > 1 ? { cadenceHours: 6 } : null,
+    }
+  }
+  beforeEach(async () => {
+    freshDir = mkdtempSync(join(tmpdir(), 'orq-onb-')) // NO strategy.config.json → onboarding needed
+    onb = await startDashboard(freshDir, 0, { onboardingTurn: fakeTurn as never })
+  })
+  afterEach(async () => {
+    await onb.close()
+    rmSync(freshDir, { recursive: true, force: true })
+  })
+
+  const onbGet = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${onb.port}${path}`)
+    return { status: res.status, body: JSON.parse(await res.text()) }
+  }
+  const onbPost = async (path: string, body: unknown) => {
+    const res = await fetch(`http://127.0.0.1:${onb.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, body: JSON.parse(await res.text()) }
+  }
+
+  it('status reports needed=true on a fresh data dir, false once config exists', async () => {
+    expect((await onbGet('/api/onboarding/status')).body).toMatchObject({ needed: true, chatAvailable: true })
+    const r = await fetch(`http://127.0.0.1:${handle.port}/api/onboarding/status`) // outer server HAS a config
+    expect(((await r.json()) as { needed: boolean }).needed).toBe(false)
+  })
+
+  it('chat is 503 when no model and no injected turn runner', async () => {
+    const bare = await startDashboard(freshDir, 0, {})
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/api/onboarding/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      })
+      expect(res.status).toBe(503)
+    } finally { await bare.close() }
+  })
+
+  it('chat keeps a session across turns and surfaces drafts and finalized answers', async () => {
+    const first = await onbPost('/api/onboarding/chat', {})
+    expect(first.status).toBe(200)
+    expect(first.body.reply).toMatch(/1 user message/) // seed message only
+    expect(first.body.finalized).toBeNull()
+
+    const second = await onbPost('/api/onboarding/chat', { message: 'vote on 9' })
+    expect(second.body.reply).toMatch(/2 user message/) // session grew
+    expect(second.body.draft).toMatchObject({ cadenceHours: 6 })
+
+    const third = await onbPost('/api/onboarding/chat', { message: 'finalize now' })
+    expect(third.body.finalized).toMatchObject({ notes: 'dashboard onboarding test' })
+  })
+
+  it('chat reset clears the session', async () => {
+    await onbPost('/api/onboarding/chat', { message: 'hello' })
+    await onbPost('/api/onboarding/chat', { reset: true })
+    const r = await onbPost('/api/onboarding/chat', {})
+    expect(r.body.reply).toMatch(/1 user message/)
+  })
+
+  it('confirm validates, persists config + notes, and flips status.needed', async () => {
+    expect((await onbPost('/api/onboarding/confirm', { horizonDays: -1 })).status).toBe(400)
+    const ok = await onbPost('/api/onboarding/confirm', VALID_ANSWERS)
+    expect(ok.status).toBe(200)
+    expect(ok.body).toMatchObject({ saved: true })
+    const saved = JSON.parse(readConfigText(freshDir)!)
+    expect(saved.cadenceHours).toBe(6)
+    expect(saved.notes).toMatch(/dashboard onboarding test/) // brief lives in config.notes
+    expect((await onbGet('/api/onboarding/status')).body.needed).toBe(false)
+  })
+})
+
+describe('GET /api/datanets', () => {
+  it('returns an id→name object; tolerates a missing reppo CLI by serving {}', async () => {
+    const r = await get('/api/datanets')
+    expect(r.status).toBe(200)
+    expect(typeof JSON.parse(r.body)).toBe('object') // {} in tests (no CLI on PATH with creds)
+  })
+})
+
+describe('GET /api/models', () => {
+  let mdir: string
+  let mh: DashboardHandle
+  beforeEach(async () => {
+    mdir = mkdtempSync(join(tmpdir(), 'orq-models-'))
+    mh = await startDashboard(mdir, 0, { availableProviders: ['google', 'virtuals'] })
+  })
+  afterEach(async () => { await mh.close(); rmSync(mdir, { recursive: true, force: true }) })
+
+  const mget = async (path: string) => {
+    const res = await fetch(`http://127.0.0.1:${mh.port}${path}`)
+    return { status: res.status, body: await res.text() }
+  }
+
+  it('lists only providers with a key, each with hasKey:true and a models[]', async () => {
+    const r = await mget('/api/models')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body) as { providers: { provider: string; hasKey: boolean; models: string[] }[] }
+    const provs = body.providers.map((p) => p.provider).sort()
+    expect(provs).toEqual(['google', 'virtuals'])
+    for (const p of body.providers) {
+      expect(p.hasKey).toBe(true)
+      expect(Array.isArray(p.models)).toBe(true)
+      expect(p.models.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('returns NO secrets (no api keys in the body)', async () => {
+    const r = await mget('/api/models')
+    expect(r.body).not.toMatch(/acp[_-]|inf_|sk-|AIza|api[_-]?key/i)
+  })
+
+  it('returns an empty providers list when no provider has a key', async () => {
+    const bare = await startDashboard(mdir, 0, {})
+    try {
+      const res = await fetch(`http://127.0.0.1:${bare.port}/api/models`)
+      const body = (await res.json()) as { providers: unknown[] }
+      expect(body.providers).toEqual([])
+    } finally { await bare.close() }
+  })
+})
+
+describe('GET /api/datanet-pnl (per-datanet profit)', () => {
+  it('returns spend, earnings, net, roi and action counts per datanet', async () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'mint', datanetId: '2', reppoSpent: 200, status: 'executed', txHash: '0xm' })
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'claim', datanetId: '2', reppoClaimed: 410, podId: 'p1', epoch: 3, status: 'executed', txHash: '0xc' })
+    const r = await get('/api/datanet-pnl')
+    expect(r.status).toBe(200)
+    const { datanets } = JSON.parse(r.body)
+    const d2 = datanets.find((d: { datanetId: string }) => d.datanetId === '2')
+    expect(d2).toMatchObject({ reppoSpent: 200, reppoEarned: 410, net: 210, roi: 205, mintsExecuted: 1 })
+    // the vote-only datanet seeded in beforeEach: no spend ⇒ roi is null, never a fake 0%
+    const d9 = datanets.find((d: { datanetId: string }) => d.datanetId === '9')
+    expect(d9).toMatchObject({ roi: null, votesCast: 1, reppoSpent: 0 })
+  })
+
+  it('holds no secrets', async () => {
+    const r = await get('/api/datanet-pnl')
+    expect(r.body).not.toMatch(/PRIVATE_KEY|sk-ant-|inf_|--rpc-url/)
+  })
+})
+
+describe('POST /api/pause (emergency kill switch)', () => {
+  it('pauses the node and the flag survives a config GET (so a strategy save cannot un-pause it)', async () => {
+    const r = await post('/api/pause', { paused: true })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toMatchObject({ paused: true, appliesNextCycle: true })
+    // persisted → the next cycle's hot-reload picks it up
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+    // and exposed on /api/config, so the dashboard's GET → edit → POST round-trip re-sends it
+    expect(JSON.parse((await get('/api/config')).body).paused).toBe(true)
+  })
+
+  it('unpauses cleanly', async () => {
+    await post('/api/pause', { paused: true })
+    const r = await post('/api/pause', { paused: false })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(false)
+  })
+
+  it('never RAISES a budget cap (it re-serializes through the same schema every save uses)', async () => {
+    const before = JSON.parse(readConfigText(dir)!)
+    await post('/api/pause', { paused: true })
+    const after = JSON.parse(readConfigText(dir)!)
+    // Every cap the operator had set survives byte-identical. The pause write goes through
+    // StrategyConfigSchema, so caps the file omitted are now written out at their schema
+    // DEFAULT — the same value loadConfig already applied on every read, so no effective
+    // cap changes. toMatchObject (not toEqual) asserts exactly that: nothing was altered,
+    // only defaults made explicit.
+    expect(after.budget).toMatchObject(before.budget)
+    expect(after.budget.mintReppoMax).toBe(before.budget.mintReppoMax)
+    expect(after.budget.voteRateMaxPerCycle).toBe(before.budget.voteRateMaxPerCycle)
+    expect(after.datanets).toMatchObject(before.datanets)
+    expect(after.stake).toEqual(before.stake)
+  })
+
+  it('rejects a non-boolean body with 400, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await post('/api/pause', { paused: 'yes' })
+    expect(r.status).toBe(400)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('goes through the SAME cross-site write guard — a foreign Host is 403 and does not pause', async () => {
+    const before = readConfigText(dir)
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/pause`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
+      body: JSON.stringify({ paused: true }),
+    })
+    expect(res.status).toBe(403)
+    expect(readConfigText(dir)).toBe(before) // no write
+  })
+})
+
+describe('GET /api/health classification (raw stderr → operator English)', () => {
+  it('attaches { code, operatorMessage, suggestedAction } to a failing datanet', async () => {
+    appendActivity(dir, {
+      ts: new Date().toISOString(), cycleId: 'c2', kind: 'skip', datanetId: '6',
+      // VERBATIM from the live node (see errorClass.test.ts). Not a tidied-up stand-in: the
+      // classifier keys on the eth_call in the request body, and a hand-shortened
+      // "… — INTERNAL_ERROR" would prove nothing about the string an operator actually gets.
+      reason: 'datanet error: Command failed: reppo query datanet 6 --json --rpc-url <redacted> — {"error":{"code":"INTERNAL_ERROR","message":"HTTP request failed.\\n\\nURL: https://base-mainnet.g.alchemy.com/v2/<redacted>\\nRequest body: {\\"method\\":\\"eth_call\\",\\"params\\":[{\\"to\\":\\"0x2629A8083065938B533b117704935D727270eE7A\\"},\\"latest\\"]}\\nDetails: fetch failed"}}',
+      status: 'skipped',
+    })
+    const body = JSON.parse((await get('/api/health')).body)
+    const d6 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '6')
+    expect(d6.classification).toMatchObject({ code: 'rpc_unavailable', suggestedAction: 'check_rpc' })
+    expect(d6.classification.operatorMessage).toContain('Datanet 6')
+    expect(d6.classification.operatorMessage).not.toContain('Command failed')
+    // the raw reason is still there for anyone who wants it — we ADD, never replace
+    expect(d6.lastSkipReason).toContain('Command failed')
+  })
+
+  it('leaves a healthy datanet unclassified', async () => {
+    const body = JSON.parse((await get('/api/health')).body)
+    const d9 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '9')
+    expect(d9.classification).toBeUndefined()
+    expect(d9.votes.executed).toBe(1) // buildHealth's own fields still intact
+  })
+})
+
+describe('GET /api/datanet-pnl (per-datanet profit)', () => {
+  it('returns spend, earnings, net, roi and action counts per datanet', async () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'mint', datanetId: '2', reppoSpent: 200, status: 'executed', txHash: '0xm' })
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'claim', datanetId: '2', reppoClaimed: 410, podId: 'p1', epoch: 3, status: 'executed', txHash: '0xc' })
+    const r = await get('/api/datanet-pnl')
+    expect(r.status).toBe(200)
+    const { datanets } = JSON.parse(r.body)
+    const d2 = datanets.find((d: { datanetId: string }) => d.datanetId === '2')
+    expect(d2).toMatchObject({ reppoSpent: 200, reppoEarned: 410, net: 210, roi: 205, mintsExecuted: 1 })
+    // the vote-only datanet seeded in beforeEach: no spend ⇒ roi is null, never a fake 0%
+    const d9 = datanets.find((d: { datanetId: string }) => d.datanetId === '9')
+    expect(d9).toMatchObject({ roi: null, votesCast: 1, reppoSpent: 0 })
+  })
+
+  it('holds no secrets', async () => {
+    const r = await get('/api/datanet-pnl')
+    expect(r.body).not.toMatch(/PRIVATE_KEY|sk-ant-|inf_|--rpc-url/)
+  })
+})
+
+describe('POST /api/pause (emergency kill switch)', () => {
+  it('pauses the node and the flag survives a config GET (so a strategy save cannot un-pause it)', async () => {
+    const r = await post('/api/pause', { paused: true })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body)).toMatchObject({ paused: true, appliesNextCycle: true })
+    // persisted → the next cycle's hot-reload picks it up
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+    // and exposed on /api/config, so the dashboard's GET → edit → POST round-trip re-sends it
+    expect(JSON.parse((await get('/api/config')).body).paused).toBe(true)
+  })
+
+  it('unpauses cleanly', async () => {
+    await post('/api/pause', { paused: true })
+    const r = await post('/api/pause', { paused: false })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(false)
+  })
+
+  it('leaves the rest of the strategy untouched (budget caps are not disturbed)', async () => {
+    const before = JSON.parse(readConfigText(dir)!)
+    await post('/api/pause', { paused: true })
+    const after = JSON.parse(readConfigText(dir)!)
+    expect(after.budget).toEqual(before.budget)
+    expect(after.datanets).toEqual(before.datanets)
+  })
+
+  it('rejects a non-boolean body with 400, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await post('/api/pause', { paused: 'yes' })
+    expect(r.status).toBe(400)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  // `paused` is the operator's kill switch, not a normal config field. POST /api/pause is the
+  // ONLY route allowed to change it: a strategy save (hand-edited, an assistant proposal that
+  // dropped the key, or a stale tab whose candidate still says paused:false) must never resume
+  // a node the operator stopped. The schema defaults paused to false, so an omitted key would
+  // otherwise silently un-pause.
+  it('a strategy save that OMITS paused cannot un-pause the node', async () => {
+    await post('/api/pause', { paused: true })
+    const r = await post('/api/strategy', VALID_STRATEGY) // no `paused` key at all
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.body).paused).toBe(true) // the response tells the client the truth
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+    // the rest of the save still applied
+    expect(JSON.parse(readConfigText(dir)!).notes).toBe('from dashboard test')
+  })
+
+  it('a strategy save that explicitly sends paused:false cannot un-pause the node either', async () => {
+    await post('/api/pause', { paused: true })
+    const r = await post('/api/strategy', { ...VALID_STRATEGY, paused: false })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+  })
+
+  it('a strategy save does not PAUSE a running node either — /api/pause owns the flag both ways', async () => {
+    const r = await post('/api/strategy', { ...VALID_STRATEGY, paused: true })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(false)
+  })
+
+  it('goes through the SAME cross-site write guard — a cross-site request is 403 and does not pause', async () => {
+    const before = readConfigText(dir)
+    const res = await fetch(`http://127.0.0.1:${handle.port}/api/pause`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
+      body: JSON.stringify({ paused: true }),
+    })
+    expect(res.status).toBe(403)
+    expect(readConfigText(dir)).toBe(before) // no write
+  })
+})
+
+describe('GET /api/health classification (raw stderr → operator English)', () => {
+  it('attaches { code, operatorMessage, suggestedAction } to a failing datanet', async () => {
+    appendActivity(dir, {
+      ts: new Date().toISOString(), cycleId: 'c2', kind: 'skip', datanetId: '6',
+      // VERBATIM from the live node (see errorClass.test.ts). Not a tidied-up stand-in: the
+      // classifier keys on the eth_call in the request body, and a hand-shortened
+      // "… — INTERNAL_ERROR" would prove nothing about the string an operator actually gets.
+      reason: 'datanet error: Command failed: reppo query datanet 6 --json --rpc-url <redacted> — {"error":{"code":"INTERNAL_ERROR","message":"HTTP request failed.\\n\\nURL: https://base-mainnet.g.alchemy.com/v2/<redacted>\\nRequest body: {\\"method\\":\\"eth_call\\",\\"params\\":[{\\"to\\":\\"0x2629A8083065938B533b117704935D727270eE7A\\"},\\"latest\\"]}\\nDetails: fetch failed"}}',
+      status: 'skipped',
+    })
+    const body = JSON.parse((await get('/api/health')).body)
+    const d6 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '6')
+    expect(d6.classification).toMatchObject({ code: 'rpc_unavailable', suggestedAction: 'check_rpc' })
+    expect(d6.classification.operatorMessage).toContain('Datanet 6')
+    expect(d6.classification.operatorMessage).not.toContain('Command failed')
+    // the raw reason is still there for whoever wants it — we ADD, never replace
+    expect(d6.lastSkipReason).toContain('Command failed')
+  })
+
+  it('leaves a healthy datanet unclassified', async () => {
+    const body = JSON.parse((await get('/api/health')).body)
+    const d9 = body.datanets.find((d: { datanetId: string }) => d.datanetId === '9')
+    expect(d9.classification).toBeUndefined()
+    expect(d9.votes.executed).toBe(1) // buildHealth's own fields still intact
+  })
+})
+
+describe('network bind (ADR 0002: unauthenticated panel must not default to a public interface)', () => {
+  const saved = process.env.DASHBOARD_HOST
+  afterEach(() => { if (saved === undefined) delete process.env.DASHBOARD_HOST; else process.env.DASHBOARD_HOST = saved })
+
+  it('defaults to loopback (127.0.0.1) when DASHBOARD_HOST is unset', async () => {
+    delete process.env.DASHBOARD_HOST
+    const h = await startDashboard(mkdtempSync(join(tmpdir(), 'orq-bind-')), 0)
+    expect(h.host).toBe('127.0.0.1')
+    await h.close()
+  })
+
+  it('honors DASHBOARD_HOST override (e.g. 0.0.0.0 inside the Docker image)', async () => {
+    process.env.DASHBOARD_HOST = '0.0.0.0'
+    const h = await startDashboard(mkdtempSync(join(tmpdir(), 'orq-bind-')), 0)
+    expect(h.host).toBe('0.0.0.0')
+    await h.close()
+  })
+})

@@ -1,0 +1,757 @@
+// src/dashboard/server.ts
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { statSync } from 'node:fs'
+import type { AddressInfo } from 'node:net'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
+import { readActivity, readActivitySince, sumClaimedReppo, sumMintReppoSpent } from './activityLog.js'
+import { readAgentStore, writeAgentStore, syncAgentName } from '../reppo/agent.js'
+import { updateAgentOnPlatform } from '../reppo/platformApi.js'
+import { readSnapshot } from './snapshot.js'
+import { derivePnl } from './pnl.js'
+import { readDatanetPnl } from './datanetPnl.js'
+import { readEarnStatus } from './earnStatus.js'
+import { buildHealth } from './health.js'
+import { attachClassification } from './errorClass.js'
+import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
+import { KNOWN_MODELS, type LlmProvider } from '../llm/model.js'
+import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError } from '../config/load.js'
+import { buildLearnView } from '../learn/view.js'
+import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from '../learn/store.js'
+import { runStrategyChat, type ChatMessage } from './strategyChat.js'
+import { queryLockConstraints, type LockConstraints } from '../reppo/queryLockConstraints.js'
+import { listDatanetsJson } from '../reppo/listDatanets.js'
+import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
+import { buildStrategyConfig } from '../onboarding/build.js'
+import { validateAnswers } from '../onboarding/schema.js'
+import { runOnboardingTurn, seedOnboardingMessages, type OnboardingTurnResult } from '../onboarding/agent.js'
+import type { OnboardingAnswers } from '../onboarding/types.js'
+import { getDatanetRubric } from '../rubric/load.js'
+import { queryBalanceJson } from '../reppo/queryBalance.js'
+import type { CoreMessage, LanguageModel } from 'ai'
+
+// The built SPA (web/ → vite build) lands in a `public/` dir next to this file.
+const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'public')
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.map': 'application/json',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+}
+
+/** Resolve a request path to a file inside publicDir, or null. The startsWith
+ *  guard keeps raw `..` request paths from escaping the public dir. */
+function staticFile(publicDir: string, url: string): string | null {
+  const root = resolve(publicDir)
+  const path = normalize(join(root, url === '/' ? '/index.html' : url))
+  if (!path.startsWith(root + sep) && path !== root) return null
+  try { return statSync(path).isFile() ? path : null } catch { return null }
+}
+
+export interface DashboardHandle { close(): Promise<void>; port: number; host: string }
+
+/** A safe subset of the strategy config — explicitly whitelisted fields only. */
+function safeConfig(dataDir: string): Record<string, unknown> {
+  const text = readConfigText(dataDir)
+  if (text === null) return {}
+  try {
+    const c = JSON.parse(text) as Record<string, unknown>
+    // Prefer the CANONICAL schema parse (defaults + transforms applied) so the
+    // strategy editor always receives a complete, Save-able config — budget and
+    // stake are NOT secrets (caps already surface via the snapshot).
+    const parsed = StrategyConfigSchema.safeParse(c)
+    if (parsed.success) {
+      // nodeName included so the dashboard's save round-trip (GET → edit → POST full
+      // candidate) doesn't silently drop the onboarding-chosen name from the config.
+      // `paused` is exposed so the UI can SHOW the kill-switch state (it is not a secret —
+      // the pause state is operator-visible by design), but the round-trip is no longer what
+      // protects it: POST /api/strategy now carries the PERSISTED flag forward and ignores
+      // whatever the candidate says, because a stale tab or an assistant proposal that dropped
+      // the key would otherwise resume a stopped node. Only POST /api/pause moves it.
+      const { horizonDays, cadenceHours, claimEmissions, paused, datanets, notes, budget, stake, deliberation, defaultModel, nodeName } = parsed.data
+      return { horizonDays, cadenceHours, claimEmissions, paused, datanets, notes, budget, stake, deliberation, defaultModel, nodeName }
+    }
+    // tolerant fallback for a file the schema rejects (node likely won't run on it either).
+    // deliberation falls back to the schema default so the editor reflects real behavior.
+    return {
+      horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
+      claimEmissions: c.claimEmissions !== false, paused: c.paused === true,
+      datanets: c.datanets, notes: c.notes,
+      budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, votePanel: true },
+      defaultModel: c.defaultModel, nodeName: c.nodeName,
+    }
+  } catch (e) {
+    // surfaced (once per request) instead of silently empty: a malformed config
+    // otherwise renders a blank header with no trace anywhere.
+    console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
+    return {}
+  }
+}
+
+/** The PERSISTED pause flag, or undefined when there is no config row yet (first write).
+ *  Deliberately tolerant — parsed straight off the raw text, not through loadConfig, so a
+ *  config the schema rejects still yields the operator's kill-switch state instead of throwing.
+ *  Only an explicit `true` counts as paused; anything else (absent, false, garbage) is running. */
+function persistedPaused(dataDir: string): boolean | undefined {
+  const text = readConfigText(dataDir)
+  if (text === null) return undefined
+  try {
+    return (JSON.parse(text) as { paused?: unknown }).paused === true
+  } catch {
+    return undefined
+  }
+}
+
+// veREPPO protocol constants — contract constants, fetch once and keep.
+let lockConstraintsCache: LockConstraints | null = null
+async function getLockConstraints(): Promise<LockConstraints | undefined> {
+  if (lockConstraintsCache) return lockConstraintsCache
+  const rpcUrl = process.env.RPC_URL
+  if (!rpcUrl) return undefined
+  try {
+    lockConstraintsCache = await queryLockConstraints(rpcUrl)
+    return lockConstraintsCache
+  } catch { return undefined }
+}
+
+// Datanet id→name map, cached: names change rarely and the CLI call is slow.
+let netNamesCache: { at: number; names: Record<string, string> } | null = null
+async function datanetNames(): Promise<Record<string, string>> {
+  if (netNamesCache && Date.now() - netNamesCache.at < 10 * 60_000) return netNamesCache.names
+  try {
+    const nets = await listDatanetsJson()
+    const names = Object.fromEntries(nets.map((n) => [n.id, n.name]))
+    netNamesCache = { at: Date.now(), names }
+    return names
+  } catch {
+    return netNamesCache?.names ?? {} // tolerate CLI/RPC failure; serve stale or empty
+  }
+}
+
+/** One in-memory onboarding conversation per server (single-operator node).
+ *  Lost on restart by design — restart simply restarts the interview. */
+interface OnboardingSession {
+  messages: CoreMessage[]
+  draft: Partial<OnboardingAnswers> | null
+  finalized: OnboardingAnswers | null
+}
+
+/** Production turn-runner: same live deps the CLI onboarding uses. */
+function defaultOnboardingTurn(model: LanguageModel): (m: CoreMessage[]) => Promise<OnboardingTurnResult> {
+  return (messages) => runOnboardingTurn({
+    model,
+    listDatanets: () => listDatanetsJson(),
+    getDatanetDetails: async (id) => {
+      try { return await getDatanetRubric(id) } catch (e) { return { error: (e as Error).message } }
+    },
+    getBalance: () => queryBalanceJson(),
+  }, messages)
+}
+
+function json(res: ServerResponse, code: number, body: unknown): void {
+  res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body))
+}
+
+/** Read a JSON body (1 MiB cap — strategy configs are tiny). */
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > 1024 * 1024) { reject(new Error('body too large')); req.destroy(); return }
+      chunks.push(c)
+    })
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf-8').trim()
+      // An empty body is valid for bodyless triggers (e.g. POST /api/run-now); resolve {}
+      // so the route's own validator decides. Non-empty bodies must still be valid JSON.
+      if (text === '') { resolve({}); return }
+      try { resolve(JSON.parse(text)) } catch { reject(new Error('invalid JSON body')) }
+    })
+    req.on('error', reject)
+  })
+}
+
+/** Hostnames a browser legitimately presents when reaching the dashboard. Direct
+ *  use AND the documented Docker deployment both arrive as localhost: the compose
+ *  `127.0.0.1:7070:7070` mapping + SSH tunnel terminate on the operator's own
+ *  loopback, so the browser's Host header is `localhost:<port>` (or 127.0.0.1)
+ *  even though the container binds 0.0.0.0. */
+const LOOPBACK_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  '[::1]',
+  // IPv4-mapped IPv6 loopback: some stacks accept these forms for 127.0.0.1.
+  '::ffff:127.0.0.1',
+  '[::ffff:127.0.0.1]',
+])
+
+/** Operators who deliberately expose the panel behind a name (ADR 0002 says add
+ *  auth first) can extend the write allowlist: comma-separated hostnames, no ports.
+ *  Read per request so tests (and a restart-less env tweak) see changes. */
+function extraAllowedHosts(): Set<string> {
+  const raw = process.env.DASHBOARD_ALLOWED_HOSTS
+  if (!raw) return new Set()
+  return new Set(raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
+}
+
+/** Host header without the port, trailing DNS dot removed. Handles the
+ *  `[::1]:7070` bracket form. `localhost.` resolves identically to `localhost`
+ *  in DNS, so the fully-qualified trailing dot must not slip past the allowlist. */
+function stripPort(hostHeader: string): string {
+  let host: string
+  if (hostHeader.startsWith('[')) {
+    const end = hostHeader.indexOf(']')
+    host = end === -1 ? hostHeader : hostHeader.slice(0, end + 1)
+  } else {
+    host = hostHeader.replace(/:\d+$/, '')
+  }
+  return host.replace(/\.$/, '')
+}
+
+/** Defense-in-depth for the mutating routes (the panel is unauthenticated by
+ *  design — ADR 0002 — so CSRF/DNS-rebinding from a page the operator's browser
+ *  happens to visit is the realistic remote path to the budget/strategy). Three
+ *  additive checks; returns a rejection reason or null when the write may proceed.
+ *  GET routes and the static SPA are deliberately untouched. */
+function crossSiteWriteError(req: IncomingMessage): string | null {
+  // 1) Host allowlist. A DNS-rebinding page reaches this server with the
+  //    ATTACKER'S hostname in Host (the browser thinks it is talking to
+  //    attacker.example); legitimate access always presents localhost.
+  const hostHeader = req.headers.host
+  const host = hostHeader ? stripPort(hostHeader).toLowerCase() : ''
+  if (!LOOPBACK_HOSTS.has(host) && !extraAllowedHosts().has(host)) {
+    return `host "${hostHeader ?? ''}" not allowed for writes — the dashboard accepts localhost only (extend with DASHBOARD_ALLOWED_HOSTS)`
+  }
+  // 2) Fetch metadata: modern browsers stamp cross-site requests. An absent
+  //    header (older client, curl, node) passes — this check is purely additive.
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site.toLowerCase() === 'cross-site') {
+    return 'cross-site request rejected'
+  }
+  // 3) Content-Type: writes are JSON. A cross-origin form or no-cors fetch can
+  //    send text/plain / form encodings WITHOUT a CORS preflight; requiring
+  //    application/json closes that. An ABSENT content-type stays allowed for
+  //    bodyless triggers (e.g. POST /api/run-now with no body).
+  const ct = req.headers['content-type']
+  if (ct !== undefined && ct.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return `unsupported content-type "${ct}" — dashboard writes require application/json`
+  }
+  return null
+}
+
+/** Hostnames a browser legitimately presents when reaching the dashboard. Direct
+ *  use AND the documented Docker deployment both arrive as localhost: the compose
+ *  `127.0.0.1:7070:7070` mapping + SSH tunnel terminate on the operator's own
+ *  loopback, so the browser's Host header is `localhost:<port>` (or 127.0.0.1)
+ *  even though the container binds 0.0.0.0. */
+const LOOPBACK_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  '[::1]',
+  // IPv4-mapped IPv6 loopback: some stacks accept these forms for 127.0.0.1.
+  '::ffff:127.0.0.1',
+  '[::ffff:127.0.0.1]',
+])
+
+/** Operators who deliberately expose the panel behind a name (ADR 0002 says add
+ *  auth first) can extend the write allowlist: comma-separated hostnames, no ports.
+ *  Read per request so tests (and a restart-less env tweak) see changes. */
+function extraAllowedHosts(): Set<string> {
+  const raw = process.env.DASHBOARD_ALLOWED_HOSTS
+  if (!raw) return new Set()
+  return new Set(raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
+}
+
+/** Host header without the port. Handles `[::1]:7070` bracket form. */
+function stripPort(hostHeader: string): string {
+  if (hostHeader.startsWith('[')) {
+    const end = hostHeader.indexOf(']')
+    return end === -1 ? hostHeader : hostHeader.slice(0, end + 1)
+  }
+  return hostHeader.replace(/:\d+$/, '')
+}
+
+/** Defense-in-depth for the mutating routes (the panel is unauthenticated by
+ *  design — ADR 0002 — so CSRF/DNS-rebinding from a page the operator's browser
+ *  visits is the realistic remote path to the budget/strategy). Three additive
+ *  checks; returns a rejection reason or null when the write may proceed.
+ *  GET routes and the static SPA are deliberately untouched. */
+function crossSiteWriteError(req: IncomingMessage): string | null {
+  // 1) Host allowlist. A DNS-rebinding page reaches this server with the
+  //    ATTACKER'S hostname in Host (the browser thinks it is talking to
+  //    attacker.example); legitimate access always presents localhost.
+  const hostHeader = req.headers.host
+  const host = hostHeader ? stripPort(hostHeader).toLowerCase() : ''
+  if (!LOOPBACK_HOSTS.has(host) && !extraAllowedHosts().has(host)) {
+    return `host "${hostHeader ?? ''}" not allowed for writes — the dashboard accepts localhost only (extend with DASHBOARD_ALLOWED_HOSTS)`
+  }
+  // 2) Fetch metadata: modern browsers stamp cross-site requests. Absent header
+  //    (older client, curl, node) passes — this check is purely additive.
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site.toLowerCase() === 'cross-site') {
+    return 'cross-site request rejected'
+  }
+  // 3) Content-Type: writes are JSON. A cross-origin form or no-cors fetch can
+  //    send text/plain / form encodings WITHOUT a CORS preflight; requiring
+  //    application/json closes that. An ABSENT content-type stays allowed for
+  //    bodyless triggers (e.g. POST /api/run-now with no body).
+  const ct = req.headers['content-type']
+  if (ct !== undefined && ct.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return `unsupported content-type "${ct}" — dashboard writes require application/json`
+  }
+  return null
+}
+
+/** Hostnames a browser legitimately presents when reaching the dashboard. Direct
+ *  use AND the documented Docker deployment both arrive as localhost: the compose
+ *  `127.0.0.1:7070:7070` mapping + SSH tunnel terminate on the operator's own
+ *  loopback, so the browser's Host header is `localhost:<port>` (or 127.0.0.1)
+ *  even though the container binds 0.0.0.0. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+
+/** Operators who deliberately expose the panel behind a name (ADR 0002 says add
+ *  auth first) can extend the write allowlist: comma-separated hostnames, no ports.
+ *  Read per request so tests (and a restart-less env tweak) see changes. */
+function extraAllowedHosts(): Set<string> {
+  const raw = process.env.DASHBOARD_ALLOWED_HOSTS
+  if (!raw) return new Set()
+  return new Set(raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean))
+}
+
+/** Host header without the port, trailing DNS dot removed. Handles the
+ *  `[::1]:7070` bracket form. `localhost.` resolves identically to `localhost`
+ *  in DNS, so the fully-qualified trailing dot must not slip past the allowlist. */
+function stripPort(hostHeader: string): string {
+  let host: string
+  if (hostHeader.startsWith('[')) {
+    const end = hostHeader.indexOf(']')
+    host = end === -1 ? hostHeader : hostHeader.slice(0, end + 1)
+  } else {
+    host = hostHeader.replace(/:\d+$/, '')
+  }
+  return host.replace(/\.$/, '')
+}
+
+/** Defense-in-depth for the mutating routes (the panel is unauthenticated by
+ *  design — ADR 0002 — so CSRF/DNS-rebinding from a page the operator's browser
+ *  happens to visit is the realistic remote path to the budget/strategy). Three
+ *  additive checks; returns a rejection reason or null when the write may proceed.
+ *  GET routes and the static SPA are deliberately untouched. */
+function crossSiteWriteError(req: IncomingMessage): string | null {
+  // 1) Host allowlist. A DNS-rebinding page reaches this server with the
+  //    ATTACKER'S hostname in Host (the browser thinks it is talking to
+  //    attacker.example); legitimate access always presents localhost.
+  const hostHeader = req.headers.host
+  const host = hostHeader ? stripPort(hostHeader).toLowerCase() : ''
+  if (!LOOPBACK_HOSTS.has(host) && !extraAllowedHosts().has(host)) {
+    return `host "${hostHeader ?? ''}" not allowed for writes — the dashboard accepts localhost only (extend with DASHBOARD_ALLOWED_HOSTS)`
+  }
+  // 2) Fetch metadata: modern browsers stamp cross-site requests. An absent
+  //    header (older client, curl, node) passes — this check is purely additive.
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site.toLowerCase() === 'cross-site') {
+    return 'cross-site request rejected'
+  }
+  // 3) Content-Type: writes are JSON. A cross-origin form or no-cors fetch can
+  //    send text/plain / form encodings WITHOUT a CORS preflight; requiring
+  //    application/json closes that. An ABSENT content-type stays allowed for
+  //    bodyless triggers (e.g. POST /api/run-now with no body).
+  const ct = req.headers['content-type']
+  if (ct !== undefined && ct.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return `unsupported content-type "${ct}" — dashboard writes require application/json`
+  }
+  return null
+}
+
+type ProposalDecisionResult = { ok: boolean; status?: string; error?: string; appliesNextCycle?: boolean }
+
+/** Apply an operator decision to a learning proposal. Accept goes through the validated
+ *  config writer with an optimistic-concurrency check: if the live config value no longer
+ *  matches the proposal's fromValue (a manual edit landed since), the proposal is marked
+ *  stale rather than clobbering the newer value. The reflection module never writes config
+ *  — only this operator-driven path does. */
+function decideProposal(dataDir: string, id: number, decision: 'accept' | 'reject'): ProposalDecisionResult {
+  const prop = readProposals(dataDir).find((p) => p.id === id)
+  if (!prop) return { ok: false, error: 'proposal not found' }
+  if (prop.status !== 'pending') return { ok: false, error: `proposal already ${prop.status}` }
+  if (decision === 'reject') { setProposalStatus(dataDir, id, 'rejected'); return { ok: true, status: 'rejected' } }
+
+  let cfg: StrategyConfig
+  try { cfg = loadConfig(dataDir) } catch (e) { return { ok: false, error: `config unavailable: ${(e as Error).message}` } }
+  const updated = structuredClone(cfg) as StrategyConfig
+
+  if (prop.field === 'vote_enable') {
+    // Optimistic-concurrency: if already vote-enabled, mark stale rather than no-op.
+    if (updated.datanets[prop.datanetId]?.vote) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'datanet is already vote-enabled — dismissed' }
+    }
+    const existing = updated.datanets[prop.datanetId]
+    updated.datanets[prop.datanetId] = { ...existing, vote: true, mint: existing?.mint ?? false, strictness: existing?.strictness ?? 'balanced', mintMode: existing?.mintMode ?? 'pin', voteShare: existing?.voteShare ?? 1 }
+  } else if (prop.field === 'strictness') {
+    // optimistic-concurrency check — reject if live value drifted.
+    const liveValue = cfg.datanets[prop.datanetId]?.strictness ?? 'balanced'
+    if (liveValue !== prop.fromValue) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+    }
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.strictness = prop.toValue as typeof dn.strictness
+  } else if (prop.field === 'mint_enable') {
+    // economics-derived proposal — same optimistic-concurrency + "must already exist"
+    // posture as strictness (never silently CREATE a datanet entry from a proposal accept).
+    const liveValue = String(cfg.datanets[prop.datanetId]?.mint ?? false)
+    if (liveValue !== prop.fromValue) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+    }
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.mint = prop.toValue === 'true'
+  } else {
+    // vote_share — RE-VALIDATE at apply time. Insertion-time validation lives in
+    // reflect.ts; this re-check defends against a corrupted/adversarial proposals row
+    // reaching decideProposal directly (parseInt('3abc') would truncate-apply as 3, and
+    // the config schema deliberately has no upper bound — operators may set any positive
+    // int by hand, so safeParse below would NOT catch an out-of-range proposal). Same
+    // handling as a schema-parse failure: no write, no status change.
+    const n = parseInt(prop.toValue, 10)
+    if (!/^\d+$/.test(prop.toValue) || n < 1 || n > 10) {
+      return { ok: false, error: 'invalid vote_share value in proposal — not applied' }
+    }
+    const liveValue = String(cfg.datanets[prop.datanetId]?.voteShare ?? 1)
+    if (liveValue !== prop.fromValue) {
+      setProposalStatus(dataDir, id, 'stale')
+      return { ok: false, status: 'stale', error: 'config changed since this proposal — dismissed' }
+    }
+    const dn = updated.datanets[prop.datanetId]
+    if (!dn) { setProposalStatus(dataDir, id, 'stale'); return { ok: false, status: 'stale', error: 'datanet no longer configured' } }
+    dn.voteShare = parseInt(prop.toValue, 10)
+  }
+
+  const parsed = StrategyConfigSchema.safeParse(updated)
+  if (!parsed.success) return { ok: false, error: 'resulting config failed validation' }
+  writeConfig(dataDir, parsed.data)
+  setProposalStatus(dataDir, id, 'accepted')
+  return { ok: true, status: 'accepted', appliesNextCycle: true }
+}
+
+const POST_ROUTES = new Set(['/api/strategy', '/api/strategy/chat', '/api/onboarding/chat', '/api/onboarding/confirm', '/api/learn/disable', '/api/learn/veto', '/api/agent/name', '/api/run-now', '/api/pause'])
+
+async function handle(dataDir: string, req: IncomingMessage, res: ServerResponse, opts: DashboardOpts, session: OnboardingSession): Promise<void> {
+  const url = (req.url ?? '/').split('?')[0]
+  try {
+    if (req.method === 'POST') {
+      const isLearnProposal = url.startsWith('/api/learn/proposals/')
+      if (!POST_ROUTES.has(url) && !isLearnProposal) {
+        json(res, url.startsWith('/api/') ? 405 : 404, { error: url.startsWith('/api/') ? 'method not allowed' : 'not found' }); return
+      }
+      // No auth on writes: the dashboard binds localhost by default; restricting
+      // exposure (the `-p 127.0.0.1:` mapping) is the operator's responsibility.
+      // crossSiteWriteError adds browser-facing defense-in-depth (CSRF/DNS-rebinding)
+      // on top — it never gates same-machine tools like curl.
+      const guardError = crossSiteWriteError(req)
+      if (guardError) { json(res, 403, { error: guardError }); return }
+      let body: unknown
+      try { body = await readBody(req) } catch (e) { json(res, 400, { error: (e as Error).message }); return }
+
+      if (url === '/api/onboarding/chat') {
+        const chatModel = opts.resolveChatModel?.() ?? null
+        const turn = opts.onboardingTurn ?? (chatModel ? defaultOnboardingTurn(chatModel) : null)
+        if (!turn) { json(res, 503, { error: 'onboarding chat unavailable — node started without an LLM model' }); return }
+        const b = body as { message?: string; reset?: boolean }
+        if (b?.reset) {
+          session.messages = []; session.draft = null; session.finalized = null
+          json(res, 200, { reset: true }); return
+        }
+        if (session.messages.length === 0) session.messages = seedOnboardingMessages()
+        const msg = typeof b?.message === 'string' ? b.message.trim() : ''
+        if (msg) session.messages.push({ role: 'user', content: msg })
+        const r = await turn(session.messages)
+        session.messages.push(...r.responseMessages)
+        // Bound the retained transcript: onboarding is a short first-run window, so a very
+        // long (or scripted/hostile) chat should not grow memory or per-turn token cost
+        // without limit. Keep the seed system message + the most recent turns.
+        const MAX_ONBOARDING_MESSAGES = 60
+        if (session.messages.length > MAX_ONBOARDING_MESSAGES) {
+          session.messages = [session.messages[0], ...session.messages.slice(-(MAX_ONBOARDING_MESSAGES - 1))]
+        }
+        if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
+        if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
+        json(res, 200, { reply: r.text, draft: session.draft, finalized: session.finalized })
+        return
+      }
+
+      if (url === '/api/onboarding/confirm') {
+        // The single onboarding write path: validated answers → assembled config →
+        // persisted exactly like the CLI flow. The waiting node sees the file appear.
+        const v = validateAnswers(body)
+        if (!v.ok) { json(res, 400, { error: v.error }); return }
+        persistOnboarding(dataDir, buildStrategyConfig(v.answers))
+        session.messages = []; session.draft = null; session.finalized = null
+        json(res, 200, { saved: true })
+        return
+      }
+
+      if (url === '/api/agent/name') {
+        // Rename the platform agent from the dashboard (PATCH /agents/:id upstream).
+        // Same trust model as every other write here: localhost-bound, no auth (ADR 0002).
+        const name = String((body as { name?: unknown })?.name ?? '').trim()
+        if (!name || name.length > 64) { json(res, 400, { error: 'name required (1-64 chars)' }); return }
+        try {
+          const r = await syncAgentName({
+            desiredName: name,
+            readStored: () => readAgentStore(dataDir),
+            update: (id, n, key) => updateAgentOnPlatform(id, { name: n }, key),
+            writeStored: (c) => writeAgentStore(dataDir, c),
+          })
+          if (r === 'no-creds') { json(res, 409, { error: 'no agent registered yet — the node registers one on its first minting start' }); return }
+          if (r === 'no-apikey') { json(res, 409, { error: 'agent has no stored apiKey (REPPO_AGENT_ID set manually?) — cannot authenticate the rename' }); return }
+          json(res, 200, { name, updated: r === 'updated' })
+        } catch (e) {
+          json(res, 502, { error: `platform rename failed: ${(e as Error).message}` })
+        }
+        return
+      }
+
+      if (url === '/api/strategy/chat') {
+        const chatModel = opts.resolveChatModel?.() ?? null
+        if (!chatModel) { json(res, 503, { error: 'strategy chat unavailable — no LLM model (set a node default with a configured provider key)' }); return }
+        const messages = (body as { messages?: ChatMessage[] })?.messages
+        if (!Array.isArray(messages) || messages.length === 0) { json(res, 400, { error: 'messages[] required' }); return }
+        // Tolerant read (mirrors safeConfig / the write path): a missing or invalid
+        // config row returns a clean 409 rather than a 500 that leaks the data-dir path.
+        let current
+        try {
+          current = loadConfig(dataDir)
+        } catch (e) {
+          const msg = e instanceof ConfigNotFoundError
+            ? 'no strategy config yet — finish onboarding before using the assistant'
+            : 'strategy config is invalid — fix or re-onboard before using the assistant'
+          json(res, 409, { error: msg }); return
+        }
+        const lockConstraints = await getLockConstraints()
+        const snapshot = readSnapshot(dataDir)
+        const result = await runStrategyChat({ messages, currentConfig: current, lockConstraints, snapshot, model: chatModel })
+        json(res, 200, result)
+        return
+      }
+
+      if (url === '/api/pause') {
+        // Emergency kill switch. Flips config.paused; the cycle refuses to sign ANYTHING
+        // while it is true (src/runtime/cycle.ts, top of runCycle) and the node keeps
+        // running. Reaches here only AFTER crossSiteWriteError (the shared guard above) —
+        // pausing/unpausing is a budget-relevant write and gets the same CSRF/DNS-rebinding
+        // defense as a strategy save. It writes through the SAME validated path
+        // (StrategyConfigSchema → writeConfig) as every other config mutation, so it cannot
+        // smuggle an unvalidated config in via this narrower route.
+        const b = body as { paused?: unknown }
+        if (typeof b?.paused !== 'boolean') { json(res, 400, { error: 'paused (boolean) required' }); return }
+        let cfg: StrategyConfig
+        try {
+          cfg = loadConfig(dataDir)
+        } catch (e) {
+          const msg = e instanceof ConfigNotFoundError
+            ? 'no strategy config yet — the node has nothing to pause until onboarding finishes'
+            : 'strategy config is invalid — fix or re-onboard before pausing'
+          json(res, 409, { error: msg }); return
+        }
+        const parsed = StrategyConfigSchema.safeParse({ ...cfg, paused: b.paused })
+        if (!parsed.success) { json(res, 400, { error: 'resulting config failed validation' }); return }
+        writeConfig(dataDir, parsed.data)
+        // appliesNextCycle: config is hot-reloaded per cycle, so a cycle already in flight
+        // finishes under the old flag. Nothing NEW is signed once the next cycle starts.
+        json(res, 200, { paused: parsed.data.paused, appliesNextCycle: true })
+        return
+      }
+
+      if (url === '/api/learn/disable') {
+        const b = body as { datanetId?: string; enabled?: boolean }
+        if (!b?.datanetId || typeof b.enabled !== 'boolean') { json(res, 400, { error: 'datanetId and enabled required' }); return }
+        setLearnEnabled(dataDir, b.datanetId, b.enabled)
+        json(res, 200, { ok: true }); return
+      }
+
+      if (url === '/api/run-now') {
+        // Off-schedule cycle trigger. The scheduler owns the no-overlap guard, so a
+        // double-click or a click during a running cycle is a no-op (started:false).
+        // 409 when it didn't start so the client shows why without treating it as an error.
+        const trigger = opts.triggerCycle
+        if (!trigger) { json(res, 503, { error: 'node still starting — no scheduler yet' }); return }
+        const r = trigger()
+        json(res, r.started ? 200 : 409, r)
+        return
+      }
+
+      if (url === '/api/learn/veto') {
+        const b = body as { datanetId?: string }
+        if (!b?.datanetId) { json(res, 400, { error: 'datanetId required' }); return }
+        clearLessons(dataDir, b.datanetId)
+        json(res, 200, { ok: true }); return
+      }
+
+      if (isLearnProposal) {
+        const id = Number(url.slice('/api/learn/proposals/'.length))
+        const b = body as { decision?: 'accept' | 'reject' }
+        if (!Number.isInteger(id) || (b?.decision !== 'accept' && b?.decision !== 'reject')) {
+          json(res, 400, { error: 'numeric id and decision (accept|reject) required' }); return
+        }
+        const result = decideProposal(dataDir, id, b.decision)
+        json(res, result.ok ? 200 : 409, result); return
+      }
+
+      const parsed = StrategyConfigSchema.safeParse(body)
+      if (!parsed.success) { json(res, 400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) }); return }
+      // PAUSE IS NOT A SAVEABLE FIELD. POST /api/pause is the only route that may change it,
+      // so a strategy save carries the PERSISTED value forward regardless of what the candidate
+      // says. Without this, `paused` (schema default false) silently resumes a stopped node on
+      // any save that omits it — an assistant proposal that dropped the key, a stale tab whose
+      // candidate predates the pause, a hand-rolled curl. The operator's kill switch must never
+      // be flipped by a write that was about something else. Refusal only: a save can neither
+      // un-pause nor pause; it just cannot move the flag.
+      // (?? — no config on disk yet means there is no pause to preserve: this is the first write.)
+      const paused = persistedPaused(dataDir) ?? parsed.data.paused
+      writeConfig(dataDir, { ...parsed.data, paused })
+      // Echo the effective flag so a client holding a stale candidate can reconcile.
+      json(res, 200, { saved: true, appliesNextCycle: true, paused })
+      return
+    }
+    if (url === '/api/onboarding/status') {
+      json(res, 200, {
+        needed: needsOnboarding(dataDir),
+        chatAvailable: Boolean(opts.onboardingTurn ?? opts.resolveChatModel?.()),
+      })
+      return
+    }
+    if (url === '/api/activity') { json(res, 200, readActivity(dataDir, { limit: 500 })); return }
+    if (url === '/api/config') { json(res, 200, safeConfig(dataDir)); return }
+    if (url === '/api/agent') {
+      // Identity only — the apiKey NEVER leaves the store (ADR 0002: dashboard holds no secrets).
+      const a = readAgentStore(dataDir)
+      json(res, 200, a ? { agentId: a.agentId, name: a.name ?? null, renameable: Boolean(a.apiKey) } : null)
+      return
+    }
+    if (url === '/api/earn') { json(res, 200, readEarnStatus(dataDir)); return }
+    if (url === '/api/learn') {
+      let ids: string[] = []
+      try {
+        const cfg = loadConfig(dataDir)
+        ids = Object.entries(cfg.datanets).filter(([k, d]) => k !== '*' && (d.vote || d.mint)).map(([k]) => k)
+      } catch { ids = [] } // no/invalid config (onboarding) → empty learn view
+      json(res, 200, buildLearnView(dataDir, ids)); return
+    }
+    // 7-day window: "recent health", independent of cadence (a count-based window
+    // means hours at high cadence, months at low). 100k limit is a safety ceiling.
+    if (url === '/api/health') {
+      // 7-day window via an indexed since-query (no full-history scan per poll).
+      const since = Date.now() - 7 * 24 * 3600_000
+      const entries = readActivitySince(dataDir, since)
+      // Composed here, NOT inside buildHealth: health.ts stays a pure counter, and the
+      // operator-facing translation (raw stderr → { code, operatorMessage, suggestedAction })
+      // lives in errorClass.ts. Same entries, so the classification always describes the
+      // window the panel is counting. Reasons/details were already redacted on write; the
+      // classifier redacts again before matching (defense-in-depth).
+      json(res, 200, attachClassification(buildHealth(entries, { sinceMs: since }), entries)); return
+    }
+    if (url === '/api/datanet-pnl') {
+      // Per-datanet profit — lifetime REPPO spent minting vs claimed back, per datanet.
+      // Derived purely from our own activity rows (no secrets on this path: datanet ids and
+      // REPPO amounts only), so there is nothing to strip.
+      json(res, 200, { datanets: readDatanetPnl(dataDir) }); return
+    }
+    if (url === '/api/datanets') { json(res, 200, await datanetNames()); return }
+    if (url === '/api/models') {
+      // Provider/model NAMES only — never keys (ADR 0002: dashboard holds no secrets).
+      const providers = (opts.availableProviders ?? []).map((provider) => ({
+        provider, hasKey: true as const, models: KNOWN_MODELS[provider],
+      }))
+      json(res, 200, { providers }); return
+    }
+    if (url === '/api/pnl') {
+      const snapshot = readSnapshot(dataDir)
+      // claimed total must be the unbounded SQL sum, NOT a readActivity({ limit })
+      // slice — a capped window drops old claims while mint spend is cumulative,
+      // making net REPPO read falsely negative as the log grows.
+      const pnl = snapshot ? derivePnl(snapshot, sumClaimedReppo(dataDir), sumMintReppoSpent(dataDir)) : null
+      json(res, 200, { pnl, snapshot }); return
+    }
+    // Static SPA: exact asset first, then index.html fallback so client-side
+    // routes deep-link. /api/* never reaches here (handled or 404'd above).
+    if (req.method === 'GET' && !url.startsWith('/api/')) {
+      const pubDir = opts.publicDir ?? PUBLIC_DIR
+      const exact = staticFile(pubDir, url)
+      if (!exact && url === '/favicon.ico') { res.writeHead(204); res.end(); return }
+      const file = exact ?? staticFile(pubDir, '/index.html')
+      if (file) {
+        res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' })
+        res.end(readFileSync(file))
+        return
+      }
+      // no built SPA on disk (dev/test without `vite build`) — minimal placeholder at /
+      if (url === '/' || url === '/index.html') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        res.end('<h1>Orquestra</h1>')
+        return
+      }
+    }
+    json(res, 404, { error: 'not found' })
+  } catch (e) {
+    json(res, 500, { error: e instanceof Error ? e.message : String(e) })
+  }
+}
+
+/** Start the dashboard server. Binds DASHBOARD_HOST, defaulting to loopback
+ *  (127.0.0.1) so a bare `node dist/index.js` or any run that does NOT set
+ *  DASHBOARD_HOST keeps the unauthenticated config/onboarding panel off the network
+ *  (ADR 0002). NOTE: the published Docker image sets DASHBOARD_HOST=0.0.0.0 (the
+ *  compose `127.0.0.1:7070:7070` mapping forwards to the container's bridge IP, not
+ *  its loopback, so the server must bind all interfaces for that mapping to work). In
+ *  Docker the host-side `127.0.0.1:` port mapping — NOT the bind — is the boundary, so
+ *  `docker run -p 7070:7070 <image>` (no `127.0.0.1:` prefix) WOULD expose the panel.
+ *  Operators who must expose it deliberately set DASHBOARD_HOST and should add auth first. */
+export interface DashboardOpts {
+  /** Resolve the current node-default chat model PER REQUEST (so a dashboard
+   *  defaultModel change takes effect with no restart). Returns null when the
+   *  effective default has no API key — handlers 503. */
+  resolveChatModel?: () => LanguageModel | null
+  /** Providers whose API key is present in env (the key registry's keys). The
+   *  /api/models endpoint lists these — names only, NEVER keys. */
+  availableProviders?: LlmProvider[]
+  /** Override the built-SPA dir (defaults to `public/` beside this file); tests use this. */
+  publicDir?: string
+  /** Override the onboarding turn-runner (tests); defaults to the live model runner. */
+  onboardingTurn?: (messages: CoreMessage[]) => Promise<OnboardingTurnResult>
+  /** Trigger an off-schedule cycle NOW (the "run now" button). Resolved per request so
+   *  it works even though the dashboard starts before the scheduler exists — index.ts wires
+   *  a lazy closure. Absent (or returns { started:false }) before the scheduler is up. */
+  triggerCycle?: () => { started: boolean; reason?: string }
+}
+
+export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
+  const session: OnboardingSession = { messages: [], draft: null, finalized: null }
+  const server = createServer((req, res) => { void handle(dataDir, req, res, opts, session) })
+  // Default to loopback (see interface doc). The Docker image overrides via DASHBOARD_HOST=0.0.0.0.
+  const host = process.env.DASHBOARD_HOST ?? '127.0.0.1'
+  return new Promise((resolve) => {
+    server.listen(port, host, () => {
+      const addr = server.address() as AddressInfo
+      resolve({
+        port: addr.port,
+        host: addr.address,
+        close: () => new Promise<void>((r) => server.close(() => r())),
+      })
+    })
+  })
+}
