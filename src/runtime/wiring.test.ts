@@ -672,6 +672,30 @@ describe('buildCycleDeps voteScorerFor', () => {
     expect('scorer' in deps.scorers.voteScorerFor('9')).toBe(true)
   })
 
+  it('threads the shared VideoPodPipeline into the scorers (mutation guard)', async () => {
+    // Kills the `buildScorers(w, video)` → `buildScorers(w)` mutation the wave-C review
+    // proved invisible: with the pipeline WIRED, a marked video pod on a keyless-google
+    // registry reaches the pipeline and throws ITS skip ("Google API key"); with the
+    // pipeline dropped, the scorer throws "no model context" instead — distinct message,
+    // no network touched (the skip fires before ingest).
+    const w = wiring({ config: cfgWith({}) }) // registry has no google key
+    const deps = buildCycleDeps(w)
+    const r = deps.scorers.voteScorerFor('9')
+    expect('scorer' in r).toBe(true)
+    const videoPod = {
+      podId: 'v1', validityEpoch: '7', name: 'clip', description: '',
+      mediaUrl: 'https://cdn.example/v.mp4', mediaType: 'video/mp4',
+    }
+    const rubric = {
+      datanetId: '9', name: 'net', goal: 'g', publisherSpec: '', voterRubric: 'quality',
+      subnetUuid: '', canVote: true, canMint: false, status: 'active',
+      economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+    }
+    await expect(
+      (r as { scorer: { scorePod: (p: unknown, ru: unknown) => Promise<unknown> } }).scorer.scorePod(videoPod, rubric),
+    ).rejects.toThrow(/Google API key/)
+  })
+
   it('skips a datanet whose policy model has no key in the registry', () => {
     const w = wiring({ config: cfgWith({ model: { provider: 'google', model: 'gemini-3-pro' } }) })
     const deps = buildCycleDeps(w)

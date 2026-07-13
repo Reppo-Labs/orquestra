@@ -4,6 +4,8 @@ import { buildScorers, effectiveDefaultModel, type ScorerEnv } from './scorers.j
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { LanguageModel } from 'ai'
+import type { VideoPipeline } from '../voter/videoPipeline.js'
+import type { VoteRubric } from '../rubric/types.js'
 
 // No LLM call is ever made here: buildScorers only CONSTRUCTS scorers. The resolver is
 // injected (the seam index.ts already uses for oauth) and returns a sentinel object, so
@@ -109,6 +111,65 @@ describe('buildScorers candidateScorer', () => {
       { canonicalKey: 'k', podName: 'n', podDescription: 'd', dataset: {} },
       { datanetId: '9' } as never,
     )).toThrow(/no API key for the node default provider/)
+  })
+})
+
+describe('buildScorers video seam (scorer → VideoPodPipeline)', () => {
+  // Mutation-proven gap (wave-C review): dropping the `video` argument from the
+  // production call site left the whole suite green while video voting died silently.
+  // These tests pin the seam: a marked video pod MUST reach pipeline.scoreVideoPod
+  // with the datanet's policy model, and an unwired pipeline MUST throw the skip.
+  const videoPod = {
+    podId: 'v1', validityEpoch: '7', name: 'clip', description: '',
+    mediaUrl: 'https://cdn.example/v.mp4', mediaType: 'video/mp4',
+  }
+  const rubric: VoteRubric = {
+    datanetId: '9', name: 'net', goal: 'g', publisherSpec: '', voterRubric: 'score by quality',
+    subnetUuid: '', canVote: true, canMint: false, status: 'active',
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  }
+  const fakePipeline = () => {
+    const scoreVideoPod = vi.fn(async (..._args: unknown[]) => ({ score: 7, reason: 'good clip' }))
+    const pipeline: VideoPipeline = {
+      beginCycle: vi.fn(),
+      detectAndMark: vi.fn(async () => false),
+      scoreVideoPod: scoreVideoPod as VideoPipeline['scoreVideoPod'],
+    }
+    return { pipeline, scoreVideoPod }
+  }
+
+  it('routes a marked video pod to pipeline.scoreVideoPod (no policy model → undefined)', async () => {
+    const { pipeline, scoreVideoPod } = fakePipeline()
+    const s = buildScorers(env(), pipeline)
+    const r = s.voteScorerFor('9')
+    expect('scorer' in r).toBe(true)
+    const score = await (r as { scorer: { scorePod: (p: unknown, ru: VoteRubric) => Promise<unknown> } }).scorer.scorePod(videoPod, rubric)
+    expect(score).toMatchObject({ score: 7 })
+    expect(scoreVideoPod).toHaveBeenCalledTimes(1)
+    const [calledPod, calledPolicy] = scoreVideoPod.mock.calls[0] as unknown[]
+    expect(calledPod).toBe(videoPod)
+    expect(calledPolicy).toBeUndefined() // datanet 9 has no model override
+  })
+
+  it("threads the datanet's policy model override into the pipeline", async () => {
+    const { pipeline, scoreVideoPod } = fakePipeline()
+    const s = buildScorers(env({
+      providerKeyRegistry: new Map<LlmProvider, string>([['google', 'g-key']]),
+      config: cfg({ '9': { vote: true, mint: false, strictness: 'balanced', model: { provider: 'google', model: 'gemini-3-pro' } } }),
+    }), pipeline)
+    const r = s.voteScorerFor('9')
+    expect('scorer' in r).toBe(true)
+    await (r as { scorer: { scorePod: (p: unknown, ru: VoteRubric) => Promise<unknown> } }).scorer.scorePod(videoPod, rubric)
+    expect(scoreVideoPod.mock.calls[0]?.[1]).toEqual({ provider: 'google', model: 'gemini-3-pro' })
+  })
+
+  it('an unwired pipeline makes a video pod throw the recorded skip (fail-closed)', async () => {
+    const s = buildScorers(env()) // no video pipeline — the mutation the review proved invisible
+    const r = s.voteScorerFor('9')
+    expect('scorer' in r).toBe(true)
+    await expect(
+      (r as { scorer: { scorePod: (p: unknown, ru: VoteRubric) => Promise<unknown> } }).scorer.scorePod(videoPod, rubric),
+    ).rejects.toThrow(/video pod has no model context/)
   })
 })
 
