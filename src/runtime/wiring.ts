@@ -414,7 +414,20 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getAdapter: (id) => w.adapters.find((a) => a.id === id),
     voteScorerFor,
     candidateScorer,
-    seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
+    // Persistent dedup — thin views over DedupState (SQLite). Grants are always
+    // supported in production wiring, so the grant cache is always present.
+    dedup: {
+      seenKeysFor: async (id) => new Set(w.dedup.getMintedKeys(id)),
+      recordVote: (id, podId) => w.dedup.recordVote(id, podId),
+      recordMint: (id, key) => w.dedup.recordMint(id, key),
+      seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
+      recordClaim: (key) => w.dedup.recordClaim(key),
+      grants: {
+        granted: async () => new Set(w.dedup.getGrantedSubnets()),
+        record: (id) => w.dedup.recordGrant(id),
+        revoke: (id) => w.dedup.removeGrant(id),
+      },
+    },
     // Live veREPPO for the per-cycle stake top-up — same balance query setupNode/snapshot use.
     // null on a failed read (NOT 0): maybeTopUpStake skips this cycle's top-up rather than
     // treating a read miss as zero veREPPO, which would lock the FULL target on top of whatever
@@ -422,7 +435,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getVeReppo: async () => (await reader.balance().catch(() => null))?.veReppo ?? null,
     executor: w.executor,
     ledger: w.ledger,
-    recordVote: (id, podId) => w.dedup.recordVote(id, podId),
     // Cred check deferred to call time so late-arriving or rotated creds take effect
     // without restarting the node (env vars set from SQLite at startup but re-read here).
     registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
@@ -431,7 +443,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       if (!agentId || !apiKey) return Promise.resolve()
       return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
     },
-    recordMint: (id, key) => w.dedup.recordMint(id, key),
     // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
     // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
@@ -442,11 +453,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getEmissionsDue: async () => enrichTokens((rpcUrl && walletAddress)
       ? await reader.claimableOnchain(rpcUrl, walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
       : (await reader.emissionsDue()).pods),
-    seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
       try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
     },
-    recordClaim: (key) => w.dedup.recordClaim(key),
     strategyFor,
     getExistingPodNames: async (id) => {
       const pods = await reader.listPods(id, { all: true }).catch(() => [] as VoterPod[])
@@ -460,9 +469,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       ]
       return sorted.slice(0, MAX_EXISTING).map((p) => p.name).filter(Boolean)
     },
-    grantedSubnets: async () => new Set(w.dedup.getGrantedSubnets()),
-    recordGrant: (id) => w.dedup.recordGrant(id),
-    revokeGrant: (id) => w.dedup.removeGrant(id),
     supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
     ...(onchain ? { onchain } : {}),
   }

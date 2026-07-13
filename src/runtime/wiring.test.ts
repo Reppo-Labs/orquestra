@@ -210,17 +210,17 @@ describe('buildCycleDeps', () => {
     expect(deps.strategyFor!('2').brief).toBe('edited via dashboard')
   })
 
-  it('dedup closures thread through to DedupState (vote, mint, grant, revoke)', async () => {
+  it('dedup collaborator threads through to DedupState (vote, mint, grant, revoke)', async () => {
     const w = wiring()
     const deps = buildCycleDeps(w)
-    deps.recordVote('2', 'p9')
-    deps.recordMint('2', 'k9')
-    deps.recordGrant!('2')
+    deps.dedup.recordVote('2', 'p9')
+    deps.dedup.recordMint('2', 'k9')
+    deps.dedup.grants!.record('2')
     expect(w.dedup.getVotedPodIds('2')).toContain('p9')
     expect(w.dedup.getMintedKeys('2')).toContain('k9')
-    expect(await deps.grantedSubnets!()).toEqual(new Set(['2']))
-    deps.revokeGrant!('2')
-    expect(await deps.grantedSubnets!()).toEqual(new Set())
+    expect(await deps.dedup.grants!.granted()).toEqual(new Set(['2']))
+    deps.dedup.grants!.revoke('2')
+    expect(await deps.dedup.grants!.granted()).toEqual(new Set())
   })
 
   it('registerVoteOnPlatform is always wired (cred check deferred to call time)', () => {

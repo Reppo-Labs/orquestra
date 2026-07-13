@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads } from './cycle.js'
+import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -43,6 +43,23 @@ const onchainReads = (over: Partial<OnchainReads> = {}): OnchainReads => ({
   getEpochVoteVolume: async () => ({ epoch: 0, totalRaw: 0n }),
   ...over,
 })
+// Dedup fake: nothing seen, spies on the record methods. `grants` stays absent unless a
+// test exercises the subnet-access gate (absent = gate not applicable, as in production
+// wirings without grant support).
+const fakeDedup = (over: Partial<Dedup> = {}): Dedup => ({
+  seenKeysFor: async () => new Set<string>(),
+  recordVote: vi.fn(),
+  recordMint: vi.fn(),
+  seenClaims: async () => new Set<string>(),
+  recordClaim: vi.fn(),
+  ...over,
+})
+const grantCache = (over: Partial<GrantCache> = {}): GrantCache => ({
+  granted: async () => new Set<string>(),
+  record: vi.fn(),
+  revoke: vi.fn(),
+  ...over,
+})
 
 function deps(over: Partial<CycleDeps> = {}): CycleDeps {
   const adapter: DatanetAdapter = {
@@ -59,19 +76,15 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     getAdapter: (adapterId: string) => (adapterId === 'hyperliquid' ? adapter : undefined),
     voteScorerFor: () => ({ scorer: { scorePod: async () => ({ score: 9, reason: 'good' }) } }),
     candidateScorer: { scoreCandidate: async () => ({ score: 9, reason: 'good' }) },
-    seenKeysFor: async () => new Set<string>(),
+    dedup: fakeDedup(),
     getVeReppo: async () => 0,
     executor: {
       executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvote' })),
       executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
     } as unknown as CycleDeps['executor'],
     ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => true, votesRemaining: () => 99 } as unknown as CycleDeps['ledger'],
-    recordVote: vi.fn(),
-    recordMint: vi.fn(),
     getEmissionsDue: async () => [],
-    seenClaims: async () => new Set<string>(),
     recordActivity: vi.fn(),
-    recordClaim: vi.fn(),
     ...over,
   }
 }
@@ -174,8 +187,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => granted,
-      recordGrant: (id: string) => { granted.add(id) },
+      dedup: fakeDedup({ grants: grantCache({ granted: async () => granted, record: (id: string) => { granted.add(id) } }) }),
     })
     await runCycle(config, 'cycle-grant', d)
     // grant-access is keyed by datanet id; datanets 9 and 2 are distinct → one grant each.
@@ -194,8 +206,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set(['9', '2']),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache({ granted: async () => new Set(['9', '2']) }) }),
     })
     await runCycle(config, 'cycle-grant2', d)
     expect(executeGrantAccess).not.toHaveBeenCalled()
@@ -317,11 +328,11 @@ describe('runCycle', () => {
     const d = deps()
     await runCycle(config, 'c5', d)
     // datanet 9 has vote:true + mint:true + adapter → both should be recorded
-    expect(d.recordVote).toHaveBeenCalledWith('9', 'p1')
-    expect(d.recordMint).toHaveBeenCalledWith('9', 'k1')
+    expect(d.dedup.recordVote).toHaveBeenCalledWith('9', 'p1')
+    expect(d.dedup.recordMint).toHaveBeenCalledWith('9', 'k1')
     // datanet 2 has vote:true, mint:false → vote recorded, no mint call
-    expect(d.recordVote).toHaveBeenCalledWith('2', 'p1')
-    expect((d.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
+    expect(d.dedup.recordVote).toHaveBeenCalledWith('2', 'p1')
+    expect((d.dedup.recordMint as ReturnType<typeof vi.fn>).mock.calls.filter((c: string[]) => c[0] === '2')).toEqual([])
   })
 
   it('calls registerVoteOnPlatform with (podId, txHash) on an executed vote', async () => {
@@ -376,8 +387,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
     })
     const report = await runCycle(config, 'cycle-skip', d)
 
@@ -405,8 +415,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess: vi.fn(),
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set(['9', '2']),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache({ granted: async () => new Set(['9', '2']) }) }),
     })
     let report = await runCycle(config, 'g1', granted)
     expect(report.datanets.every((r) => r.skipped === undefined)).toBe(true)
@@ -419,8 +428,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess: vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' })),
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
     })
     report = await runCycle(config, 'g2', grantsNow)
     expect(report.datanets.every((r) => r.skipped === undefined)).toBe(true)
@@ -428,8 +436,7 @@ describe('runCycle', () => {
     // no subnetUuid (pre-subnet metadata) → gate not applicable, proceeds
     const noSubnet = deps({
       getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: '' })),
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
     })
     report = await runCycle(config, 'g3', noSubnet)
     expect(report.datanets.every((r) => r.skipped === undefined)).toBe(true)
@@ -471,8 +478,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: false,
     })
     const report = await runCycle(nonReppoConfig, 'c-nonreppo-off', d)
@@ -492,8 +498,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: true,
     })
     const report = await runCycle(nonReppoConfig, 'c-nonreppo-on', d)
@@ -512,8 +517,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: true,
       onchain: onchainReads({ wallet: walletReads({ readTokenBalance }) }),
     })
@@ -536,8 +540,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: true,
       onchain: onchainReads({ wallet: walletReads({ readTokenBalance }) }),
     })
@@ -555,8 +558,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: true,
       // onchain intentionally omitted (no RPC configured) — no balance pre-check
     })
@@ -577,8 +579,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: true,
       onchain: onchainReads({ wallet: walletReads({ readTokenBalance: vi.fn(async () => 100_000_000n) }) }),
     })
@@ -599,8 +600,7 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess,
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set<string>(),
-      recordGrant: vi.fn(),
+      dedup: fakeDedup({ grants: grantCache() }),
       supportsNonReppoGrants: false, // off — must not affect the REPPO path
     })
     await runCycle(config, 'c-reppo-path', d)
@@ -616,7 +616,7 @@ describe('runCycle', () => {
       } as unknown as CycleDeps['executor'],
     })
     await runCycle(config, 'c-own', d)
-    expect(d.recordVote).toHaveBeenCalledWith('9', 'p1') // permanent error → dedup so it stops retrying
+    expect(d.dedup.recordVote).toHaveBeenCalledWith('9', 'p1') // permanent error → dedup so it stops retrying
   })
 
   it('evicts the granted-subnet cache when a vote fails VOTER_LACKS_SUBNET_ACCESS despite the cache', async () => {
@@ -627,13 +627,11 @@ describe('runCycle', () => {
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
         executeGrantAccess: vi.fn(),
       } as unknown as CycleDeps['executor'],
-      grantedSubnets: async () => new Set(['9', '2']), // cache says granted — stale
-      recordGrant: vi.fn(),
-      revokeGrant,
+      dedup: fakeDedup({ grants: grantCache({ granted: async () => new Set(['9', '2']), revoke: revokeGrant }) }), // cache says granted — stale
     })
     await runCycle(config, 'c-stale', d)
     expect(revokeGrant).toHaveBeenCalledWith('9') // evicted → next cycle re-attempts the grant
-    expect(d.recordVote).not.toHaveBeenCalled()   // NOT recorded as voted — retried after re-grant
+    expect(d.dedup.recordVote).not.toHaveBeenCalled()   // NOT recorded as voted — retried after re-grant
   })
 
   it('records dedup ONLY on executed — refused AND errored are not recorded (so retries are not blocked)', async () => {
@@ -641,15 +639,15 @@ describe('runCycle', () => {
       executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'refused-budget' })), executeMint: vi.fn(async () => ({ ok: false, status: 'refused-budget' })) } as unknown as CycleDeps['executor'],
     })
     await runCycle(config, 'c6', refused)
-    expect(refused.recordVote).not.toHaveBeenCalled()
-    expect(refused.recordMint).not.toHaveBeenCalled()
+    expect(refused.dedup.recordVote).not.toHaveBeenCalled()
+    expect(refused.dedup.recordMint).not.toHaveBeenCalled()
 
     const errored = deps({
       executor: { executeVote: vi.fn(async () => ({ ok: false, status: 'error', detail: 'no txHash' })), executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })) } as unknown as CycleDeps['executor'],
     })
     await runCycle(config, 'c7', errored)
-    expect(errored.recordVote).not.toHaveBeenCalled()        // errored vote NOT recorded → retried next cycle (idempotency key guards double-spend)
-    expect(errored.recordMint).toHaveBeenCalledWith('9', 'k1') // executed mint IS recorded
+    expect(errored.dedup.recordVote).not.toHaveBeenCalled()        // errored vote NOT recorded → retried next cycle (idempotency key guards double-spend)
+    expect(errored.dedup.recordMint).toHaveBeenCalledWith('9', 'k1') // executed mint IS recorded
   })
 
   it('defers pods beyond the per-cycle budget with ONE deferral note (not a refused row per pod)', async () => {
@@ -681,7 +679,7 @@ describe('runCycle', () => {
     const skips = activity.filter((e) => e.kind === 'skip')
     expect(skips).toHaveLength(1)
     expect(skips[0].reason).toMatch(/2 votes deferred to next cycle/)
-    expect(d.recordVote).toHaveBeenCalledTimes(1)
+    expect(d.dedup.recordVote).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -700,9 +698,8 @@ describe('runCycle claim phase', () => {
         { podId: '1', datanetId: '9', epoch: 101, reppo: 12.5 },
         { podId: '2', datanetId: '9', epoch: 101, reppo: 4 },
       ],
-      seenClaims: async () => claimed,
+      dedup: fakeDedup({ seenClaims: async () => claimed, recordClaim: vi.fn((key: string) => { recorded.push(key) }) }),
       executor: claimExecutor(async () => ({ ok: true, status: 'executed', txHash: '0xc', gasEth: 0.0009 })),
-      recordClaim: vi.fn((key: string) => { recorded.push(key) }),
     })
     const report = await runCycle(config, 'c1', d)
     expect(report.claims).toHaveLength(1) // only pod 1 (pod 2 already claimed)
@@ -726,9 +723,8 @@ describe('runCycle claim phase', () => {
     const d = deps({
       getEmissionsDue: async () => [],                       // no owner claims
       onchain: onchainReads({ wallet: walletReads({ getVoterEmissionsDue: async () => [{ podId: '1624', datanetId: '11', epoch: 105, reppo: 0 }] }) }),
-      seenClaims: async () => new Set<string>(),
+      dedup: fakeDedup({ recordClaim: vi.fn((key: string) => { recorded.push(key) }) }),
       executor,
-      recordClaim: vi.fn((key: string) => { recorded.push(key) }),
     })
     const report = await runCycle(config, 'c-voter', d)
     expect(executeVoterClaim).toHaveBeenCalledTimes(1)
@@ -758,7 +754,7 @@ describe('runCycle claim phase', () => {
         { podId: '2', datanetId: '9', epoch: 101, reppo: 0 }, // already claimed before → cleared
         { podId: '3', datanetId: '9', epoch: 101, reppo: 0 }, // claim fails → stays claimable
       ],
-      seenClaims: async () => new Set<string>(['2:101']),
+      dedup: fakeDedup({ seenClaims: async () => new Set<string>(['2:101']) }),
       executor: claimExecutor(async (i) => i.podId === '3'
         ? Promise.reject(new Error('boom'))
         : { ok: true, status: 'executed', txHash: '0xc', gasEth: 0 }),
@@ -773,7 +769,6 @@ describe('runCycle claim phase', () => {
         { podId: '1', datanetId: '9', epoch: 101, reppo: 5 },
         { podId: '2', datanetId: '9', epoch: 101, reppo: 5 },
       ],
-      seenClaims: async () => new Set<string>(),
       executor: claimExecutor(async (i) => i.podId === '1'
         ? Promise.reject(new Error('boom'))
         : { ok: true, status: 'executed', txHash: '0xc', gasEth: 0.0009 }),
