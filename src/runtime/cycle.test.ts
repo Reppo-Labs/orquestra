@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, type CycleDeps } from './cycle.js'
+import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -30,6 +30,19 @@ const config = StrategyConfigSchema.parse({
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-cyc-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+// Reusable collaborator fakes. `onchain` is present-or-absent AS A UNIT (a node without
+// RPC has none); the wallet tier nests inside it the same way.
+const walletReads = (over: Partial<OnchainWalletReads> = {}): OnchainWalletReads => ({
+  address: '0xWallet',
+  readTokenBalance: async () => 0n,
+  getVoterEmissionsDue: async () => [],
+  ...over,
+})
+const onchainReads = (over: Partial<OnchainReads> = {}): OnchainReads => ({
+  getEpochVoteVolume: async () => ({ epoch: 0, totalRaw: 0n }),
+  ...over,
+})
 
 function deps(over: Partial<CycleDeps> = {}): CycleDeps {
   const adapter: DatanetAdapter = {
@@ -502,8 +515,7 @@ describe('runCycle', () => {
       grantedSubnets: async () => new Set<string>(),
       recordGrant: vi.fn(),
       supportsNonReppoGrants: true,
-      readTokenBalance,
-      walletAddress: '0xWallet',
+      onchain: onchainReads({ wallet: walletReads({ readTokenBalance }) }),
     })
     const report = await runCycle(nonReppoConfig, 'c-insufficient', d)
     expect(readTokenBalance).toHaveBeenCalledWith(exyToken.address, '0xWallet')
@@ -527,8 +539,7 @@ describe('runCycle', () => {
       grantedSubnets: async () => new Set<string>(),
       recordGrant: vi.fn(),
       supportsNonReppoGrants: true,
-      readTokenBalance,
-      walletAddress: '0xWallet',
+      onchain: onchainReads({ wallet: walletReads({ readTokenBalance }) }),
     })
     const report = await runCycle(nonReppoConfig, 'c-sufficient', d)
     expect(executeGrantAccess).toHaveBeenCalledWith('42', 'primary')
@@ -547,7 +558,7 @@ describe('runCycle', () => {
       grantedSubnets: async () => new Set<string>(),
       recordGrant: vi.fn(),
       supportsNonReppoGrants: true,
-      // readTokenBalance + walletAddress intentionally omitted (no RPC configured)
+      // onchain intentionally omitted (no RPC configured) — no balance pre-check
     })
     await runCycle(nonReppoConfig, 'c-noreader', d)
     expect(executeGrantAccess).toHaveBeenCalledWith('42', 'primary') // grant still attempted
@@ -569,8 +580,7 @@ describe('runCycle', () => {
       grantedSubnets: async () => new Set<string>(),
       recordGrant: vi.fn(),
       supportsNonReppoGrants: true,
-      readTokenBalance: vi.fn(async () => 100_000_000n),
-      walletAddress: '0xWallet',
+      onchain: onchainReads({ wallet: walletReads({ readTokenBalance: vi.fn(async () => 100_000_000n) }) }),
     })
     await runCycle(nonReppoConfig, 'c-grantfee', d)
     const grants = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
@@ -715,7 +725,7 @@ describe('runCycle claim phase', () => {
     } as unknown as CycleDeps['executor']
     const d = deps({
       getEmissionsDue: async () => [],                       // no owner claims
-      getVoterEmissionsDue: async () => [{ podId: '1624', datanetId: '11', epoch: 105, reppo: 0 }],
+      onchain: onchainReads({ wallet: walletReads({ getVoterEmissionsDue: async () => [{ podId: '1624', datanetId: '11', epoch: 105, reppo: 0 }] }) }),
       seenClaims: async () => new Set<string>(),
       executor,
       recordClaim: vi.fn((key: string) => { recorded.push(key) }),
@@ -900,9 +910,11 @@ describe('datanet yield', () => {
         return sharedRubric
       }),
       voteScorerFor: () => ({ scorer: { scorePod: async (_pod, r) => { scorerRubric = r; return { score: 9, reason: 'good' } } } }),
-      getEpochVoteVolume: vi.fn(async (podIds: string[]) => {
-        expect(podIds.length).toBeGreaterThan(0) // called with the fetched pods
-        return { epoch: 7, totalRaw: 2n * 10n ** 18n }
+      onchain: onchainReads({
+        getEpochVoteVolume: vi.fn(async (podIds: string[]) => {
+          expect(podIds.length).toBeGreaterThan(0) // called with the fetched pods
+          return { epoch: 7, totalRaw: 2n * 10n ** 18n }
+        }),
       }),
     })
     const report = await runCycle(yieldCfg, 'c1', d)
@@ -923,7 +935,7 @@ describe('datanet yield', () => {
     const recordActivity = vi.fn()
     const d = deps({
       recordActivity,
-      getEpochVoteVolume: vi.fn(async () => { throw new Error('rpc down') }),
+      onchain: onchainReads({ getEpochVoteVolume: vi.fn(async () => { throw new Error('rpc down') }) }),
     })
     const report = await runCycle(yieldCfg, 'c1', d)
     expect(report.datanets[0].error).toBeUndefined()      // per-datanet isolation held
@@ -938,8 +950,10 @@ describe('datanet yield', () => {
     // of its own (activity rows are scrubbed on write; the snapshot is not). An RPC
     // error can echo the full provider URL including the embedded API key.
     const d = deps({
-      getEpochVoteVolume: vi.fn(async () => {
-        throw new Error('Invalid URL: https://eth-mainnet.g.alchemy.com/v2/SUPERSECRETKEY123')
+      onchain: onchainReads({
+        getEpochVoteVolume: vi.fn(async () => {
+          throw new Error('Invalid URL: https://eth-mainnet.g.alchemy.com/v2/SUPERSECRETKEY123')
+        }),
       }),
     })
     const report = await runCycle(yieldCfg, 'c1', d)
@@ -948,10 +962,27 @@ describe('datanet yield', () => {
     expect(reason).toContain('alchemy.com') // host survives; only the key is scrubbed
   })
 
-  it('dep absent (no RPC): yield reported unavailable WITHOUT a failure reason', async () => {
+  it('onchain absent (no RPC): yield reported unavailable WITHOUT a failure reason', async () => {
     const recordActivity = vi.fn()
     const report = await runCycle(yieldCfg, 'c1', deps({ recordActivity }))
     expect(report.datanetEconomics[0].epochVoteVolume).toBeNull()
     expect(report.datanetEconomics[0].unavailableReason).toBeUndefined() // not wired ≠ failed
+  })
+
+  it('onchain present but wallet tier absent: yield still works, voter claims + balance pre-check stay off', async () => {
+    // RPC-only node (wallet address underivable): the RPC tier is wired, the wallet tier is not.
+    const executeVoterClaim = vi.fn()
+    const d = deps({
+      onchain: onchainReads({ getEpochVoteVolume: async () => ({ epoch: 7, totalRaw: 10n ** 18n }) }),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+        executeClaim: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xc' })),
+        executeVoterClaim,
+      } as unknown as CycleDeps['executor'],
+    })
+    const report = await runCycle(yieldCfg, 'c-rpc-only', d)
+    expect(report.datanetEconomics[0].epochVoteVolume).toBe(1) // RPC tier active
+    expect(executeVoterClaim).not.toHaveBeenCalled()           // wallet tier off → no voter-claim scan
   })
 })

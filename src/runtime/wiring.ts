@@ -4,7 +4,7 @@
 // index.ts stays a thin shell: env, service construction, argv dispatch, signals.
 import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
-import type { CycleDeps, CycleReport } from './cycle.js'
+import type { CycleDeps, CycleReport, OnchainReads } from './cycle.js'
 import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
 import type { VoterPod, PodScorer } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
@@ -307,6 +307,41 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     })
   }
 
+  // On-chain reads are wired PRESENT-OR-ABSENT AS A UNIT — the RPC decision is made
+  // ONCE here (not per field). The wallet-scoped tier (fee pre-check, voter emissions)
+  // nests the same way: absent when the wallet address could not be derived at startup.
+  const rpcUrl = w.rpcUrl
+  const walletAddress = w.walletAddress
+  const onchain: OnchainReads | undefined = rpcUrl
+    ? {
+        // Per-datanet emission-yield volume — read-only, needs RPC alone.
+        getEpochVoteVolume: (podIds) => reader.epochVoteVolume(rpcUrl, podIds),
+        ...(walletAddress
+          ? {
+              wallet: {
+                address: walletAddress,
+                readTokenBalance: (token: string, owner: string) => reader.tokenBalance(rpcUrl, token, owner),
+                // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod
+                // set comes from our executed-vote activity (the wallet doesn't own them, so
+                // they're absent from the owner Transfer-log cache); claimable (pod,epoch) is
+                // then detected on-chain. RPC-only — no platform-API fallback exists.
+                getVoterEmissionsDue: async () => {
+                  const votedPodIds = [...new Set(
+                    cycleActivity() // per-cycle snapshot — no extra table scan for the claim phase
+                      .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
+                      .map((e) => e.podId as string),
+                  )]
+                  // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
+                  // describes publisher/mint emissions only). Enriching here causes readClaimedToken
+                  // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
+                  return reader.voterClaimableOnchain(rpcUrl, walletAddress, votedPodIds, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+                },
+              },
+            }
+          : {}),
+      }
+    : undefined
+
   return {
     dataDir: w.dataDir,
     topN: 12,
@@ -404,25 +439,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     // the first run backfill history from REPPO_EMISSIONS_FLOOR_EPOCH — without it, the
     // fixed 3-epoch window permanently hid older unclaimed emissions (operator report:
     // "claimed once, then only manual claims worked").
-    getEmissionsDue: async () => enrichTokens((w.rpcUrl && w.walletAddress)
-      ? await reader.claimableOnchain(w.rpcUrl, w.walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+    getEmissionsDue: async () => enrichTokens((rpcUrl && walletAddress)
+      ? await reader.claimableOnchain(rpcUrl, walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
       : (await reader.emissionsDue()).pods),
-    // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod set comes
-    // from our executed-vote activity (the wallet doesn't own them, so they're absent from the
-    // owner Transfer-log cache); claimable (pod,epoch) is then detected on-chain. RPC-only —
-    // no platform-API fallback exists for voter claims.
-    getVoterEmissionsDue: async () => {
-      if (!w.rpcUrl || !w.walletAddress) return []
-      const votedPodIds = [...new Set(
-        cycleActivity() // per-cycle snapshot — no extra table scan for the claim phase
-          .filter((e) => e.kind === 'vote' && e.status === 'executed' && e.podId)
-          .map((e) => e.podId as string),
-      )]
-      // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
-      // describes publisher/mint emissions only). Enriching here causes readClaimedToken
-      // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
-      return reader.voterClaimableOnchain(w.rpcUrl, w.walletAddress, votedPodIds, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
-    },
     seenClaims: async () => new Set(w.dedup.getClaimedKeys()),
     recordActivity: (entry) => {
       try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
@@ -445,20 +464,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     recordGrant: (id) => w.dedup.recordGrant(id),
     revokeGrant: (id) => w.dedup.removeGrant(id),
     supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
-    // Wallet ERC20 balance reader for the NON-REPPO access-fee pre-check (cycle.ts). Wired
-    // ONLY when both an RPC URL and the wallet address are known — same RPC the CLI uses.
-    // When omitted (no RPC), the cycle skips the pre-check and lets the CLI fail closed.
-    ...(w.rpcUrl && w.walletAddress
-      ? {
-          walletAddress: w.walletAddress,
-          readTokenBalance: (token: string, owner: string) => reader.tokenBalance(w.rpcUrl as string, token, owner),
-        }
-      : {}),
-    // Per-datanet emission-yield volume reader — a read-only call, so only rpcUrl is
-    // needed (no wallet address required, unlike the balance reader above).
-    ...(w.rpcUrl
-      ? { getEpochVoteVolume: (podIds: string[]) => reader.epochVoteVolume(w.rpcUrl as string, podIds) }
-      : {}),
+    ...(onchain ? { onchain } : {}),
   }
 }
 

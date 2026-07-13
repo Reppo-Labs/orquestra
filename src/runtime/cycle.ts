@@ -66,6 +66,37 @@ async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: Cy
   }
 }
 
+/** Wallet-scoped on-chain reads — the tier of OnchainReads that needs the node's wallet
+ *  address on top of an RPC URL. Present-or-absent AS A UNIT: wiring derives the address
+ *  once at startup (it can be unknown even with RPC configured, e.g. a failed
+ *  `reppo query balance`), and everything here is off together when it is. */
+export interface OnchainWalletReads {
+  /** This node's wallet address — the `owner` for readTokenBalance's fee pre-check. */
+  address: string
+  /** Read the wallet's RAW (un-scaled) balance of an ERC20 token (src/reppo/reader.ts).
+   *  Used to pre-check a NON-REPPO access fee BEFORE attempting a grant the CLI would
+   *  otherwise reject after spending gas. When the wallet tier is absent, the pre-check
+   *  is skipped and the grant is attempted anyway — the CLI still fails closed on an
+   *  underfunded wallet. Only the clean per-datanet skip-with-reason is lost. */
+  readTokenBalance(token: string, owner: string): Promise<bigint>
+  /** Claimable VOTER emissions (pods the wallet voted on, not owned). RPC-only — no
+   *  platform-API fallback exists. Claimed via executor.executeVoterClaim. */
+  getVoterEmissionsDue(): Promise<ClaimableEmission[]>
+}
+
+/** RPC-backed reads, present-or-absent AS A UNIT (`onchain?: OnchainReads`): wiring
+ *  decides ONCE whether an RPC URL is configured instead of scattering per-field
+ *  optionals. Absence ⇒ every on-chain feature quietly degrades exactly as before
+ *  (yield unavailable, no voter-claim scan, no fee pre-check). */
+export interface OnchainReads {
+  /** Σ current-epoch vote weight across the given pods (raw 18-dec) + the epoch read.
+   *  A throw ⇒ yield is reported as unavailable — never treated as zero volume, never
+   *  aborts the datanet. */
+  getEpochVoteVolume(podIds: string[]): Promise<{ epoch: number; totalRaw: bigint }>
+  /** Wallet-scoped tier — absent when the wallet address could not be derived. */
+  wallet?: OnchainWalletReads
+}
+
 export interface CycleDeps {
   dataDir: string
   topN: number
@@ -87,10 +118,8 @@ export interface CycleDeps {
   /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
    *  top-up rather than coercing to 0 (which would over-lock the full target). */
   getVeReppo(): Promise<number | null>
-  /** Σ current-epoch vote weight across the given pods (raw 18-dec) + the epoch read.
-   *  Optional: wirings without RPC omit it. A throw or absence ⇒ yield is reported as
-   *  unavailable — never treated as zero volume, never aborts the datanet. */
-  getEpochVoteVolume?(podIds: string[]): Promise<{ epoch: number; totalRaw: bigint }>
+  /** On-chain reads — absent as a unit on an RPC-less node. */
+  onchain?: OnchainReads
   executor: WalletExecutor
   ledger: BudgetLedger
   recordVote(datanetId: string, podId: string): void
@@ -99,9 +128,6 @@ export interface CycleDeps {
   registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
   recordMint(datanetId: string, canonicalKey: string): void
   getEmissionsDue(): Promise<ClaimableEmission[]>
-  /** Claimable VOTER emissions (pods the wallet voted on, not owned). Optional: wirings
-   *  without RPC omit it. Claimed via executor.executeVoterClaim. */
-  getVoterEmissionsDue?(): Promise<ClaimableEmission[]>
   /** Claimed (podId:epoch) keys — global, not datanet-scoped (claims are keyed
    *  on-chain by pod+epoch only). */
   seenClaims(): Promise<Set<string>>
@@ -122,17 +148,6 @@ export interface CycleDeps {
    *  charges a non-REPPO access fee is skipped with a recorded reason rather than firing
    *  an unsupported flag. Defaults to false (fail-closed) when omitted. */
   supportsNonReppoGrants?: boolean
-  /** Read the wallet's RAW (un-scaled) balance of an ERC20 token. Injected for testability
-   *  and wired in production from the configured RPC URL + wallet address (src/reppo/
-   *  tokenBalance.ts). Used to pre-check a NON-REPPO access fee against the wallet balance
-   *  BEFORE attempting a grant the CLI would otherwise reject after spending gas. When
-   *  ABSENT (no RPC configured), the balance pre-check is skipped and the grant is attempted
-   *  anyway — the CLI still fails closed on an underfunded wallet. Only the clean
-   *  per-datanet skip-with-reason is lost, not the safety. */
-  readTokenBalance?(token: string, owner: string): Promise<bigint>
-  /** This node's wallet address — the `owner` passed to readTokenBalance for the balance
-   *  pre-check. Omitted (with readTokenBalance) when no RPC/wallet is configured. */
-  walletAddress?: string
 }
 
 /** Persist a structured skip row (kind:'skip') — the one shape every skip path shares.
@@ -193,12 +208,14 @@ async function ensureSubnetAccess(
   // token). RAW-to-RAW: compare the rubric's raw integer amount (amountRaw, straight
   // from the CLI's accessFeePrimaryToken.raw) against the raw on-chain balance — no
   // float scaling, so no precision over-estimate and no decimals=0 defeat.
-  // When no reader is wired (no RPC), fall through — the CLI still fails closed.
-  if (feeToken && deps.readTokenBalance && deps.walletAddress) {
+  // When the wallet tier is not wired (no RPC / no address), fall through — the CLI
+  // still fails closed.
+  const wallet = deps.onchain?.wallet
+  if (feeToken && wallet) {
     const required = BigInt(feeToken.amountRaw)
     let balance: bigint | undefined
     try {
-      balance = await deps.readTokenBalance(feeToken.address, deps.walletAddress)
+      balance = await wallet.readTokenBalance(feeToken.address, wallet.address)
     } catch (e) {
       // A failed balance read is NOT proof of insufficiency — don't skip on it.
       // Fall through to the grant attempt (CLI fails closed); just note the read miss.
@@ -439,7 +456,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         let epochVotes: { epoch: number; totalRaw: bigint } | null = null
         let volumeReadError: string | undefined
         try {
-          epochVotes = (await deps.getEpochVoteVolume?.(pods.map((p) => p.podId))) ?? null
+          epochVotes = (await deps.onchain?.getEpochVoteVolume(pods.map((p) => p.podId))) ?? null
         } catch (e) {
           // Redact BEFORE the text leaves this scope: unavailableReason rides the
           // snapshot to the dashboard, a path with no redaction of its own (unlike
@@ -630,7 +647,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // never collide with owner-claim keys for the same (pod,epoch).
     let voterDue: ClaimableEmission[] = []
     try {
-      voterDue = (await deps.getVoterEmissionsDue?.()) ?? []
+      voterDue = (await deps.onchain?.wallet?.getVoterEmissionsDue()) ?? []
     } catch (e) {
       console.error(`orquestra: voter emissions-due query failed, voter-claim skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
     }

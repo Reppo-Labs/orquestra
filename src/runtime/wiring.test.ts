@@ -400,6 +400,30 @@ describe('buildCycleDeps', () => {
     expect(readActivity).toHaveBeenCalledTimes(2)
   })
 
+  it('wires onchain reads as a UNIT: absent without RPC; RPC-only gets the read tier; RPC+wallet adds the wallet tier', async () => {
+    // No RPC → no onchain collaborator at all (yield, voter claims, fee pre-check all off).
+    expect(buildCycleDeps(wiring()).onchain).toBeUndefined()
+    // RPC only (wallet address underivable) → read tier present, wallet tier absent.
+    const rpcOnly = buildCycleDeps(wiring({ rpcUrl: 'http://rpc' }))
+    expect(rpcOnly.onchain).toBeDefined()
+    expect(rpcOnly.onchain!.wallet).toBeUndefined()
+    // RPC + wallet → both tiers; reads route through the reader with the wired RPC/wallet.
+    const epochVoteVolume = vi.fn(async () => ({ epoch: 3, totalRaw: 5n }))
+    const tokenBalance = vi.fn(async () => 7n)
+    const voterClaimableOnchain = vi.fn(async () => [])
+    const full = buildCycleDeps(wiring({
+      rpcUrl: 'http://rpc', walletAddress: '0xW',
+      reader: fakeReader({ epochVoteVolume, tokenBalance, voterClaimableOnchain }),
+    }))
+    expect(await full.onchain!.getEpochVoteVolume(['1'])).toEqual({ epoch: 3, totalRaw: 5n })
+    expect(epochVoteVolume).toHaveBeenCalledWith('http://rpc', ['1'])
+    expect(full.onchain!.wallet!.address).toBe('0xW')
+    expect(await full.onchain!.wallet!.readTokenBalance('0xT', '0xW')).toBe(7n)
+    expect(tokenBalance).toHaveBeenCalledWith('http://rpc', '0xT', '0xW')
+    await full.onchain!.wallet!.getVoterEmissionsDue()
+    expect(voterClaimableOnchain).toHaveBeenCalledWith('http://rpc', '0xW', [], dir, { floorEpoch: undefined })
+  })
+
   it('video cap is GLOBAL per cycle, not per-datanet: beginCycle arms it once', async () => {
     // videoPodsPerCycle=1, two datanets each with a video pod. Without a reset between cycles
     // and with a per-datanet local counter, BOTH would be marked. The closure budget is shared
