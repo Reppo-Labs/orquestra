@@ -36,7 +36,8 @@ import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
 import { startDashboard } from './dashboard/server.js'
-import { backfillMintReppoSpent } from './dashboard/activityLog.js'
+import { backfillMintReppoSpent, backfillClaimDatanets } from './dashboard/activityLog.js'
+import { defaultReppoReader } from './reppo/reader.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -313,6 +314,14 @@ async function start(): Promise<void> {
   // Fire-and-forget: reconcile reppoSpent for historical mints that predate the column.
   // Upgrading operators get accurate lifetime PnL without manual intervention.
   backfillMintReppoSpent(DATA_DIR, rpcUrl || undefined).catch(() => {/* already logged inside */})
+  // Fire-and-forget: attribute historical owner claims recorded with datanetId=''
+  // (mint-pod --json returns no podId, so the runtime enrichment couldn't map our own
+  // pods) — per-datanet earn views under-counted while the claimed total was correct.
+  backfillClaimDatanets(
+    DATA_DIR,
+    Object.keys(config.datanets),
+    async (id) => (await defaultReppoReader.datanetPodVotes(id)).map((p) => p.podId),
+  ).catch(() => {/* best-effort backfill; the runtime enrichment covers new claims */})
   // Live node-default model for the adapters: resolved at each discover() from the
   // SAME tick-reloaded, last-good config every other live-model consumer uses
   // (buildTick keeps w.config on a failed reload), so adapters never diverge from the

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendActivity, readActivity, readActivitySince, sumClaimedReppo, type ActivityEntry } from './activityLog.js'
+import { appendActivity, readActivity, readActivitySince, sumClaimedReppo, backfillClaimDatanets, type ActivityEntry } from './activityLog.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-act-')) })
@@ -106,5 +106,65 @@ describe('activityLog (sqlite)', () => {
     // new appends coexist with imported history; import does not re-run
     appendActivity(dir, entry({ podId: 'fresh', ts: '2026-06-03T00:00:00.000Z' }))
     expect(readActivity(dir, { limit: 10 }).map((r) => r.podId)).toEqual(['fresh', 'legacy2', 'legacy1'])
+  })
+})
+
+describe('backfillClaimDatanets', () => {
+  // Historical owner-claim rows have datanetId='' (the emissions scan returns no datanet
+  // and mint rows carry no podId, so the runtime enrichment could not resolve them).
+  // The backfill attributes them: first from vote/mint activity, then by datanet
+  // membership via the injected pod-list fetcher.
+  it('attributes unattributed executed claims from activity first, then datanet membership', async () => {
+    appendActivity(dir, entry({ kind: 'vote', datanetId: '2', podId: 'p-act', ts: '2026-06-01T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-act', reppoClaimed: 5, ts: '2026-06-02T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-member', reppoClaimed: 7, ts: '2026-06-03T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-lost', reppoClaimed: 1, ts: '2026-06-04T00:00:00.000Z' }))
+    const fetches: string[] = []
+    await backfillClaimDatanets(dir, ['2', '9'], async (id) => {
+      fetches.push(id)
+      return id === '9' ? ['p-member'] : []
+    })
+    const byPod = new Map(readActivity(dir, { limit: 10 }).map((r) => [r.podId, r.datanetId]))
+    expect(byPod.get('p-act')).toBe('2')     // resolved from the vote row, no fetch needed
+    expect(byPod.get('p-member')).toBe('9')  // resolved by datanet membership
+    expect(byPod.get('p-lost')).toBe('')     // unresolvable stays unattributed (never guessed)
+    expect(fetches.sort()).toEqual(['2', '9']) // membership fetched once per configured datanet
+  })
+
+  it("touches ONLY executed claim rows — votes and failed claims with empty datanet stay ''", async () => {
+    appendActivity(dir, entry({ kind: 'vote', datanetId: '', podId: 'p-x', ts: '2026-06-01T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', status: 'error', datanetId: '', podId: 'p-x', ts: '2026-06-02T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-x', reppoClaimed: 3, ts: '2026-06-03T00:00:00.000Z' }))
+    await backfillClaimDatanets(dir, ['9'], async () => ['p-x'])
+    const rows = readActivity(dir, { limit: 10 }) // newest-first
+    expect(rows.map((r) => [r.kind, r.status, r.datanetId])).toEqual([
+      ['claim', 'executed', '9'], // the only row the backfill may touch
+      ['claim', 'error', ''],
+      ['vote', 'executed', ''],
+    ])
+  })
+
+  it('stops fetching membership once every claim podId is resolved (early exit)', async () => {
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-m', reppoClaimed: 2 }))
+    const fetches: string[] = []
+    await backfillClaimDatanets(dir, ['2', '9'], async (id) => { fetches.push(id); return ['p-m'] })
+    expect(fetches).toEqual(['2']) // '9' never fetched
+  })
+
+  it('is a no-op (zero fetches) when every executed claim already has a datanet', async () => {
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '5', podId: 'p1', reppoClaimed: 2 }))
+    const fetches: string[] = []
+    await backfillClaimDatanets(dir, ['5'], async (id) => { fetches.push(id); return [] })
+    expect(fetches).toEqual([])
+  })
+
+  it('a failed pod-list fetch skips that datanet but still attributes via the others', async () => {
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-member', reppoClaimed: 7 }))
+    await backfillClaimDatanets(dir, ['2', '9'], async (id) => {
+      if (id === '2') throw new Error('rpc down')
+      return ['p-member']
+    })
+    const row = readActivity(dir, { limit: 10 })[0]!
+    expect(row.datanetId).toBe('9')
   })
 })
