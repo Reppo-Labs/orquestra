@@ -254,9 +254,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       const model = effectiveDefaultModel(w)
       if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
       // Mint prompts never render the vote-economics block (yield is a where-to-vote
-      // signal): the cycle attaches economics.currentYield only to a vote-scoped rubric
-      // CLONE (cycle.ts), so the shared rubric arriving here never carries it — no
-      // defensive strip needed at this boundary.
+      // signal): `rub` is a MintRubric, which structurally cannot carry
+      // economics.currentYield (rubric/types.ts) — the invariant is a compile-time
+      // guarantee, no defensive strip needed at this boundary.
       const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
       const candidateBase: CandidateScorer = {
         scoreCandidate: (c, r) => {
