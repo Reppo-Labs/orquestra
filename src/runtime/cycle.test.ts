@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore } from './cycle.js'
+import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -66,6 +66,12 @@ const fakeActivity = (over: Partial<ActivityStore> = {}): ActivityStore => ({
   record: vi.fn(),
   ...over,
 })
+// Scorers fake: everything scores 9/'good' unless a test overrides it.
+const fakeScorers = (over: Partial<Scorers> = {}): Scorers => ({
+  voteScorerFor: () => ({ scorer: { scorePod: async () => ({ score: 9, reason: 'good' }) } }),
+  candidateScorer: { scoreCandidate: async () => ({ score: 9, reason: 'good' }) },
+  ...over,
+})
 
 function deps(over: Partial<CycleDeps> = {}): CycleDeps {
   const adapter: DatanetAdapter = {
@@ -80,8 +86,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
       filter: { currentEpoch: '100', ownPodIds: [], votedPodIds: [] },
     })),
     getAdapter: (adapterId: string) => (adapterId === 'hyperliquid' ? adapter : undefined),
-    voteScorerFor: () => ({ scorer: { scorePod: async () => ({ score: 9, reason: 'good' }) } }),
-    candidateScorer: { scoreCandidate: async () => ({ score: 9, reason: 'good' }) },
+    scorers: fakeScorers(),
     dedup: fakeDedup(),
     getVeReppo: async () => 0,
     executor: {
@@ -101,7 +106,7 @@ describe('runCycle video-pod skips', () => {
     const d = deps({
       activity: fakeActivity({ record: recordActivity }),
       // Single vote-only datanet; its only pod throws (e.g. a video ingest skip).
-      voteScorerFor: () => ({ scorer: { scorePod: async () => { throw new Error('Gemini Files API file never reached ACTIVE (state FAILED)') } } }),
+      scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod: async () => { throw new Error('Gemini Files API file never reached ACTIVE (state FAILED)') } } }) }),
     })
     const cfg = StrategyConfigSchema.parse({
       horizonDays: 30, cadenceHours: 6,
@@ -259,7 +264,7 @@ describe('runCycle', () => {
   it('skips vote scoring entirely when the per-cycle vote budget is already exhausted', async () => {
     const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
     const d = deps({
-      voteScorerFor: () => ({ scorer: { scorePod } }),
+      scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod } }) }),
       ledger: { startCycle: vi.fn(), canVote: () => false, canMint: () => true } as unknown as CycleDeps['ledger'],
     })
     await runCycle(config, 'c-novotebudget', d)
@@ -309,7 +314,7 @@ describe('runCycle', () => {
       ...config,
       datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
     })
-    const d = deps({ candidateScorer: { scoreCandidate: async () => ({ score: 1, reason: 'weak' }) } }) // below aggressive like-threshold
+    const d = deps({ scorers: fakeScorers({ candidateScorer: { scoreCandidate: async () => ({ score: 1, reason: 'weak' }) } }) }) // below aggressive like-threshold
     await runCycle(cfg, 'c-allrejected', d)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
     expect(skipReasons(d.activity.record as any).some((r) => /discovered but none passed scoring\/dedup/.test(r))).toBe(true)
@@ -877,7 +882,7 @@ describe('runCycle per-datanet vote scorer', () => {
   })
 
   it('records a skip and casts no vote when voteScorerFor returns { skip }', async () => {
-    const d = deps({ voteScorerFor: () => ({ skip: 'no API key for google' }) })
+    const d = deps({ scorers: fakeScorers({ voteScorerFor: () => ({ skip: 'no API key for google' }) }) })
     const report = await runCycle(config, 'c-skip', d)
     for (const dn of report.datanets) expect(dn.votes).toHaveLength(0)
     expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
@@ -910,7 +915,7 @@ describe('datanet yield', () => {
         sharedRubric = rubric({ datanetId: id })
         return sharedRubric
       }),
-      voteScorerFor: () => ({ scorer: { scorePod: async (_pod, r) => { scorerRubric = r; return { score: 9, reason: 'good' } } } }),
+      scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod: async (_pod, r) => { scorerRubric = r; return { score: 9, reason: 'good' } } } }) }),
       onchain: onchainReads({
         getEpochVoteVolume: vi.fn(async (podIds: string[]) => {
           expect(podIds.length).toBeGreaterThan(0) // called with the fetched pods

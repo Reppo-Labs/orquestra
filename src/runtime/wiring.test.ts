@@ -669,13 +669,13 @@ describe('buildCycleDeps voteScorerFor', () => {
   it('resolves a scorer for a datanet using the node default provider', () => {
     const w = wiring({ config: cfgWith({}) })
     const deps = buildCycleDeps(w)
-    expect('scorer' in deps.voteScorerFor('9')).toBe(true)
+    expect('scorer' in deps.scorers.voteScorerFor('9')).toBe(true)
   })
 
   it('skips a datanet whose policy model has no key in the registry', () => {
     const w = wiring({ config: cfgWith({ model: { provider: 'google', model: 'gemini-3-pro' } }) })
     const deps = buildCycleDeps(w)
-    const r = deps.voteScorerFor('9')
+    const r = deps.scorers.voteScorerFor('9')
     expect('skip' in r).toBe(true)
     expect((r as { skip: string }).skip).toContain('google')
   })
@@ -693,11 +693,11 @@ describe('buildCycleDeps voteScorerFor', () => {
       notes: '',
     })
     const deps = buildCycleDeps(wiring({ config: cfg }))
-    const a = deps.voteScorerFor('9'), b = deps.voteScorerFor('10')
+    const a = deps.scorers.voteScorerFor('9'), b = deps.scorers.voteScorerFor('10')
     expect('scorer' in a && 'scorer' in b).toBe(true)
     expect((a as { scorer: unknown }).scorer).toBe((b as { scorer: unknown }).scorer)
     // a repeat call for the same datanet returns the same cached object
-    expect((deps.voteScorerFor('9') as { scorer: unknown }).scorer).toBe((a as { scorer: unknown }).scorer)
+    expect((deps.scorers.voteScorerFor('9') as { scorer: unknown }).scorer).toBe((a as { scorer: unknown }).scorer)
   })
 
   it('distinct resolved models get distinct scorers', () => {
@@ -712,7 +712,7 @@ describe('buildCycleDeps voteScorerFor', () => {
       notes: '',
     })
     const deps = buildCycleDeps(wiring({ config: cfg }))
-    const a = deps.voteScorerFor('9'), c = deps.voteScorerFor('11')
+    const a = deps.scorers.voteScorerFor('9'), c = deps.scorers.voteScorerFor('11')
     expect((a as { scorer: unknown }).scorer).not.toBe((c as { scorer: unknown }).scorer)
   })
 
@@ -734,7 +734,7 @@ describe('buildCycleDeps voteScorerFor', () => {
       defaultProvider: 'virtuals',
       defaultModel: 'claude-opus-4-8',
     })
-    const r = buildCycleDeps(w).voteScorerFor('9')
+    const r = buildCycleDeps(w).scorers.voteScorerFor('9')
     expect('scorer' in r).toBe(true) // resolves via the config default (usepod, keyed)
   })
 })
@@ -770,7 +770,7 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
       economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
     } as unknown as DatanetRubric
     const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
-    await deps.candidateScorer.scoreCandidate(candidate, rubric)
+    await deps.scorers.candidateScorer.scoreCandidate(candidate, rubric)
     // resolveModel was driven by the LIVE effective default (config.defaultModel = usepod),
     // NOT the env default (virtuals). Before the change it captured w.model (virtuals).
     expect(h.resolveModel).toHaveBeenCalledWith('usepod', 'tok', 'deepseek-v3.2')
@@ -806,7 +806,7 @@ describe('buildCycleDeps mint candidate scorer follows config.defaultModel', () 
       economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 500, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
     } as unknown as DatanetRubric
     const candidate = { canonicalKey: 'k1', podName: 'n', podDescription: 'd', dataset: { a: 1 }, sourceUrl: 'https://x/1' } as unknown as CandidatePod
-    await deps.candidateScorer.scoreCandidate(candidate, rubric)
+    await deps.scorers.candidateScorer.scoreCandidate(candidate, rubric)
     expect(h.generateObjectWithRetry).toHaveBeenCalled()
     // generateObjectWithRetry(model, schema, system, { prompt }) — the block must appear nowhere.
     const [, , system, gen] = h.generateObjectWithRetry.mock.calls[0] as unknown as [unknown, unknown, string, { prompt?: string }]

@@ -124,6 +124,18 @@ export interface Dedup {
   grants?: GrantCache
 }
 
+/** LLM scoring surface. voteScorerFor routes each datanet to its model (per-datanet
+ *  `model` override, else the live node default) with a build-once scorer cache keyed
+ *  by the RESOLVED provider:model; candidateScorer scores mint candidates on the live
+ *  effective default. Built by src/runtime/scorers.ts. */
+export interface Scorers {
+  /** Returns the scorer for THIS datanet, or a skip reason (e.g. no API key for the
+   *  datanet's chosen provider) — the cycle records the skip and casts no votes for
+   *  the datanet, reusing the per-datanet skip mechanism. */
+  voteScorerFor(datanetId: string): { scorer: PodScorer } | { skip: string }
+  candidateScorer: CandidateScorer
+}
+
 /** How the cycle tells the world what it did: the activity log rows the dashboard is
  *  built from, plus the per-cycle arming hook and the platform vote registration. */
 export interface ActivityStore {
@@ -145,12 +157,8 @@ export interface CycleDeps {
   getRubric(datanetId: string): Promise<DatanetRubric>
   getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
   getAdapter(adapterId: string): DatanetAdapter | undefined
-  /** Per-datanet vote scorer factory. Returns the scorer to use for THIS datanet, or a
-   *  skip reason (e.g. no API key for the datanet's chosen provider) — the cycle records
-   *  the skip and casts no votes for the datanet, reusing the per-datanet skip mechanism.
-   *  Resolved per datanet so each can run on its own provider/model (wiring.ts). */
-  voteScorerFor(datanetId: string): { scorer: PodScorer } | { skip: string }
-  candidateScorer: CandidateScorer
+  /** LLM scoring (vote scorer routing + mint candidate scoring). */
+  scorers: Scorers
   /** Persistent already-done state (votes/mints/claims/grants). */
   dedup: Dedup
   /** Live veREPPO balance (for stake top-up). null on a failed read — the caller SKIPS the
@@ -464,7 +472,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // skip so an otherwise-idle datanet still explains why it produced nothing.
         recordSkip('per-cycle vote budget/rate exhausted — skipping vote scoring', { activity: votes.length === 0 })
       } else if (policy.vote && rubric.canVote) {
-        const scorerResult = deps.voteScorerFor(datanetId)
+        const scorerResult = deps.scorers.voteScorerFor(datanetId)
         if ('skip' in scorerResult) {
           // Per-datanet isolation: an unresolvable scoring model (e.g. no API key for the
           // datanet's chosen provider) skips THIS datanet's voting with a recorded reason —
@@ -560,7 +568,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           const minScore = STRICTNESS_THRESHOLDS[policy.strictness].like
           // toMintRubric: the mint path only ever holds a MintRubric (never yield).
           const intents = await selectMints(datanetId, candidates, toMintRubric(rubric), {
-            dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.candidateScorer,
+            dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.scorers.candidateScorer,
             mintMode: policy.mintMode,
           })
           // Surface the otherwise-silent case where the adapter found candidates but

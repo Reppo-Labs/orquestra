@@ -5,14 +5,11 @@
 import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
 import type { CycleDeps, CycleReport, OnchainReads } from './cycle.js'
-import type { CandidateScorer, DatanetAdapter } from '../adapter/types.js'
-import type { VoterPod, PodScorer } from '../voter/types.js'
+import type { DatanetAdapter } from '../adapter/types.js'
+import type { VoterPod } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
-import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
-import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
-import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
-import { effectiveDefault } from '../llm/effectiveDefault.js'
-import { resolveModel } from '../llm/model.js'
+import { buildScorers, effectiveDefaultModel } from './scorers.js'
+import type { ModelResolver } from '../llm/resolveScoringModel.js'
 import { detectContentType, isVideoType, isGenericBinaryType } from '../llm/contentType.js'
 import { resolveDriveUrl } from '../llm/driveResolve.js'
 import type { LlmProvider } from '../llm/model.js'
@@ -134,22 +131,6 @@ export interface CycleWiring {
   reader?: ReppoReader
 }
 
-/** The LIVE node-default model: dashboard-selected `config.defaultModel` when its provider is
- *  keyed, else the env default (`w.defaultProvider`/`w.defaultModel`). Read from w.config each
- *  call so a dashboard default change takes effect on the next cycle (hot-reload), mirroring the
- *  vote scorer + chat. null when even the effective default has no key — callers that can't
- *  proceed without a model (mint scorer, reflection) skip/throw, matching their existing
- *  no-model behavior. Keys are env-only (registry); never read from config. */
-function effectiveDefaultModel(w: CycleWiring): LanguageModel | null {
-  const eff = effectiveDefault({
-    configDefault: w.config.defaultModel,
-    registry: w.providerKeyRegistry,
-    envProvider: w.defaultProvider,
-    envModel: w.defaultModel,
-  })
-  return eff.key ? (w.resolveModel ?? resolveModel)(eff.provider, eff.key, eff.model) : null
-}
-
 /** Floor for the on-chain emissions scans: REPPO_EMISSIONS_FLOOR_EPOCH (the epoch the node
  *  first existed) bounds the first-run deep scan so it doesn't crawl from epoch 1 and storm
  *  the RPC. Read per call so a restart with a new value takes effect. */
@@ -173,92 +154,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     const p = w.config.datanets[id]?.adapterParams ?? {}
     return { brief: liveBrief(), ...p }
   }
-  // Per-datanet learned-lessons block for the judge, read live from the DB so a new
-  // reflection or an operator veto/disable takes effect on the next decision.
-  const liveLessons = (id: string): string => {
-    try { return buildLessonsBlock(w.dataDir, id) } catch { return '' }
-  }
-
-  // Screen scorer + panel decorators are built ONCE. They read the brief and the
-  // deliberation settings live (via getters / liveBrief) so a hot-reload of either
-  // takes effect on the next decision without rebuilding anything.
-  const getDeliberation = () => w.config.deliberation
-  // Per-datanet vote scorer: resolve THIS datanet's model (its `model` override, else the
-  // node default) against the env key registry, then wrap in the panel exactly as before.
-  // A skip (no key for the chosen provider) is returned straight to the cycle, which
-  // records it per-datanet. isVideo:false here is only a model-resolution seam — it picks
-  // the datanet-level TEXT scorer's model; video pods (detected + marked in
-  // getPodsAndFilter) re-resolve per pod to a Gemini model inside the scorer via modelCtx.
-  //
-  // Build-once cache: datanets sharing a resolved provider:model reuse one scorer
-  // (per datanet per cycle was rebuilding it). Safe across hot-reload — the scorer reads
-  // brief/deliberation/lessons live via getters (getLessons takes datanetId at call time),
-  // so the cached object stays correct. Skips are not cached (cheap, no scorer built).
-  const scorerCache = new Map<string, PodScorer>()
-  const voteScorerFor = (datanetId: string): { scorer: PodScorer } | { skip: string } => {
-    const policyModel = (w.config.datanets[datanetId] as { model?: { provider: LlmProvider; model: string } } | undefined)?.model
-    // The node default is the dashboard-selected config.defaultModel when its provider is
-    // keyed, else the env default (w.defaultProvider/w.defaultModel). Read live from w.config
-    // (hot-reloaded each cycle), so a dashboard default change takes effect on the next cycle.
-    const eff = effectiveDefault({
-      configDefault: w.config.defaultModel,
-      registry: w.providerKeyRegistry,
-      envProvider: w.defaultProvider,
-      envModel: w.defaultModel,
-    })
-    const resolved = resolveScoringModel({
-      policyModel, isVideo: false,
-      registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model,
-    }, w.resolveModel ?? resolveModel)
-    if ('skip' in resolved) return { skip: resolved.skip }
-    // Key by the effective provider:model (the datanet-level resolution is always the
-    // text model; video pods re-resolve per pod via modelCtx below): identical
-    // resolutions yield an identical scorer, so one build serves every such datanet.
-    const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${eff.provider}:${eff.model}`
-    let scorer = scorerCache.get(cacheKey)
-    if (!scorer) {
-      // modelCtx lets the screen scorer RE-RESOLVE to a Gemini model for a video pod (a
-      // video pod can't be scored on this datanet's text model). policyModel is fixed per
-      // cacheKey, so binding it into the cached scorer is correct (datanets sharing a key
-      // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
-      const modelCtx: ScorerModelCtx = {
-        registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model, policyModel,
-        resolveModel: w.resolveModel ?? resolveModel,
-      }
-      const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
-      scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      scorerCache.set(cacheKey, scorer)
-    }
-    return { scorer }
-  }
-  // Mint path is unchanged by per-datanet voting overrides (spec: override scopes to the
-  // voting scorer only). Score the DATASET (not just the summary line) on the node default
-  // model — otherwise every candidate scores low and nothing mints (src/minter/score.ts).
-  // The model is the LIVE effective default (config.defaultModel, hot-reloaded), resolved at
-  // scoreCandidate-call time — NOT captured at startup. A missing key (eff.key === '') THROWS,
-  // which selectMints catches per-candidate and records as a skip (parity with a scoring
-  // failure); it never aborts the datanet's mint batch. The screen scorer + panel are rebuilt
-  // per call against the live model — cheap (no SDK round-trip until scorePod/runPanel runs),
-  // and necessary because both capture `model` at construction.
-  const candidateScorer: CandidateScorer = {
-    scoreCandidate: (cand, rub) => {
-      const model = effectiveDefaultModel(w)
-      if (!model) throw new Error('no API key for the node default provider — mint candidate not scored')
-      // Mint prompts never render the vote-economics block (yield is a where-to-vote
-      // signal): `rub` is a MintRubric, which structurally cannot carry
-      // economics.currentYield (rubric/types.ts) — the invariant is a compile-time
-      // guarantee, no defensive strip needed at this boundary.
-      const mintScreenScorer = createLlmScorer(model, { brief: liveBrief })
-      const candidateBase: CandidateScorer = {
-        scoreCandidate: (c, r) => {
-          const { name, description } = candidateScoreInput(c)
-          return mintScreenScorer.scorePod({ podId: c.canonicalKey, validityEpoch: '', name, description }, r)
-        },
-      }
-      const panel = createPanelCandidateScorer(candidateBase, { model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
-      return panel.scoreCandidate(cand, rub)
-    },
-  }
+  // LLM scoring collaborator — the scorer cache + model routing live in scorers.ts,
+  // reading config live off `w` (hot-reload safe).
+  const scorers = buildScorers(w)
   // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
   // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
   // remaining budget in this closure and reset it once per cycle via beginCycle
@@ -426,8 +324,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       return { pods, filter: { currentEpoch, ownPodIds: [...ownSet], votedPodIds: voted } }
     },
     getAdapter: (id) => w.adapters.find((a) => a.id === id),
-    voteScorerFor,
-    candidateScorer,
+    scorers,
     // Persistent dedup — thin views over DedupState (SQLite). Grants are always
     // supported in production wiring, so the grant cache is always present.
     dedup: {
