@@ -31,9 +31,6 @@ export function createSportsAdapter(deps: SportsDeps = {}): DatanetAdapter {
   const lastFetchAt = new Map<string, number>() // keyed by feed-set fingerprint
   return {
     id: 'sports',
-    matches(_datanetId: string, _rubric: unknown): boolean {
-      return true // routing is config-driven by adapter id, same as gdelt
-    },
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
       const s = ctx.strategy as Partial<SportsStrategy> & { feeds?: string[]; maxAgeHours?: number } | undefined
       const strategy: SportsStrategy = {

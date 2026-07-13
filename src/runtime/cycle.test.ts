@@ -33,7 +33,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 function deps(over: Partial<CycleDeps> = {}): CycleDeps {
   const adapter: DatanetAdapter = {
-    id: 'hyperliquid', matches: () => true,
+    id: 'hyperliquid',
     discover: vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }]),
   }
   return {
@@ -242,7 +242,7 @@ describe('runCycle', () => {
   it('skips mint discovery when the mint budget is exhausted (no wasted adapter/LLM work)', async () => {
     const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'p', podDescription: 'd', dataset: {} }])
     const d = deps({
-      getAdapter: () => ({ id: 'hyperliquid', matches: () => true, discover }),
+      getAdapter: () => ({ id: 'hyperliquid', discover }),
       ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => false } as unknown as CycleDeps['ledger'],
     })
     await runCycle(config, 'c-nomintbudget', d)

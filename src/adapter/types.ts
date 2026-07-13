@@ -29,11 +29,10 @@ export interface AdapterContext {
   existingPodNames?: string[]
 }
 
-/** A pluggable per-datanet data source. The reference impl is `hyperliquid`. */
+/** A pluggable per-datanet data source. The reference impl is `hyperliquid`.
+ *  Routing is by `id` from the strategy config (see wiring.ts getAdapter). */
 export interface DatanetAdapter {
   id: string
-  /** does this adapter serve the given datanet? (by id mapping or domain) */
-  matches(datanetId: string, rubric: DatanetRubric): boolean
   /** source + label domain data into mint candidates. */
   discover(ctx: AdapterContext): Promise<CandidatePod[]>
 }

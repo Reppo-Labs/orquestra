@@ -33,9 +33,6 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
   const lastFetchAt = new Map<string, number>()
   return {
     id: 'gdelt',
-    matches(_datanetId: string, _rubric: unknown): boolean {
-      return true
-    },
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
       const s = ctx.strategy as Partial<GdeltStrategy> | undefined
       const strategy: GdeltStrategy = {

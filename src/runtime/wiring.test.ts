@@ -92,7 +92,7 @@ function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
     ledger: { startCycle: vi.fn(), state: {} } as unknown as CycleWiring['ledger'],
     executor: {} as CycleWiring['executor'],
     dedup: new DedupState(dir),
-    adapters: [{ id: 'gdelt', matches: () => true, discover: async () => [] }],
+    adapters: [{ id: 'gdelt', discover: async () => [] }],
     ...over,
   }
 }
