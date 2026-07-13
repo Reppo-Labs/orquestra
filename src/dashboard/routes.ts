@@ -112,7 +112,7 @@ const json = (status: number, body: unknown): ApiResponse => ({ status, body })
 // ── shared helpers (separate functions on purpose — they are seams of their own) ──
 
 /** A safe subset of the strategy config — explicitly whitelisted fields only. */
-export function safeConfig(dataDir: string): SafeStrategyConfig {
+function safeConfig(dataDir: string): SafeStrategyConfig {
   const text = readConfigText(dataDir)
   if (text === null) return {}
   try {
@@ -187,7 +187,7 @@ function defaultOnboardingTurn(model: LanguageModel): (m: CoreMessage[]) => Prom
  *  matches the proposal's fromValue (a manual edit landed since), the proposal is marked
  *  stale rather than clobbering the newer value. The reflection module never writes config
  *  — only this operator-driven path does. */
-export function decideProposal(dataDir: string, id: number, decision: 'accept' | 'reject'): ProposalDecisionView {
+function decideProposal(dataDir: string, id: number, decision: 'accept' | 'reject'): ProposalDecisionView {
   const prop = readProposals(dataDir).find((p) => p.id === id)
   if (!prop) return { ok: false, error: 'proposal not found' }
   if (prop.status !== 'pending') return { ok: false, error: `proposal already ${prop.status}` }

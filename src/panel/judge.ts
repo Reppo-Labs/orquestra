@@ -2,7 +2,7 @@
 // score+reason. Pure prompt builder + verdict schema; the model call is in
 // deliberate.ts.
 import { z } from 'zod'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { RubricPromptFields } from '../rubric/types.js'
 import type { PanelistVerdict } from './types.js'
 import { buildRubricBlock } from '../llm/prompt.js'
 
@@ -17,7 +17,7 @@ export const JudgeSchema = z.object({
  *  applies it. `missing` names personas whose call failed, so the judge knows the
  *  panel is partial. */
 export function buildJudgePrompt(
-  input: { name: string; description: string; rubric: DatanetRubric; brief?: string; lessons?: string; economics?: string },
+  input: { name: string; description: string; rubric: RubricPromptFields; brief?: string; lessons?: string; economics?: string },
   panelists: PanelistVerdict[],
   missing: string[] = [],
 ): { system: string; prompt: string } {

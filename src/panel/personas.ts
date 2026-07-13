@@ -2,7 +2,7 @@
 // pod/candidate text under opposed stances; the judge (judge.ts) reconciles them.
 // Pure prompt builders only — no model calls (those live in deliberate.ts).
 import { z } from 'zod'
-import type { DatanetRubric } from '../rubric/types.js'
+import type { RubricPromptFields } from '../rubric/types.js'
 import { INJECTION_GUARD, buildRubricBlock } from '../llm/prompt.js'
 
 /** The text a panel deliberates over — the same name/description the single
@@ -11,7 +11,7 @@ import { INJECTION_GUARD, buildRubricBlock } from '../llm/prompt.js'
 export interface PanelInput {
   name: string
   description: string
-  rubric: DatanetRubric
+  rubric: RubricPromptFields
   /** Pre-built datanet-economics block (llm/prompt.ts buildEconomicsBlock). Set ONLY by
    *  the VOTE panel path — runPanel is shared with mint deliberation, where yield is
    *  irrelevant, so this must never be derived from the rubric inside the builders. */

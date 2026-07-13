@@ -18,6 +18,10 @@ export interface RubricEconomics {
   upVoteVolume: number
   downVoteVolume: number
   nativeTokenSymbol: string
+  /** Structurally absent (`never`) on a loaded rubric: the live yield exists only on
+   *  VoteRubric. This also makes VoteRubric NON-assignable back to DatanetRubric, so a
+   *  yield-carrying rubric cannot be laundered through the base type into a MintRubric. */
+  currentYield?: never
 }
 
 /** A datanet's machine-readable policy, derived from its Reppo metadata. */
@@ -41,10 +45,14 @@ export interface DatanetRubric {
   economics: RubricEconomics
 }
 
+/** The rubric fields prompts render (economics-free): every flavor — loaded, vote,
+ *  mint — is assignable, so prompt builders don't care which one they hold. */
+export type RubricPromptFields = Pick<DatanetRubric, 'name' | 'goal' | 'voterRubric'>
+
 /** Vote-scoped rubric — the ONLY rubric type that can carry the live yield, so any
  *  prompt that renders datanet economics must hold a VoteRubric. */
 export interface VoteRubric extends Omit<DatanetRubric, 'economics'> {
-  economics: RubricEconomics & {
+  economics: Omit<RubricEconomics, 'currentYield'> & {
     /** Live per-epoch yield, attached by the CYCLE (toVoteRubric) — NOT parsed from CLI
      *  metadata. Timing: attached right BEFORE this cycle's vote scoring (after the pod
      *  fetch, before selectVotes), so the scorer prompt sees THIS cycle's on-chain read.

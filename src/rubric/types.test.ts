@@ -61,6 +61,18 @@ describe('compile-time guarantee (verified by `npm run typecheck`)', () => {
     expect(typeof proof).toBe('function')
   })
 
+  it('a VoteRubric cannot be laundered through the DatanetRubric base type', () => {
+    // The mint-safety wall must hold even when the yield-carrying rubric is first
+    // widened to the base type (VoteRubric → DatanetRubric → MintRubric would
+    // smuggle the yield past the direct check).
+    const proof = (vote: VoteRubric): void => {
+      // @ts-expect-error — a yield-capable rubric is NOT a plain loaded rubric
+      const laundered: DatanetRubric = vote
+      void laundered
+    }
+    expect(typeof proof).toBe('function')
+  })
+
   it('currentYield can never be set on a MintRubric', () => {
     const proof = (mint: MintRubric): void => {
       // @ts-expect-error — MintRubric structurally forbids the vote-only yield field

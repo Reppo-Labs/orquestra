@@ -313,11 +313,21 @@ async function start(): Promise<void> {
   // Fire-and-forget: reconcile reppoSpent for historical mints that predate the column.
   // Upgrading operators get accurate lifetime PnL without manual intervention.
   backfillMintReppoSpent(DATA_DIR, rpcUrl || undefined).catch(() => {/* already logged inside */})
-  // Live node-default model for the adapters: re-resolved at each discover() via
-  // resolveChatModel (config.defaultModel, hot-reloaded), so a dashboard model change
-  // applies without a restart. Falls back to the startup env model when the live
-  // default has no key (parity with the old boot-frozen behavior).
-  const liveDefaultModel = () => resolveChatModel() ?? model
+  // Live node-default model for the adapters: resolved at each discover() from the
+  // SAME tick-reloaded, last-good config every other live-model consumer uses
+  // (buildTick keeps w.config on a failed reload), so adapters never diverge from the
+  // scorers mid-cycle. Falls back to the startup env model when the live default has
+  // no key (parity with the old boot-frozen behavior). Late-bound: reads `wiring`
+  // lazily at discover time, after it is constructed below.
+  const liveDefaultModel = () => {
+    const eff = effectiveDefault({
+      configDefault: wiring.config.defaultModel,
+      registry: providerKeyRegistry,
+      envProvider,
+      envModel,
+    })
+    return eff.key ? resolve(eff.provider, eff.key, eff.model) : model
+  }
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
     providerKeyRegistry,
