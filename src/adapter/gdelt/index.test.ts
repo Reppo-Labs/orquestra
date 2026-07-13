@@ -73,6 +73,17 @@ describe('createGdeltAdapter', () => {
     expect(seenQuery).toBe('("Middle East conflict" OR "Taiwan China tensions")')
     expect(seenQuery).not.toMatch(/[,/]/)
   })
+  it('resolves the model via getModel at each discover — live, not frozen at construction', async () => {
+    let clock = 1_000_000
+    const getModel = vi.fn(() => undefined)
+    const a = createGdeltAdapter({ fetchEvents: async () => articles, generate: gen, getModel, minFetchIntervalMs: 30 * 60_000, now: () => clock })
+    expect(getModel).not.toHaveBeenCalled() // construction must not freeze a model
+    await a.discover({ datanetId: '2', rubric, topN: 5, strategy })
+    expect(getModel).toHaveBeenCalledTimes(1)
+    clock += 31 * 60_000 // past the throttle
+    await a.discover({ datanetId: '2', rubric, topN: 5, strategy })
+    expect(getModel).toHaveBeenCalledTimes(2) // re-resolved per discover (dashboard model change applies)
+  })
   it('honors the operator strategy topN over the cycle topN', async () => {
     let seenPrompt = ''
     const capture = async (args: { system: string; prompt: string }) => { seenPrompt = args.prompt; return { claims: [] } }

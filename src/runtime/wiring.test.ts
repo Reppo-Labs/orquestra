@@ -85,7 +85,6 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
   return {
     dataDir: dir, config,
-    model: {} as CycleWiring['model'], // scorers aren't exercised in these tests
     providerKeyRegistry: new Map<LlmProvider, string>([['virtuals', 'acp-v']]),
     defaultProvider: 'virtuals',
     defaultModel: 'claude-opus-4-8',
@@ -546,7 +545,7 @@ describe('buildTick self-learning (reporting path)', () => {
   })
 
   it('collects outcomes per learn-datanet and reflects once per epoch when a learnModel is set', async () => {
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await tick()
     expect(h.collectOutcomes).toHaveBeenCalledWith(dir, '2', [], 5)
@@ -566,7 +565,7 @@ describe('buildTick self-learning (reporting path)', () => {
   it('attaches per-cycle LLM usage to the snapshot AND re-attaches after reflection', async () => {
     h.writeSnapshot.mockClear()
     h.attachSnapshotLlm.mockClear()
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await tick()
     // The snapshot written mid-tick carries the llm usage block (cycle-window spend)…
@@ -583,13 +582,13 @@ describe('buildTick self-learning (reporting path)', () => {
 
   it('a thrown collectOutcomes never aborts the tick (best-effort)', async () => {
     h.collectOutcomes.mockImplementation(() => { throw new Error('boom') })
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
   })
 
   it('collects economics ONCE per tick with an own-pod-id Map and the already-fetched epoch info', async () => {
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await tick()
     expect(h.collectEconomics).toHaveBeenCalledTimes(1)
@@ -602,14 +601,14 @@ describe('buildTick self-learning (reporting path)', () => {
 
   it('a thrown collectEconomics never aborts the tick (best-effort)', async () => {
     h.collectEconomics.mockImplementation(() => { throw new Error('boom') })
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined()
   })
 
   it('defers econ collection when the epoch read fails (stale-epoch guard) and resumes next tick', async () => {
     h.queryEpochJson.mockRejectedValueOnce(new Error('rpc down'))
-    const w = wiring({ learnModel: {} as CycleWiring['model'] })
+    const w = wiring({ learnModel: {} as NonNullable<CycleWiring['learnModel']> })
     const tick = buildTick(w, learnDeps(w), { reloadConfig: () => config })
     await expect(tick()).resolves.toBeUndefined() // cycle unaffected by the failed read
     expect(h.collectEconomics).not.toHaveBeenCalled() // never bucket into a stale merged epoch

@@ -106,11 +106,6 @@ const defaultIo: WiringIo = {
 export interface CycleWiring {
   dataDir: string
   config: StrategyConfig
-  /** Startup env-default model. NO LONGER used by the mint screen scorer / deliberation panel /
-   *  reflection — those now resolve the LIVE node default (config.defaultModel, hot-reloaded) via
-   *  effectiveDefaultModel(). Kept because index.ts still threads it to the adapters, which stay
-   *  on the env default for now (out of scope). */
-  model: LanguageModel
   /** provider → apiKey, built once at startup from env (src/llm/registry.ts). The
    *  per-datanet scorer resolves a model from this; an absent key for a datanet's
    *  chosen provider → that datanet's vote is skipped with a recorded reason. */

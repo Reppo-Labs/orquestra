@@ -7,7 +7,10 @@ import { filterNovelSemantic } from '../semanticDedup.js'
 import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
 
 export interface SportsDeps {
-  model?: LanguageModel
+  /** Live model resolver, called at each discover() — NOT a model frozen at construction,
+   *  so a dashboard default-model change applies on the next cycle without a restart.
+   *  undefined ⇒ no LLM (tests inject `generate`; semantic dedup no-ops). */
+  getModel?: () => LanguageModel | undefined
   fetchFeed?: (url: string) => Promise<FeedItem[]>
   generate?: (args: { system: string; prompt: string }) => Promise<{ signals: unknown[] }>
   feeds?: string[]
@@ -62,12 +65,14 @@ export function createSportsAdapter(deps: SportsDeps = {}): DatanetAdapter {
 
       const fresh = freshItems(items, maxAgeHours)
       if (fresh.length === 0) return []
+      // Resolve the model LIVE, once per discover — synthesis and semantic dedup share it.
+      const model = deps.getModel?.()
       const cands = await synthesizeSignals(fresh, ctx.rubric, ctx.datanetId, strategy, {
-        model: deps.model,
+        model,
         generate: deps.generate as never,
       })
       const novel = filterNovel(cands, ctx.existingPodNames ?? [])
-      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model: deps.model })
+      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model })
     },
   }
 }

@@ -7,7 +7,10 @@ import { filterNovelSemantic } from '../semanticDedup.js'
 import type { DatanetAdapter, CandidatePod, AdapterContext } from '../types.js'
 
 export interface GdeltDeps {
-  model?: LanguageModel
+  /** Live model resolver, called at each discover() — NOT a model frozen at construction,
+   *  so a dashboard default-model change applies on the next cycle without a restart.
+   *  undefined ⇒ no LLM (tests inject `generate`; semantic dedup no-ops). */
+  getModel?: () => LanguageModel | undefined
   fetchEvents?: (q: GdeltQuery) => Promise<GeoArticle[]>
   generate?: (args: { system: string; prompt: string }) => Promise<{ claims: unknown[] }>
   defaults?: Partial<GdeltStrategy> & { timespanHours?: number; maxRecords?: number; query?: string }
@@ -67,12 +70,14 @@ export function createGdeltAdapter(deps: GdeltDeps = {}): DatanetAdapter {
       }
       lastFetchAt.set(q.query, t) // only successful fetches count toward the throttle
       if (articles.length === 0) return []
+      // Resolve the model LIVE, once per discover — synthesis and semantic dedup share it.
+      const model = deps.getModel?.()
       const cands = await synthesizeClaims(articles, ctx.rubric, ctx.datanetId, strategy, {
-        model: deps.model,
+        model,
         generate: deps.generate as never,
       })
       const novel = filterNovel(cands, ctx.existingPodNames ?? [])
-      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model: deps.model })
+      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model })
     },
   }
 }

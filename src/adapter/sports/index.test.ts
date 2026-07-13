@@ -44,6 +44,20 @@ describe('createSportsAdapter', () => {
     clock += 60_000
     expect(await a.discover({ datanetId: '11', rubric, topN: 4, strategy })).toHaveLength(1) // retried, not throttled
   })
+  it('resolves the model via getModel at each discover — live, not frozen at construction', async () => {
+    let clock = 1_000_000
+    const getModel = vi.fn(() => undefined)
+    const a = createSportsAdapter({
+      fetchFeed: async () => [item('https://ex.com/a')], generate: gen, feeds: ['https://feed/1'],
+      getModel, minFetchIntervalMs: 30 * 60_000, now: () => clock,
+    })
+    expect(getModel).not.toHaveBeenCalled() // construction must not freeze a model
+    await a.discover({ datanetId: '11', rubric, topN: 4, strategy })
+    expect(getModel).toHaveBeenCalledTimes(1)
+    clock += 31 * 60_000 // past the throttle
+    await a.discover({ datanetId: '11', rubric, topN: 4, strategy })
+    expect(getModel).toHaveBeenCalledTimes(2) // re-resolved per discover (dashboard model change applies)
+  })
   it('applies the novelty backstop against existingPodNames (take text)', async () => {
     const fetchFeed = async () => [item('https://ex.com/a')]
     const a = createSportsAdapter({ fetchFeed, generate: gen, feeds: ['https://feed/1'] })
