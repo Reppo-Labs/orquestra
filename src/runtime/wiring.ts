@@ -11,8 +11,9 @@ import type { DatanetRubric } from '../rubric/types.js'
 import { buildScorers, effectiveDefaultModel } from './scorers.js'
 import type { ModelResolver } from '../llm/resolveScoringModel.js'
 import { createVideoPipeline } from '../voter/videoPipeline.js'
-import { detectContentType, isVideoType, isGenericBinaryType } from '../llm/contentType.js'
-import { resolveDriveUrl } from '../llm/driveResolve.js'
+// isVideoType here guards fetchPodContent only (never slice a binary response into text);
+// video-pod detection/routing itself lives in the VideoPodPipeline.
+import { detectContentType, isVideoType } from '../llm/contentType.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { WalletExecutor } from '../wallet/executor.js'
@@ -165,13 +166,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // LLM scoring collaborator — the scorer cache + model routing live in scorers.ts,
   // reading config live off `w` (hot-reload safe); video pods route to the pipeline.
   const scorers = buildScorers(w, video)
-  // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
-  // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
-  // remaining budget in this closure and reset it once per cycle via beginCycle
-  // (runCycle calls it right after startCycle). Decremented as videos are marked across all
-  // datanets in the cycle.
-  const videoCap = w.videoPodsPerCycle ?? 4
-  let videoBudget = videoCap
 
   // Per-CYCLE activity snapshot. The SQLite history (up to 100k rows, never rotated)
   // feeds several derived views: the own-mint pod-name backstop (previously re-read once
@@ -255,7 +249,7 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       record: (entry) => {
         try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
       },
-      beginCycle: () => { videoBudget = videoCap; activitySnapshot = null; mintedNamesMemo = null },
+      beginCycle: () => { video.beginCycle(); activitySnapshot = null; mintedNamesMemo = null },
       // Cred check deferred to call time so late-arriving or rotated creds take effect
       // without restarting the node (env vars set from SQLite at startup but re-read here).
       registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
@@ -285,41 +279,15 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         const minted = mintedNames() // per-cycle memo — was a full activity re-scan PER DATANET
         for (const p of pods) if (p.name && minted.has(p.name)) ownSet.add(p.podId)
         // Enrich ONLY pods we might actually vote on (current epoch, not ours, not voted)
-        // — content fetches are the slow part of a cycle. For each, probe Content-Type:
-        // a video/* pod is marked (mediaUrl/mediaType/contentLength) for the Gemini video
-        // path instead of text-fetched; a per-CYCLE cap (videoBudget, shared across datanets)
-        // bounds how many videos we score. A DETECTED video is NEVER text-fetched — under the
-        // cap it is marked; over the cap it is left unmarked and skipped (continue) this cycle.
+        // — content fetches are the slow part of a cycle. For each, the video pipeline
+        // probes Content-Type (Drive-aware) and marks a video pod for the Gemini path
+        // within its per-CYCLE budget. A DETECTED video is NEVER text-fetched — under
+        // the cap it is marked; over the cap it is left unmarked and skipped (continue)
+        // this cycle. Detection, marking, and the budget all live in the pipeline.
         for (const p of pods) {
           const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
           if (!eligible || !p.url) continue
-          // A Google Drive viewer/share link (drive.google.com/file/d/<ID>/view) serves an
-          // HTML shell, not bytes — detectType would see text/html and the pod would be
-          // text-fetched (model scores the page chrome, not the video). Rewrite it to a
-          // direct-download URL FIRST so the probe sees video/* and ingestVideo can fetch it.
-          // Non-Drive URLs pass through unchanged.
-          const mediaSrc = resolveDriveUrl(p.url)
-          const resolvedFromDrive = mediaSrc !== p.url
-          let info: { mediaType: string; contentLength: number | null } | null = null
-          try { info = await io.detectType(mediaSrc) } catch { info = null }
-          // video/* routes to the Gemini path. A Drive-resolved URL whose download endpoint
-          // reports a generic binary type (application/octet-stream — common for Drive file
-          // downloads) is also treated as the clip: we only rewrite Drive links, and a binary
-          // body on a video datanet IS the video. Gemini needs a concrete video mime to ingest,
-          // so a coerced type defaults to video/mp4 when detection didn't give a video/* type.
-          const isVideo = info && (isVideoType(info.mediaType) || (resolvedFromDrive && isGenericBinaryType(info.mediaType)))
-          if (info && isVideo) {
-            // A detected video MUST NOT be text-fetched (binary sliced into description = junk
-            // votes), whether or not it fits the cap. Under the cap → mark for the video path;
-            // over the cap → leave unmarked and skip it entirely this cycle (retried next cycle).
-            if (videoBudget > 0) {
-              p.mediaUrl = mediaSrc
-              p.mediaType = isVideoType(info.mediaType) ? info.mediaType : 'video/mp4'
-              if (info.contentLength !== null) p.contentLength = info.contentLength
-              videoBudget--
-            }
-            continue
-          }
+          if (await video.detectAndMark(p)) continue
           // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
           // When we already have that real writeup (description differs from the bare title),
           // do NOT fetch the url — for SPA-backed datanets (e.g. ArAIstotle) a server-side

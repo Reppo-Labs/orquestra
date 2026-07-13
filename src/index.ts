@@ -335,7 +335,8 @@ async function start(): Promise<void> {
     defaultProvider: envProvider,
     defaultModel: envModel,
     // Cost/latency cap on video pods scored per cycle (the LLM bill is the operator's,
-    // not the on-chain budget). Default (4) lives in buildCycleDeps. NaN-safe: a non-numeric
+    // not the on-chain budget). Default (4) lives in the VideoPodPipeline
+    // (voter/videoPipeline.ts). NaN-safe: a non-numeric
     // value falls back to undefined (the default) rather than passing NaN through, which
     // would make `videoBudget > 0` always false and silently disable the whole video feature.
     videoPodsPerCycle: parsePositiveInt(process.env.VIDEO_PODS_PER_CYCLE),

@@ -7,6 +7,7 @@
 //   mints — the panel always convenes while enabled (every mint costs REPPO).
 import type { LanguageModel } from 'ai'
 import type { PodScorer, PodScore } from '../voter/types.js'
+import { isVideoPod } from '../voter/videoPipeline.js'
 import type { CandidateScorer, CandidatePod } from '../adapter/types.js'
 import type { MintRubric } from '../rubric/types.js'
 import { candidateScoreInput } from '../minter/score.js'
@@ -35,12 +36,13 @@ export interface PanelScorerOpts {
 export function createPanelPodScorer(base: PodScorer, opts: PanelScorerOpts): PodScorer {
   return {
     async scorePod(pod, rubric, thresholds): Promise<PodScore> {
-      // A VIDEO pod (mediaUrl set) MUST go to the multimodal screen scorer (`base`,
-      // createLlmScorer's `pod.mediaUrl` branch). The panel personas are text-only and
-      // drop the media, so routing a video pod through runPanel would silently score it
-      // blind. This bypass is unconditional — independent of deliberation.votePanel —
-      // because the panel can never see the video. Text pods are unaffected.
-      if (pod.mediaUrl) return base.scorePod(pod, rubric, thresholds)
+      // A VIDEO pod (isVideoPod — marked by the VideoPodPipeline) MUST go to the
+      // multimodal screen scorer (`base`, createLlmScorer's video branch). The panel
+      // personas are text-only and drop the media, so routing a video pod through
+      // runPanel would silently score it blind. This bypass is unconditional —
+      // independent of deliberation.votePanel — because the panel can never see the
+      // video. Text pods are unaffected.
+      if (isVideoPod(pod)) return base.scorePod(pod, rubric, thresholds)
       const { enabled, votePanel } = opts.getDeliberation()
       if (!enabled || !votePanel) return base.scorePod(pod, rubric, thresholds)
       try {
