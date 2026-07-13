@@ -84,6 +84,19 @@ describe('createGdeltAdapter', () => {
     await a.discover({ datanetId: '2', rubric, topN: 5, strategy })
     expect(getModel).toHaveBeenCalledTimes(2) // re-resolved per discover (dashboard model change applies)
   })
+  it('parses ctx.strategy itself — wrong-typed operator params fall back to defaults, never crash', async () => {
+    let seenQuery = '', seenPrompt = ''
+    const fetchEvents = vi.fn(async (q: { query: string }) => { seenQuery = q.query; return articles })
+    const capture = async (args: { system: string; prompt: string }) => { seenPrompt = args.prompt; return { claims: [] } }
+    const a = createGdeltAdapter({ fetchEvents, generate: capture })
+    // adapterParams come from operator-edited config — a malformed save must degrade, not throw.
+    const malformed = { focus: 123, angle: null, topN: 'seven', minImportance: { oops: true }, brief: 'b' } as unknown as Record<string, unknown>
+    await expect(a.discover({ datanetId: '2', rubric, topN: 5, strategy: malformed })).resolves.toEqual([])
+    expect(seenQuery).toBe('"global geopolitical flashpoints"') // default focus, not String(123)
+    expect(seenPrompt).toContain('up to 5')        // topN falls back to the cycle's topN
+    expect(seenPrompt).toContain('Angle: balanced') // default angle, not "null"
+    expect(seenPrompt).toContain('Brief: b')        // valid string params still apply
+  })
   it('honors the operator strategy topN over the cycle topN', async () => {
     let seenPrompt = ''
     const capture = async (args: { system: string; prompt: string }) => { seenPrompt = args.prompt; return { claims: [] } }

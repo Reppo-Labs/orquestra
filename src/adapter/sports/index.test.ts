@@ -58,6 +58,19 @@ describe('createSportsAdapter', () => {
     await a.discover({ datanetId: '11', rubric, topN: 4, strategy })
     expect(getModel).toHaveBeenCalledTimes(2) // re-resolved per discover (dashboard model change applies)
   })
+  it('parses ctx.strategy itself — wrong-typed operator params fall back to defaults, never crash', async () => {
+    const fetchFeed = vi.fn(async () => [item('https://ex.com/a')])
+    let seenPrompt = ''
+    const capture = async (args: { system: string; prompt: string }) => { seenPrompt = args.prompt; return { signals: [] } }
+    const a = createSportsAdapter({ fetchFeed, generate: capture, feeds: ['https://feed/1'] })
+    // adapterParams come from operator-edited config — a malformed save must degrade, not throw.
+    // feeds as a bare string used to crash discover (`feeds.join` on a string).
+    const malformed = { feeds: 'https://not-an-array', maxAgeHours: 'soon', topN: [], focus: 7 } as unknown as Record<string, unknown>
+    await expect(a.discover({ datanetId: '11', rubric, topN: 4, strategy: malformed })).resolves.toEqual([])
+    expect(fetchFeed).toHaveBeenCalledWith('https://feed/1') // fell back to deps.feeds
+    expect(seenPrompt).toContain('up to 4')                  // topN falls back to the cycle's topN
+    expect(seenPrompt).toContain('major-league sports')      // default focus, not 7
+  })
   it('applies the novelty backstop against existingPodNames (take text)', async () => {
     const fetchFeed = async () => [item('https://ex.com/a')]
     const a = createSportsAdapter({ fetchFeed, generate: gen, feeds: ['https://feed/1'] })

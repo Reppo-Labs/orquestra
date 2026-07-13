@@ -23,7 +23,10 @@ export interface AdapterContext {
   rubric: DatanetRubric
   /** how many top wallets / items to pull (adapter-specific budget). */
   topN: number
-  /** optional per-operator strategy params (e.g. gdelt focus/angle/brief). Adapter-specific. */
+  /** RAW per-operator strategy params (config adapterParams + the live brief). Deliberately
+   *  untyped at this boundary: each adapter parses/validates its own params with safe
+   *  defaults (e.g. parseGdeltParams, parseSportsParams) — wrong-typed operator config
+   *  degrades to defaults inside the adapter instead of throwing out of discover. */
   strategy?: Record<string, unknown>
   /** names of pods already on-chain for this datanet, for novelty dedup. */
   existingPodNames?: string[]

@@ -173,8 +173,10 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // (buildTick swaps w.config each cycle). Used by the screen scorer, the panel
   // judge, and the adapters.
   const liveBrief = (): string => w.config.notes
+  // Raw pass-through by design: each adapter parses/validates these params itself
+  // (e.g. parseGdeltParams / parseSportsParams) so the typing lives at the adapter.
   const strategyFor = (id: string): Record<string, unknown> => {
-    const p = (w.config.datanets[id] as { adapterParams?: Record<string, unknown> } | undefined)?.adapterParams ?? {}
+    const p = w.config.datanets[id]?.adapterParams ?? {}
     return { brief: liveBrief(), ...p }
   }
   // Per-datanet learned-lessons block for the judge, read live from the DB so a new
