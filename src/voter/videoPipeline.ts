@@ -77,6 +77,14 @@ export interface VideoPipeline {
   ): Promise<T>
 }
 
+/** What the vote scorer needs to score a video pod: the pipeline plus the datanet's
+ *  optional { provider, model } override (config.datanets[id].model — must be google to
+ *  score video). Threaded by the wiring into createLlmScorer as `opts.video`. */
+export interface VideoScoreCtx {
+  pipeline: VideoPipeline
+  policyModel?: { provider: LlmProvider; model: string }
+}
+
 /** Per-pod video scoring model resolution, owned by the pipeline (datanet-level TEXT
  *  resolution lives in llm/resolveScoringModel.ts and knows nothing about video):
  *  1) explicit override → must be google (a video pod can't be scored on a text model);

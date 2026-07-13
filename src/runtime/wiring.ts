@@ -10,6 +10,7 @@ import type { VoterPod } from '../voter/types.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import { buildScorers, effectiveDefaultModel } from './scorers.js'
 import type { ModelResolver } from '../llm/resolveScoringModel.js'
+import { createVideoPipeline } from '../voter/videoPipeline.js'
 import { detectContentType, isVideoType, isGenericBinaryType } from '../llm/contentType.js'
 import { resolveDriveUrl } from '../llm/driveResolve.js'
 import type { LlmProvider } from '../llm/model.js'
@@ -152,9 +153,18 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     const p = w.config.datanets[id]?.adapterParams ?? {}
     return { brief: liveBrief(), ...p }
   }
+  // Video-pod handling — detection + per-CYCLE budget + per-pod Gemini scoring — is
+  // owned by ONE pipeline instance shared across datanets (a per-datanet instance would
+  // let `videoPodsPerCycle × datanets` videos through). beginCycle re-arms its budget.
+  const video = createVideoPipeline({
+    registry: w.providerKeyRegistry,
+    resolveModel: w.resolveModel,
+    videoPodsPerCycle: w.videoPodsPerCycle,
+    detectType: (url) => io.detectType(url),
+  })
   // LLM scoring collaborator — the scorer cache + model routing live in scorers.ts,
-  // reading config live off `w` (hot-reload safe).
-  const scorers = buildScorers(w)
+  // reading config live off `w` (hot-reload safe); video pods route to the pipeline.
+  const scorers = buildScorers(w, video)
   // Per-CYCLE video budget (not per-datanet). getPodsAndFilter runs once per datanet, so a
   // local counter there would let `videoPodsPerCycle × datanets` videos through. Hold the
   // remaining budget in this closure and reset it once per cycle via beginCycle

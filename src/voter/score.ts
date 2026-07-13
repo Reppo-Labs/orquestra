@@ -3,11 +3,9 @@ import { z } from 'zod'
 import type { CoreMessage, FilePart, LanguageModel } from 'ai'
 import type { PodScorer, PodScore, VoterPod } from './types.js'
 import type { VoteRubric } from '../rubric/types.js'
-import type { LlmProvider } from '../llm/model.js'
 import { INJECTION_GUARD, buildRubricBlock, buildEconomicsBlock } from '../llm/prompt.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
-import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
-import { ingestVideo } from '../llm/videoIngest.js'
+import { isVideoPod, type VideoScoreCtx } from './videoPipeline.js'
 
 const ScoreSchema = z.object({
   score: z.number().int().min(1).max(10),
@@ -51,33 +49,18 @@ export function buildVotePrompt(
   return { system: SYSTEM, prompt }
 }
 
-/** Inputs needed to resolve a per-pod scoring model (Phase A) + ingest video. Passed
- *  by the wiring; absent ctx ⇒ text-only behavior on the node-default `model`. */
-export interface ScorerModelCtx {
-  registry: Map<LlmProvider, string>
-  defaultProvider: LlmProvider
-  defaultModel: string
-  /** the datanet's optional { provider, model } override (config.datanets[id].model). */
-  policyModel?: { provider: LlmProvider; model: string }
-  /** Model resolver seam — defaults to the plain resolveModel. Threaded so the video
-   *  re-resolution honors the same oauth-aware resolver as the text path. */
-  resolveModel?: ModelResolver
-}
-
 /** LLM-backed scorer. `opts.brief` personalizes scoring with the operator's stance;
  *  pass a function to read the brief live (so dashboard notes edits hot-reload).
- *  When `opts.modelCtx` is supplied, a VIDEO pod is re-resolved PER POD (Phase A) to a
- *  Gemini model and watched via @ai-sdk/google; the TEXT path always scores on the
- *  fixed `model` the wiring already resolved (byte-for-byte the original behavior). */
+ *  When `opts.video` is supplied, a VIDEO pod is scored through the VideoPodPipeline
+ *  (per-pod Gemini resolution + ingest + cleanup, all owned there); the TEXT path
+ *  always scores on the fixed `model` the wiring already resolved. */
 export function createLlmScorer(
   model: LanguageModel,
-  opts: { brief?: string | (() => string); modelCtx?: ScorerModelCtx | (() => ScorerModelCtx) } = {},
+  opts: { brief?: string | (() => string); video?: VideoScoreCtx } = {},
 ): PodScorer {
   const resolveBrief = () => (typeof opts.brief === 'function' ? opts.brief() : opts.brief ?? '')
-  const resolveCtx = () => (typeof opts.modelCtx === 'function' ? opts.modelCtx() : opts.modelCtx)
   return {
     async scorePod(pod: VoterPod, rubric: VoteRubric): Promise<PodScore> {
-      const isVideo = !!pod.mediaUrl
       // Text pod → the original fixed-model text path, byte-for-byte unchanged. The wiring
       // already resolved `model` for this datanet (its override or the node default), so a
       // text pod never re-resolves here.
@@ -85,44 +68,22 @@ export function createLlmScorer(
       // (incl. the Anthropic-compatible Virtuals gateway), OpenAI, and Google — unlike
       // `json` mode, which Anthropic does not support. Retry once on a transient
       // non-conforming response.
-      if (!isVideo) {
+      if (!isVideoPod(pod)) {
         const built = buildVotePrompt(pod, rubric, resolveBrief())
         return generateObjectWithRetry(model, ScoreSchema, built.system, { prompt: (built as { prompt: string }).prompt })
       }
-      // Video pod: re-resolve PER POD (a video pod needs a Gemini model). Without a ctx we
-      // can't reach the registry/defaults, so a video pod is un-scoreable → THROW (selectVotes'
-      // per-pod try/catch records the skip). With a ctx, resolveScoringModel enforces the
-      // resolution order (override → google default → skip-with-reason).
-      const ctx = resolveCtx()
-      if (!ctx) throw new Error('video pod has no model context to resolve a Gemini model')
-      const resolved = resolveScoringModel({
-        policyModel: ctx.policyModel,
-        isVideo: true,
-        registry: ctx.registry,
-        defaultProvider: ctx.defaultProvider,
-        defaultModel: ctx.defaultModel,
-      }, ctx.resolveModel) // undefined ⇒ resolveScoringModel's default (plain resolveModel)
-      if ('skip' in resolved) throw new Error(resolved.skip)
-      // Ingest (size-branched) → FilePart, build messages, score. A skip reason THROWS so
-      // selectVotes' per-pod try/catch records it (fail-closed, never aborts the cycle).
-      // contentLength (from detection, threaded onto the pod) lets ingestVideo skip a
-      // known-oversize video BEFORE downloading it (null ⇒ it fetches + re-measures).
-      const ingest = await ingestVideo({
-        url: pod.mediaUrl as string,
-        mediaType: pod.mediaType ?? 'video/mp4',
-        contentLength: pod.contentLength ?? null,
-        googleKey: ctx.registry.get('google'),
+      // Video pod: hand off to the pipeline (per-pod Gemini resolution → ingest →
+      // generate → cleanup-after-read). Without a ctx we can't reach the pipeline, so a
+      // video pod is un-scoreable → THROW (selectVotes' per-pod try/catch records the
+      // skip); the pipeline likewise throws its skip reasons (fail-closed, never aborts
+      // the cycle). This scorer keeps only the prompt/schema knowledge it shares with
+      // the text path — everything video-specific lives in the pipeline.
+      const v = opts.video
+      if (!v) throw new Error('video pod has no model context to resolve a Gemini model')
+      return v.pipeline.scoreVideoPod(pod, v.policyModel, (videoModel, part) => {
+        const built = buildVotePrompt(pod, rubric, resolveBrief(), part)
+        return generateObjectWithRetry(videoModel, ScoreSchema, built.system, { messages: (built as { messages: CoreMessage[] }).messages })
       })
-      if ('skip' in ingest) throw new Error(ingest.skip)
-      // The Files-API path returns a cleanup that deletes the uploaded file. Delete it AFTER
-      // generateObject has read the fileData URI (deleting before would 404 the request) —
-      // run it in finally so a scoring throw still cleans up the remote file.
-      try {
-        const built = buildVotePrompt(pod, rubric, resolveBrief(), ingest.part)
-        return await generateObjectWithRetry(resolved.model, ScoreSchema, built.system, { messages: (built as { messages: CoreMessage[] }).messages })
-      } finally {
-        await ingest.cleanup?.()
-      }
     },
   }
 }

@@ -8,7 +8,8 @@ import type { StrategyConfig } from '../config/schema.js'
 import type { Scorers } from './cycle.js'
 import type { CandidateScorer } from '../adapter/types.js'
 import type { PodScorer } from '../voter/types.js'
-import { createLlmScorer, type ScorerModelCtx } from '../voter/score.js'
+import { createLlmScorer } from '../voter/score.js'
+import type { VideoPipeline } from '../voter/videoPipeline.js'
 import { createPanelPodScorer, createPanelCandidateScorer } from '../panel/scorers.js'
 import { resolveScoringModel, type ModelResolver } from '../llm/resolveScoringModel.js'
 import { effectiveDefault } from '../llm/effectiveDefault.js'
@@ -49,8 +50,10 @@ export function effectiveDefaultModel(w: ScorerEnv): LanguageModel | null {
   return eff.key ? (w.resolveModel ?? resolveModel)(eff.provider, eff.key, eff.model) : null
 }
 
-/** Build the Scorers collaborator the cycle consumes. */
-export function buildScorers(w: ScorerEnv): Scorers {
+/** Build the Scorers collaborator the cycle consumes. `video` is the wiring's
+ *  VideoPodPipeline — the scorer hands a video pod to it for per-pod Gemini
+ *  resolution + ingest + cleanup. Omitted (tests) ⇒ video pods throw a recorded skip. */
+export function buildScorers(w: ScorerEnv, video?: VideoPipeline): Scorers {
   // The operator brief is config.notes, read live so dashboard edits hot-reload
   // (buildTick swaps w.config each cycle). Used by the screen scorer and the panel judge.
   const liveBrief = (): string => w.config.notes
@@ -67,9 +70,9 @@ export function buildScorers(w: ScorerEnv): Scorers {
   // Per-datanet vote scorer: resolve THIS datanet's model (its `model` override, else the
   // node default) against the env key registry, then wrap in the panel exactly as before.
   // A skip (no key for the chosen provider) is returned straight to the cycle, which
-  // records it per-datanet. isVideo:false here is only a model-resolution seam — it picks
-  // the datanet-level TEXT scorer's model; video pods (detected + marked in
-  // getPodsAndFilter) re-resolve per pod to a Gemini model inside the scorer via modelCtx.
+  // records it per-datanet. The datanet-level resolution is TEXT-only by construction;
+  // video pods (detected + marked by the VideoPodPipeline in getPodsAndFilter) are
+  // re-resolved per pod to a Gemini model inside the pipeline via opts.video.
   //
   // Build-once cache: datanets sharing a resolved provider:model reuse one scorer
   // (per datanet per cycle was rebuilding it). Safe across hot-reload — the scorer reads
@@ -88,25 +91,24 @@ export function buildScorers(w: ScorerEnv): Scorers {
       envModel: w.defaultModel,
     })
     const resolved = resolveScoringModel({
-      policyModel, isVideo: false,
+      policyModel,
       registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model,
     }, w.resolveModel ?? resolveModel)
     if ('skip' in resolved) return { skip: resolved.skip }
     // Key by the effective provider:model (the datanet-level resolution is always the
-    // text model; video pods re-resolve per pod via modelCtx below): identical
+    // text model; video pods re-resolve per pod inside the pipeline): identical
     // resolutions yield an identical scorer, so one build serves every such datanet.
     const cacheKey = policyModel ? `${policyModel.provider}:${policyModel.model}` : `${eff.provider}:${eff.model}`
     let scorer = scorerCache.get(cacheKey)
     if (!scorer) {
-      // modelCtx lets the screen scorer RE-RESOLVE to a Gemini model for a video pod (a
-      // video pod can't be scored on this datanet's text model). policyModel is fixed per
-      // cacheKey, so binding it into the cached scorer is correct (datanets sharing a key
-      // share an identical policyModel). Text pods ignore modelCtx and score on resolved.model.
-      const modelCtx: ScorerModelCtx = {
-        registry: w.providerKeyRegistry, defaultProvider: eff.provider, defaultModel: eff.model, policyModel,
-        resolveModel: w.resolveModel ?? resolveModel,
-      }
-      const screen = createLlmScorer(resolved.model, { brief: liveBrief, modelCtx })
+      // opts.video routes a video pod to the pipeline (a video pod can't be scored on
+      // this datanet's text model). policyModel is fixed per cacheKey, so binding it into
+      // the cached scorer is correct (datanets sharing a key share an identical
+      // policyModel). Text pods ignore opts.video and score on resolved.model.
+      const screen = createLlmScorer(resolved.model, {
+        brief: liveBrief,
+        ...(video ? { video: { pipeline: video, policyModel } } : {}),
+      })
       scorer = createPanelPodScorer(screen, { model: resolved.model, getDeliberation, getBrief: liveBrief, getLessons: liveLessons })
       scorerCache.set(cacheKey, scorer)
     }
