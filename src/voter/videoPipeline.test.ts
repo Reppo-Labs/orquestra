@@ -1,6 +1,10 @@
 // src/voter/videoPipeline.test.ts
 import { describe, it, expect, vi } from 'vitest'
-import { createVideoPipeline, isVideoPod, type VideoPipelineDeps } from './videoPipeline.js'
+import type { FilePart, LanguageModel } from 'ai'
+import {
+  createVideoPipeline, isVideoPod, VIDEO_DEFAULT_PROVIDER, VIDEO_DEFAULT_MODEL,
+  type VideoPipelineDeps,
+} from './videoPipeline.js'
 import type { VoterPod } from './types.js'
 import type { LlmProvider } from '../llm/model.js'
 
@@ -118,5 +122,117 @@ describe('detectAndMark per-cycle budget', () => {
       if (p.mediaUrl) marked++
     }
     expect(marked).toBe(4)
+  })
+})
+
+// --- scoreVideoPod: model resolution + ingest + the cleanup-ordering invariant ---
+
+const videoPod = (over: Partial<VoterPod> = {}) =>
+  pod({ mediaUrl: 'https://x/c.mp4', mediaType: 'video/mp4', contentLength: 500, ...over })
+
+const sentinelModel = {} as LanguageModel
+const okPart: FilePart = { type: 'file', data: 'BASE64', mimeType: 'video/mp4' }
+
+describe('scoreVideoPod model resolution', () => {
+  it('explicit NON-google override → throws (video needs Gemini); ingest never runs', async () => {
+    const ingest = vi.fn()
+    const v = pipeline({ ingest: ingest as unknown as VideoPipelineDeps['ingest'] })
+    await expect(
+      v.scoreVideoPod(videoPod(), { provider: 'virtuals', model: 'claude-opus-4-8' }, async () => 1),
+    ).rejects.toThrow(/video pod needs a Gemini model.*virtuals\/claude-opus-4-8/)
+    expect(ingest).not.toHaveBeenCalled()
+  })
+
+  it('explicit google override without a key → throws with the provider named', async () => {
+    const v = pipeline({ registry: reg(['virtuals', 'v']) })
+    await expect(
+      v.scoreVideoPod(videoPod(), { provider: 'google', model: 'gemini-3-pro' }, async () => 1),
+    ).rejects.toThrow(/no API key for google/)
+  })
+
+  it('explicit google override + key → resolves THAT provider/slug/key', async () => {
+    const resolveModel = vi.fn(() => sentinelModel)
+    const generate = vi.fn(async () => 42)
+    const v = pipeline({
+      registry: reg(['google', 'gkey']),
+      resolveModel,
+      ingest: (async () => ({ part: okPart })) as VideoPipelineDeps['ingest'],
+    })
+    await expect(v.scoreVideoPod(videoPod(), { provider: 'google', model: 'gemini-3-pro' }, generate)).resolves.toBe(42)
+    expect(resolveModel).toHaveBeenCalledWith('google', 'gkey', 'gemini-3-pro')
+    expect(generate).toHaveBeenCalledWith(sentinelModel, okPart)
+  })
+
+  it('no override + google key → resolves the Gemini video default', async () => {
+    const resolveModel = vi.fn(() => sentinelModel)
+    const v = pipeline({
+      registry: reg(['google', 'g']),
+      resolveModel,
+      ingest: (async () => ({ part: okPart })) as VideoPipelineDeps['ingest'],
+    })
+    await v.scoreVideoPod(videoPod(), undefined, async () => 1)
+    expect(resolveModel).toHaveBeenCalledWith(VIDEO_DEFAULT_PROVIDER, 'g', VIDEO_DEFAULT_MODEL)
+    expect(VIDEO_DEFAULT_PROVIDER).toBe('google')
+    expect(VIDEO_DEFAULT_MODEL).toBe('gemini-3.1-pro-preview')
+  })
+
+  it('no override + NO google key → throws the LLM_KEY_GOOGLE hint; ingest never runs', async () => {
+    const ingest = vi.fn()
+    const v = pipeline({ registry: reg(['virtuals', 'v']), ingest: ingest as unknown as VideoPipelineDeps['ingest'] })
+    await expect(v.scoreVideoPod(videoPod(), undefined, async () => 1)).rejects.toThrow(/video scoring needs a Google API key \(set LLM_KEY_GOOGLE\)/)
+    expect(ingest).not.toHaveBeenCalled()
+  })
+
+  it('an unmarked pod (no mediaUrl) is rejected', async () => {
+    await expect(pipeline().scoreVideoPod(pod(), undefined, async () => 1)).rejects.toThrow(/no mediaUrl/)
+  })
+})
+
+describe('scoreVideoPod ingest', () => {
+  it('threads url, mediaType (default video/mp4), contentLength (default null) and the google key into ingest', async () => {
+    const ingest = vi.fn(async () => ({ part: okPart }))
+    const v = pipeline({ registry: reg(['google', 'gk']), ingest: ingest as unknown as VideoPipelineDeps['ingest'] })
+    await v.scoreVideoPod(videoPod({ mediaType: undefined, contentLength: undefined }), undefined, async () => 1)
+    expect(ingest).toHaveBeenCalledWith({ url: 'https://x/c.mp4', mediaType: 'video/mp4', contentLength: null, googleKey: 'gk' })
+    await v.scoreVideoPod(videoPod(), undefined, async () => 1)
+    expect(ingest).toHaveBeenLastCalledWith({ url: 'https://x/c.mp4', mediaType: 'video/mp4', contentLength: 500, googleKey: 'gk' })
+  })
+
+  it('an ingest skip THROWS its reason and generate never runs', async () => {
+    const generate = vi.fn(async () => 1)
+    const v = pipeline({ ingest: (async () => ({ skip: 'video 999 bytes exceeds VIDEO_MAX_BYTES' })) as VideoPipelineDeps['ingest'] })
+    await expect(v.scoreVideoPod(videoPod(), undefined, generate)).rejects.toThrow(/exceeds VIDEO_MAX_BYTES/)
+    expect(generate).not.toHaveBeenCalled()
+  })
+})
+
+describe('scoreVideoPod cleanup ordering (the module invariant)', () => {
+  it('cleanup runs only AFTER generate has settled (deleting before would 404 the fileData read)', async () => {
+    const order: string[] = []
+    const cleanup = vi.fn(async () => { order.push('cleanup') })
+    const v = pipeline({ ingest: (async () => ({ part: okPart, cleanup })) as VideoPipelineDeps['ingest'] })
+    const result = await v.scoreVideoPod(videoPod(), undefined, async () => {
+      // The remote file must still exist while the model reads the fileData URI.
+      expect(cleanup).not.toHaveBeenCalled()
+      order.push('generate')
+      return 'scored'
+    })
+    expect(result).toBe('scored')
+    expect(order).toEqual(['generate', 'cleanup'])
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('cleanup ALSO runs when generate throws (no orphaned remote file), and the error propagates', async () => {
+    const cleanup = vi.fn(async () => {})
+    const v = pipeline({ ingest: (async () => ({ part: okPart, cleanup })) as VideoPipelineDeps['ingest'] })
+    await expect(
+      v.scoreVideoPod(videoPod(), undefined, async () => { throw new Error('model exploded') }),
+    ).rejects.toThrow('model exploded')
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('the inline path (no cleanup returned) scores without error', async () => {
+    const v = pipeline({ ingest: (async () => ({ part: okPart })) as VideoPipelineDeps['ingest'] })
+    await expect(v.scoreVideoPod(videoPod(), undefined, async () => 7)).resolves.toBe(7)
   })
 })
