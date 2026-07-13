@@ -212,12 +212,22 @@ export async function backfillClaimDatanets(
     "SELECT DISTINCT podId, datanetId FROM activity WHERE kind IN ('vote','mint') AND podId IS NOT NULL AND podId != '' AND datanetId IS NOT NULL AND datanetId != ''"
   ).all() as { podId: string; datanetId: string }[]
   for (const a of acts) if (!podDatanet.has(a.podId)) podDatanet.set(a.podId, a.datanetId)
-  if (rows.some((r) => !podDatanet.has(r.podId))) {
+  // Membership sweep with early exit. A permanently unresolvable row (pod on a removed
+  // or never-configured datanet) does re-trigger this sweep on every boot — a conscious
+  // trade-off: the cost is bounded (≤1 list per configured datanet per boot) and a
+  // negative-result marker would wrongly freeze rows that become resolvable later
+  // (transient CLI failure, datanet re-enabled).
+  const unresolvedPods = new Set(rows.filter((r) => !podDatanet.has(r.podId)).map((r) => r.podId))
+  if (unresolvedPods.size > 0) {
     for (const id of configuredDatanets) {
       if (id === '*') continue
       try {
-        for (const podId of await listDatanetPodIds(id)) if (!podDatanet.has(podId)) podDatanet.set(podId, id)
+        for (const podId of await listDatanetPodIds(id)) {
+          if (!podDatanet.has(podId)) podDatanet.set(podId, id)
+          unresolvedPods.delete(podId)
+        }
       } catch { /* best-effort: a failed list skips that datanet's membership map */ }
+      if (unresolvedPods.size === 0) break
     }
   }
   const update = db.prepare('UPDATE activity SET datanetId = ? WHERE id = ?')

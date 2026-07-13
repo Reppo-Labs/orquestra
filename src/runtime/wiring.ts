@@ -191,26 +191,37 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // claimed native amount from the tx receipt. The on-chain claim scanners return datanetId='' and
   // no token; we resolve pod→datanet from our own vote/mint activity and datanet→token from the
   // catalog. Best-effort + only when there ARE claims (avoids a per-cycle CLI call when idle).
+  // pod→datanet from this cycle's activity snapshot (vote/mint rows carrying both ids) —
+  // shared by the owner-claim enrichment and the voter-claim attribution below.
+  const podDatanetFromActivity = (): Map<string, string> => {
+    const m = new Map<string, string>()
+    for (const e of cycleActivity()) {
+      if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) m.set(e.podId, e.datanetId)
+    }
+    return m
+  }
   const enrichTokens = async (due: ClaimableEmission[]): Promise<ClaimableEmission[]> => {
     if (due.length === 0) return due
-    const podDatanet = new Map<string, string>()
-    for (const e of cycleActivity()) {
-      if ((e.kind === 'vote' || e.kind === 'mint') && e.podId && e.datanetId) podDatanet.set(e.podId, e.datanetId)
-    }
+    const podDatanet = podDatanetFromActivity()
     // The activity map above can NEVER cover our own mints: `reppo mint-pod --json`
     // (CLI ≤0.12.x) returns no podId, so executed mint rows have podId=null — and those
     // are exactly the pods whose OWNER emissions we claim. Resolve the leftovers by
-    // datanet membership: list each configured datanet's pods once and match the claim's
-    // on-chain podId. Runs only when a claim is otherwise unattributable (claims are
-    // occasional; most cycles skip this entirely). Best-effort per datanet — a failed
-    // list leaves those claims unattributed this cycle, never blocks the claim itself.
-    const unresolved = due.some((em) => !em.datanetId && !podDatanet.has(em.podId))
-    if (unresolved) {
+    // datanet membership: list configured datanets' pods and match the claim's on-chain
+    // podId, stopping as soon as everything is resolved. Runs only when a claim is
+    // otherwise unattributable (claims are occasional; most cycles skip this entirely).
+    // Best-effort per datanet — a failed list leaves those claims unattributed this
+    // cycle, never blocks the claim itself.
+    const unresolved = new Set(due.filter((em) => !em.datanetId && !podDatanet.has(em.podId)).map((em) => em.podId))
+    if (unresolved.size > 0) {
       for (const id of Object.keys(w.config.datanets)) {
         if (id === '*') continue
         try {
-          for (const p of await reader.datanetPodVotes(id)) if (!podDatanet.has(p.podId)) podDatanet.set(p.podId, id)
+          for (const p of await reader.datanetPodVotes(id)) {
+            if (!podDatanet.has(p.podId)) podDatanet.set(p.podId, id)
+            unresolved.delete(p.podId)
+          }
         } catch { /* best-effort: skip this datanet's membership map this cycle */ }
+        if (unresolved.size === 0) break
       }
     }
     const tokenByDatanet = new Map<string, ClaimToken>()
@@ -250,7 +261,12 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
                   // Voter emissions always pay REPPO — do NOT enrich with nativeToken (that field
                   // describes publisher/mint emissions only). Enriching here causes readClaimedToken
                   // to hunt for a non-REPPO transfer that never lands and records claimedTokenAmount=0.
-                  return reader.voterClaimableOnchain(rpcUrl, walletAddress, votedPodIds, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+                  // The DATANET is attributed though (datanetId only): the on-chain scan returns
+                  // datanetId='', and a voter claim is always on a pod we voted on, so this
+                  // cycle's vote rows resolve it with zero extra CLI calls.
+                  const claims = await reader.voterClaimableOnchain(rpcUrl, walletAddress, votedPodIds, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
+                  const podDatanet = podDatanetFromActivity()
+                  return claims.map((em) => em.datanetId ? em : { ...em, datanetId: podDatanet.get(em.podId) ?? '' })
                 },
               },
             }

@@ -396,6 +396,63 @@ describe('buildCycleDeps', () => {
     expect(due[0]!.datanetId).toBe('2')
   })
 
+  it('stops listing datanet pods once every claim podId is resolved (early exit)', async () => {
+    const cfg2 = StrategyConfigSchema.parse({
+      horizonDays: 7, cadenceHours: 1,
+      stake: { lockReppo: 0, lockDurationDays: 7 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 100, mintGasEthMax: 1 },
+      datanets: {
+        '2': { vote: true, mint: false, strictness: 'balanced' },
+        '5': { vote: true, mint: false, strictness: 'balanced' },
+      },
+      notes: '',
+    })
+    const podVotes = vi.fn(async (id: string) =>
+      id === '2' ? [{ podId: 'p77', name: 'ours', validityEpoch: '3', upVotes: 1, downVotes: 0 }] : [])
+    const deps = buildCycleDeps(wiring({
+      config: cfg2,
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    await deps.reads.getEmissionsDue()
+    expect(podVotes.mock.calls.map((c) => c[0])).toEqual(['2']) // '5' never fetched
+  })
+
+  it('does NOT list datanet pods when every claim already carries a datanet', async () => {
+    // Pins the `!em.datanetId` half of the cost gate: an already-attributed claim
+    // must not trigger the membership sweep even when the activity map is empty.
+    const podVotes = vi.fn(async () => [])
+    const deps = buildCycleDeps(wiring({
+      reader: fakeReader({
+        emissionsDue: async () => ({ totalReppo: 5, pods: [{ podId: 'p77', datanetId: '5', epoch: 3, reppo: 5 }] }),
+        datanetPodVotes: podVotes as unknown as ReppoReader['datanetPodVotes'],
+      }),
+    }))
+    const due = await deps.reads.getEmissionsDue()
+    expect(due[0]!.datanetId).toBe('5')
+    expect(podVotes).not.toHaveBeenCalled()
+  })
+
+  it('attributes voter claims to their datanet from vote activity (datanetId only, never token)', async () => {
+    // The voter-claim path bypasses enrichTokens (token enrichment breaks voter claims);
+    // it must still attribute the DATANET from this cycle's vote rows — otherwise voter
+    // claim rows sit unattributed until the next boot's backfill.
+    appendActivity(dir, {
+      ts: 't', cycleId: 'c', kind: 'vote', datanetId: '2', podId: 'pv', status: 'executed',
+    })
+    const deps = buildCycleDeps(wiring({
+      rpcUrl: 'http://rpc', walletAddress: '0xW',
+      reader: fakeReader({
+        voterClaimableOnchain: async () => [{ podId: 'pv', datanetId: '', epoch: 3, reppo: 1 }],
+      }),
+    }))
+    const due = await deps.onchain!.wallet!.getVoterEmissionsDue()
+    expect(due[0]!.datanetId).toBe('2')
+    expect(due[0]!.token).toBeUndefined() // voter emissions always pay REPPO — never token-enriched
+  })
+
   it('does NOT list datanet pods when the claim is already attributable from activity', async () => {
     // Cost guard: the membership fallback is per-cycle CLI work — it must not run when
     // the activity map (vote/mint rows with podId+datanetId) already resolves every claim.

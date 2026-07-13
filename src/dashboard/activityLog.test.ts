@@ -131,6 +131,26 @@ describe('backfillClaimDatanets', () => {
     expect(fetches.sort()).toEqual(['2', '9']) // membership fetched once per configured datanet
   })
 
+  it("touches ONLY executed claim rows — votes and failed claims with empty datanet stay ''", async () => {
+    appendActivity(dir, entry({ kind: 'vote', datanetId: '', podId: 'p-x', ts: '2026-06-01T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', status: 'error', datanetId: '', podId: 'p-x', ts: '2026-06-02T00:00:00.000Z' }))
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-x', reppoClaimed: 3, ts: '2026-06-03T00:00:00.000Z' }))
+    await backfillClaimDatanets(dir, ['9'], async () => ['p-x'])
+    const rows = readActivity(dir, { limit: 10 }) // newest-first
+    expect(rows.map((r) => [r.kind, r.status, r.datanetId])).toEqual([
+      ['claim', 'executed', '9'], // the only row the backfill may touch
+      ['claim', 'error', ''],
+      ['vote', 'executed', ''],
+    ])
+  })
+
+  it('stops fetching membership once every claim podId is resolved (early exit)', async () => {
+    appendActivity(dir, entry({ kind: 'claim', datanetId: '', podId: 'p-m', reppoClaimed: 2 }))
+    const fetches: string[] = []
+    await backfillClaimDatanets(dir, ['2', '9'], async (id) => { fetches.push(id); return ['p-m'] })
+    expect(fetches).toEqual(['2']) // '9' never fetched
+  })
+
   it('is a no-op (zero fetches) when every executed claim already has a datanet', async () => {
     appendActivity(dir, entry({ kind: 'claim', datanetId: '5', podId: 'p1', reppoClaimed: 2 }))
     const fetches: string[] = []
