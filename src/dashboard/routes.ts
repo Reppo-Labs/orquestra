@@ -28,6 +28,11 @@ import type { OnboardingAnswers } from '../onboarding/types.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import type { CoreMessage, LanguageModel } from 'ai'
+import type {
+  AgentInfo, AgentRenameResult, DatanetNames, EarnStatus, HealthReport, LearnView,
+  ModelsResponse, OnboardingChatView, OnboardingStatusView, PnlResponse,
+  ProposalDecisionView, RunNowResult, SafeStrategyConfig, SaveStrategyResult,
+} from './apiTypes.js'
 
 // ── route/dispatch types ────────────────────────────────────────────────────────
 
@@ -107,7 +112,7 @@ const json = (status: number, body: unknown): ApiResponse => ({ status, body })
 // ── shared helpers (separate functions on purpose — they are seams of their own) ──
 
 /** A safe subset of the strategy config — explicitly whitelisted fields only. */
-export function safeConfig(dataDir: string): Record<string, unknown> {
+export function safeConfig(dataDir: string): SafeStrategyConfig {
   const text = readConfigText(dataDir)
   if (text === null) return {}
   try {
@@ -124,12 +129,13 @@ export function safeConfig(dataDir: string): Record<string, unknown> {
     }
     // tolerant fallback for a file the schema rejects (node likely won't run on it either).
     // deliberation falls back to the schema default so the editor reflects real behavior.
+    // Best-effort raw echo — the cast is honest about that (values are unvalidated).
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
       claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
       budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, votePanel: true },
       defaultModel: c.defaultModel, nodeName: c.nodeName,
-    }
+    } as SafeStrategyConfig
   } catch (e) {
     // surfaced (once per request) instead of silently empty: a malformed config
     // otherwise renders a blank header with no trace anywhere.
@@ -176,14 +182,12 @@ function defaultOnboardingTurn(model: LanguageModel): (m: CoreMessage[]) => Prom
   }, messages)
 }
 
-type ProposalDecisionResult = { ok: boolean; status?: string; error?: string; appliesNextCycle?: boolean }
-
 /** Apply an operator decision to a learning proposal. Accept goes through the validated
  *  config writer with an optimistic-concurrency check: if the live config value no longer
  *  matches the proposal's fromValue (a manual edit landed since), the proposal is marked
  *  stale rather than clobbering the newer value. The reflection module never writes config
  *  — only this operator-driven path does. */
-export function decideProposal(dataDir: string, id: number, decision: 'accept' | 'reject'): ProposalDecisionResult {
+export function decideProposal(dataDir: string, id: number, decision: 'accept' | 'reject'): ProposalDecisionView {
   const prop = readProposals(dataDir).find((p) => p.id === id)
   if (!prop) return { ok: false, error: 'proposal not found' }
   if (prop.status !== 'pending') return { ok: false, error: `proposal already ${prop.status}` }
@@ -255,7 +259,7 @@ export function decideProposal(dataDir: string, id: number, decision: 'accept' |
 const onboardingStatus: RouteHandler = ({ dataDir, opts }) => json(200, {
   needed: needsOnboarding(dataDir),
   chatAvailable: Boolean(opts.onboardingTurn ?? opts.resolveChatModel?.()),
-})
+} satisfies OnboardingStatusView)
 
 const activity: RouteHandler = ({ dataDir }) => json(200, readActivity(dataDir, { limit: 500 }))
 
@@ -265,10 +269,10 @@ const agent: RouteHandler = ({ dataDir }) => {
   // Identity only — the apiKey NEVER leaves the store (the dashboard is unauthenticated,
   // so anything it serves is readable by whoever reaches the port: it holds no secrets).
   const a = readAgentStore(dataDir)
-  return json(200, a ? { agentId: a.agentId, name: a.name ?? null, renameable: Boolean(a.apiKey) } : null)
+  return json(200, a ? ({ agentId: a.agentId, name: a.name ?? null, renameable: Boolean(a.apiKey) } satisfies AgentInfo) : null)
 }
 
-const earn: RouteHandler = ({ dataDir }) => json(200, readEarnStatus(dataDir))
+const earn: RouteHandler = ({ dataDir }) => json(200, readEarnStatus(dataDir) satisfies EarnStatus | null)
 
 const learn: RouteHandler = ({ dataDir }) => {
   let ids: string[] = []
@@ -276,7 +280,7 @@ const learn: RouteHandler = ({ dataDir }) => {
     const cfg = loadConfig(dataDir)
     ids = Object.entries(cfg.datanets).filter(([k, d]) => k !== '*' && (d.vote || d.mint)).map(([k]) => k)
   } catch { ids = [] } // no/invalid config (onboarding) → empty learn view
-  return json(200, buildLearnView(dataDir, ids))
+  return json(200, buildLearnView(dataDir, ids) satisfies LearnView)
 }
 
 // 7-day window: "recent health", independent of cadence (a count-based window
@@ -284,17 +288,17 @@ const learn: RouteHandler = ({ dataDir }) => {
 // full-history scan per poll.
 const health: RouteHandler = ({ dataDir }) => {
   const since = Date.now() - 7 * 24 * 3600_000
-  return json(200, buildHealth(readActivitySince(dataDir, since), { sinceMs: since }))
+  return json(200, buildHealth(readActivitySince(dataDir, since), { sinceMs: since }) satisfies HealthReport)
 }
 
-const datanets: RouteHandler = async () => json(200, await datanetNames())
+const datanets: RouteHandler = async () => json(200, await datanetNames() satisfies DatanetNames)
 
 const models: RouteHandler = ({ opts }) => {
   // Provider/model NAMES only — never keys (the unauthenticated dashboard holds no secrets).
   const providers = (opts.availableProviders ?? []).map((provider) => ({
     provider, hasKey: true as const, models: KNOWN_MODELS[provider],
   }))
-  return json(200, { providers })
+  return json(200, { providers } satisfies ModelsResponse)
 }
 
 const pnl: RouteHandler = ({ dataDir }) => {
@@ -303,7 +307,7 @@ const pnl: RouteHandler = ({ dataDir }) => {
   // slice — a capped window drops old claims while mint spend is cumulative,
   // making net REPPO read falsely negative as the log grows.
   const p = snapshot ? derivePnl(snapshot, sumClaimedReppo(dataDir), sumMintReppoSpent(dataDir)) : null
-  return json(200, { pnl: p, snapshot })
+  return json(200, { pnl: p, snapshot } satisfies PnlResponse)
 }
 
 // ── write handlers ──────────────────────────────────────────────────────────────
@@ -331,7 +335,7 @@ const onboardingChat: RouteHandler = async ({ opts, session }, req) => {
   }
   if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
   if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
-  return json(200, { reply: r.text, draft: session.draft, finalized: session.finalized })
+  return json(200, { reply: r.text, draft: session.draft, finalized: session.finalized } satisfies OnboardingChatView)
 }
 
 const onboardingConfirm: RouteHandler = ({ dataDir, session }, req) => {
@@ -359,7 +363,7 @@ const agentName: RouteHandler = async ({ dataDir }, req) => {
     })
     if (r === 'no-creds') return json(409, { error: 'no agent registered yet — the node registers one on its first minting start' })
     if (r === 'no-apikey') return json(409, { error: 'agent has no stored apiKey (REPPO_AGENT_ID set manually?) — cannot authenticate the rename' })
-    return json(200, { name, updated: r === 'updated' })
+    return json(200, { name, updated: r === 'updated' } satisfies AgentRenameResult)
   } catch (e) {
     return json(502, { error: `platform rename failed: ${(e as Error).message}` })
   }
@@ -401,7 +405,7 @@ const runNow: RouteHandler = ({ opts }) => {
   const trigger = opts.triggerCycle
   if (!trigger) return json(503, { error: 'node still starting — no scheduler yet' })
   const r = trigger()
-  return json(r.started ? 200 : 409, r)
+  return json(r.started ? 200 : 409, r satisfies RunNowResult)
 }
 
 const learnVeto: RouteHandler = ({ dataDir }, req) => {
@@ -426,7 +430,7 @@ const strategySave: RouteHandler = ({ dataDir }, req) => {
   if (!parsed.success) return json(400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) })
   // Persist to the config row — the node hot-reloads it at the next cycle.
   writeConfig(dataDir, parsed.data)
-  return json(200, { saved: true, appliesNextCycle: true })
+  return json(200, { saved: true, appliesNextCycle: true } satisfies SaveStrategyResult)
 }
 
 // ── the table ───────────────────────────────────────────────────────────────────
