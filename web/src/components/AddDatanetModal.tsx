@@ -19,7 +19,7 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
   const [vote, setVote] = useState(true)
   const [mint, setMint] = useState(false)
   const [adapter, setAdapter] = useState('')
-  const [strictness, setStrictness] = useState('balanced')
+  const [strictness, setStrictness] = useState<DatanetEntry['strictness']>('balanced')
   const [voteShare, setVoteShare] = useState('1')
   const [modelProvider, setModelProvider] = useState('') // '' = node default
   const [modelSlug, setModelSlug] = useState('')
@@ -56,7 +56,7 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
       vote, mint, strictness,
       ...(adapter ? { adapter } : {}),
       ...(Number.isInteger(share) && share >= 1 ? { voteShare: share } : {}),
-      ...(modelProvider && modelSlug ? { model: { provider: modelProvider, model: modelSlug } } : {}),
+      ...(modelProvider && modelSlug ? { model: { provider: modelProvider, model: modelSlug } as DatanetEntry['model'] } : {}),
     }
     onAdd(selectedId, entry)
     onClose()
@@ -105,7 +105,7 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
 
           <label className="field">
             <span>strictness <Tip label="what strictness means">{strictnessTip()}</Tip></span>
-            <select value={strictness} onChange={(e) => setStrictness(e.target.value)}>
+            <select value={strictness} onChange={(e) => setStrictness(e.target.value as DatanetEntry['strictness'])}>
               {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
             </select>
           </label>
