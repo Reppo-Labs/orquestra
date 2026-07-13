@@ -10,6 +10,7 @@
 // the wire type is DERIVED from the domain type (Omit/Pick/Partial), so a rename or
 // a new field still surfaces as a compile error on both sides instead of drifting.
 import type { Pnl } from './pnl.js'
+import type { DatanetPnl } from './datanetPnl.js'
 import type { Snapshot, SnapshotBudget } from './snapshot.js'
 import type { PersistedEarn } from './earnStatus.js'
 import type { BudgetCaps } from '../wallet/ledger.js'
@@ -23,6 +24,10 @@ export type { Snapshot, SnapshotBudget } from './snapshot.js'
 export type { ActivityEntry } from './activityLog.js'
 export type { PanelTranscript, PanelistVerdict } from '../panel/types.js'
 export type { HealthReport, DatanetHealth, KindCounts, TxRate } from './health.js'
+// /api/health actually serves the CLASSIFIED report: buildHealth's counters plus an
+// operator-facing { code, operatorMessage, suggestedAction } per currently-failing datanet.
+export type { ErrorCode, SuggestedAction, ClassifiedError, ClassifiedDatanetHealth, ClassifiedHealthReport } from './errorClass.js'
+export type { DatanetPnl } from './datanetPnl.js'
 export type { DatanetYield } from '../voter/yield.js'
 export type { LlmUsageSnapshot, ModelUsage } from '../llm/usage.js'
 export type { LearnView, LearnDatanetView } from '../learn/view.js'
@@ -95,6 +100,9 @@ export interface ModelsResponse { providers: ModelProvider[] }
 
 /** GET /api/datanets — datanet id → display name. */
 export type DatanetNames = Record<string, string>
+
+/** GET /api/datanet-pnl — per-datanet lifetime profit, worst net first. */
+export interface DatanetPnlResponse { datanets: DatanetPnl[] }
 
 /** POST /api/run-now (200 started, 409 not — reason says why). */
 export interface RunNowResult { started: boolean; reason?: string }

@@ -10,8 +10,10 @@ import { readAgentStore, writeAgentStore, syncAgentName } from '../reppo/agent.j
 import { updateAgentOnPlatform } from '../reppo/platformApi.js'
 import { readSnapshot } from './snapshot.js'
 import { derivePnl } from './pnl.js'
+import { readDatanetPnl } from './datanetPnl.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
+import { attachClassification } from './errorClass.js'
 import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
 import { KNOWN_MODELS, type LlmProvider } from '../llm/model.js'
 import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError } from '../config/load.js'
@@ -29,9 +31,9 @@ import { getDatanetRubric } from '../rubric/load.js'
 import { queryBalanceJson } from '../reppo/queryBalance.js'
 import type { CoreMessage, LanguageModel } from 'ai'
 import type {
-  AgentInfo, AgentRenameResult, DatanetNames, EarnStatus, HealthReport, LearnView,
-  ModelsResponse, OnboardingChatView, OnboardingStatusView, PnlResponse,
-  ProposalDecisionView, RunNowResult, SafeStrategyConfig, SaveStrategyResult,
+  AgentInfo, AgentRenameResult, ClassifiedHealthReport, DatanetNames, DatanetPnlResponse,
+  EarnStatus, LearnView, ModelsResponse, OnboardingChatView, OnboardingStatusView,
+  PnlResponse, ProposalDecisionView, RunNowResult, SafeStrategyConfig, SaveStrategyResult,
 } from './apiTypes.js'
 
 // ── route/dispatch types ────────────────────────────────────────────────────────
@@ -288,7 +290,20 @@ const learn: RouteHandler = ({ dataDir }) => {
 // full-history scan per poll.
 const health: RouteHandler = ({ dataDir }) => {
   const since = Date.now() - 7 * 24 * 3600_000
-  return json(200, buildHealth(readActivitySince(dataDir, since), { sinceMs: since }) satisfies HealthReport)
+  const entries = readActivitySince(dataDir, since)
+  // Classification is composed HERE, not inside buildHealth: health.ts stays a pure
+  // counter, and the operator-facing translation (raw stderr → { code, operatorMessage,
+  // suggestedAction }) lives in errorClass.ts. Same entries, so the classification always
+  // describes the window the panel is counting. Reasons/details were already redacted on
+  // write; the classifier redacts again before matching (defense-in-depth).
+  return json(200, attachClassification(buildHealth(entries, { sinceMs: since }), entries) satisfies ClassifiedHealthReport)
+}
+
+const datanetPnl: RouteHandler = ({ dataDir }) => {
+  // Per-datanet profit — lifetime REPPO spent minting vs claimed back, per datanet.
+  // Derived purely from our own activity rows (no secrets on this path: datanet ids and
+  // REPPO amounts only), so there is nothing to strip.
+  return json(200, { datanets: readDatanetPnl(dataDir) } satisfies DatanetPnlResponse)
 }
 
 const datanets: RouteHandler = async () => json(200, await datanetNames() satisfies DatanetNames)
@@ -446,6 +461,7 @@ export const routes: Route[] = [
   { method: 'GET', path: '/api/datanets', handler: datanets },
   { method: 'GET', path: '/api/models', handler: models },
   { method: 'GET', path: '/api/pnl', handler: pnl },
+  { method: 'GET', path: '/api/datanet-pnl', handler: datanetPnl },
   { method: 'POST', path: '/api/onboarding/chat', handler: onboardingChat },
   { method: 'POST', path: '/api/onboarding/confirm', handler: onboardingConfirm },
   { method: 'POST', path: '/api/agent/name', handler: agentName },

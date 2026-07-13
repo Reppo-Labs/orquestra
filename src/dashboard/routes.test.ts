@@ -131,6 +131,57 @@ describe('read handlers', () => {
   })
 })
 
+describe('GET /api/datanet-pnl (per-datanet profit)', () => {
+  it('returns spend, earnings, net, roi and action counts per datanet', async () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'vote', datanetId: '9', podId: '1', direction: 'up', conviction: 9, reason: 'r', status: 'executed', txHash: '0x1' })
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'mint', datanetId: '2', reppoSpent: 200, status: 'executed', txHash: '0xm' })
+    appendActivity(dir, { ts: 't', cycleId: 'c1', kind: 'claim', datanetId: '2', reppoClaimed: 410, podId: 'p1', epoch: 3, status: 'executed', txHash: '0xc' })
+    const r = await call('GET', '/api/datanet-pnl')
+    expect(r.status).toBe(200)
+    const { datanets } = r.body as { datanets: { datanetId: string }[] }
+    const d2 = datanets.find((d) => d.datanetId === '2')
+    expect(d2).toMatchObject({ reppoSpent: 200, reppoEarned: 410, net: 210, roi: 205, mintsExecuted: 1 })
+    // the vote-only datanet: no spend ⇒ roi is null, never a fake 0%
+    const d9 = datanets.find((d) => d.datanetId === '9')
+    expect(d9).toMatchObject({ roi: null, votesCast: 1, reppoSpent: 0 })
+  })
+
+  it('holds no secrets', async () => {
+    const r = await call('GET', '/api/datanet-pnl')
+    expect(JSON.stringify(r.body)).not.toMatch(/PRIVATE_KEY|sk-ant-|inf_|--rpc-url/)
+  })
+})
+
+describe('GET /api/health classification (raw stderr → operator English)', () => {
+  it('attaches { code, operatorMessage, suggestedAction } to a failing datanet', async () => {
+    appendActivity(dir, {
+      ts: new Date().toISOString(), cycleId: 'c2', kind: 'skip', datanetId: '6',
+      // VERBATIM from the live node (see errorClass.test.ts). Not a tidied-up stand-in: the
+      // classifier keys on the eth_call in the request body, and a hand-shortened
+      // "… — INTERNAL_ERROR" would prove nothing about the string an operator actually gets.
+      reason: 'datanet error: Command failed: reppo query datanet 6 --json --rpc-url <redacted> — {"error":{"code":"INTERNAL_ERROR","message":"HTTP request failed.\\n\\nURL: https://base-mainnet.g.alchemy.com/v2/<redacted>\\nRequest body: {\\"method\\":\\"eth_call\\",\\"params\\":[{\\"to\\":\\"0x2629A8083065938B533b117704935D727270eE7A\\"},\\"latest\\"]}\\nDetails: fetch failed"}}',
+      status: 'skipped',
+    })
+    const r = await call('GET', '/api/health')
+    const body = r.body as { datanets: { datanetId: string; lastSkipReason?: string; classification?: { code: string; operatorMessage: string; suggestedAction: string } }[] }
+    const d6 = body.datanets.find((d) => d.datanetId === '6')!
+    expect(d6.classification).toMatchObject({ code: 'rpc_unavailable', suggestedAction: 'check_rpc' })
+    expect(d6.classification!.operatorMessage).toContain('Datanet 6')
+    expect(d6.classification!.operatorMessage).not.toContain('Command failed')
+    // the raw reason is still there for anyone who wants it — we ADD, never replace
+    expect(d6.lastSkipReason).toContain('Command failed')
+  })
+
+  it('leaves a healthy datanet unclassified', async () => {
+    appendActivity(dir, { ts: new Date().toISOString(), cycleId: 'c1', kind: 'vote', datanetId: '9', podId: '1', direction: 'up', conviction: 9, reason: 'r', status: 'executed', txHash: '0x1' })
+    const r = await call('GET', '/api/health')
+    const body = r.body as { datanets: { datanetId: string; votes: { executed: number }; classification?: unknown }[] }
+    const d9 = body.datanets.find((d) => d.datanetId === '9')!
+    expect(d9.classification).toBeUndefined()
+    expect(d9.votes.executed).toBe(1) // buildHealth's own fields still intact
+  })
+})
+
 describe('write handlers', () => {
   it('/api/strategy 400 on an invalid candidate, file untouched', async () => {
     const before = readConfigText(dir)

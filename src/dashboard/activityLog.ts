@@ -181,6 +181,31 @@ export function sumMintReppoSpent(dataDir: string): number {
   return row.total
 }
 
+/** Lifetime REPPO in/out + action counts per datanet, aggregated in SQL. Same
+ *  lifetime-sum rationale as sumClaimedReppo/sumMintReppoSpent (a capped slice would
+ *  truncate old claims while mint spend stays cumulative, so per-datanet ROI would read
+ *  falsely negative as the log grows). Rows with no datanetId (wallet-global 'stake'
+ *  breadcrumbs) are excluded. Consumed by src/dashboard/datanetPnl.ts. */
+export interface DatanetTotals {
+  datanetId: string
+  reppoSpent: number
+  reppoEarned: number
+  votesCast: number
+  mintsExecuted: number
+}
+export function readDatanetTotals(dataDir: string): DatanetTotals[] {
+  return conn(dataDir).prepare(`
+    SELECT datanetId,
+      COALESCE(SUM(CASE WHEN kind = 'mint'  AND status = 'executed' THEN reppoSpent   ELSE 0 END), 0) AS reppoSpent,
+      COALESCE(SUM(CASE WHEN kind = 'claim' AND status = 'executed' THEN reppoClaimed ELSE 0 END), 0) AS reppoEarned,
+      COALESCE(SUM(CASE WHEN kind = 'vote'  AND status = 'executed' THEN 1 ELSE 0 END), 0) AS votesCast,
+      COALESCE(SUM(CASE WHEN kind = 'mint'  AND status = 'executed' THEN 1 ELSE 0 END), 0) AS mintsExecuted
+    FROM activity
+    WHERE datanetId IS NOT NULL AND datanetId <> ''
+    GROUP BY datanetId
+  `).all() as unknown as DatanetTotals[]
+}
+
 /** Entries at or after `sinceMs` (epoch millis), newest-first. Indexed on ts, so
  *  the dashboard health window doesn't re-read the whole history each poll. */
 export function readActivitySince(dataDir: string, sinceMs: number): ActivityEntry[] {
