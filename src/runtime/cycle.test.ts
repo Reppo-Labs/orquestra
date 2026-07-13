@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache } from './cycle.js'
+import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -60,6 +60,12 @@ const grantCache = (over: Partial<GrantCache> = {}): GrantCache => ({
   revoke: vi.fn(),
   ...over,
 })
+// ActivityStore fake: a record spy; beginCycle / platform registration only when a test
+// exercises them (absent in RPC-less / test wirings, exactly like production).
+const fakeActivity = (over: Partial<ActivityStore> = {}): ActivityStore => ({
+  record: vi.fn(),
+  ...over,
+})
 
 function deps(over: Partial<CycleDeps> = {}): CycleDeps {
   const adapter: DatanetAdapter = {
@@ -84,7 +90,7 @@ function deps(over: Partial<CycleDeps> = {}): CycleDeps {
     } as unknown as CycleDeps['executor'],
     ledger: { startCycle: vi.fn(), canVote: () => true, canMint: () => true, votesRemaining: () => 99 } as unknown as CycleDeps['ledger'],
     getEmissionsDue: async () => [],
-    recordActivity: vi.fn(),
+    activity: fakeActivity(),
     ...over,
   }
 }
@@ -93,7 +99,7 @@ describe('runCycle video-pod skips', () => {
   it('records a per-pod skip activity entry when a video pod scoring throws (idle datanet explains itself)', async () => {
     const recordActivity = vi.fn()
     const d = deps({
-      recordActivity,
+      activity: fakeActivity({ record: recordActivity }),
       // Single vote-only datanet; its only pod throws (e.g. a video ingest skip).
       voteScorerFor: () => ({ scorer: { scorePod: async () => { throw new Error('Gemini Files API file never reached ACTIVE (state FAILED)') } } }),
     })
@@ -114,7 +120,7 @@ describe('runCycle video-pod skips', () => {
 
   it('arms the per-cycle video budget once via beginCycle', async () => {
     const beginCycle = vi.fn()
-    const d = deps({ beginCycle })
+    const d = deps({ activity: fakeActivity({ beginCycle }) })
     await runCycle(config, 'cyc-reset', d)
     expect(beginCycle).toHaveBeenCalledTimes(1)
   })
@@ -237,7 +243,7 @@ describe('runCycle', () => {
   it('records a skip reason when vote is enabled but the datanet has no voter rubric', async () => {
     const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: false })) })
     await runCycle(config, 'c-novote', d)
-    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain voter rubric/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /no on-chain voter rubric/.test(r))).toBe(true)
   })
 
   it('records a skip reason when mint is enabled but the datanet has no publisher spec', async () => {
@@ -247,7 +253,7 @@ describe('runCycle', () => {
     })
     const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canMint: false })) })
     await runCycle(cfg, 'c-nomint', d)
-    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(true)
   })
 
   it('skips vote scoring entirely when the per-cycle vote budget is already exhausted', async () => {
@@ -260,7 +266,7 @@ describe('runCycle', () => {
     expect(scorePod).not.toHaveBeenCalled() // no wasted LLM spend
     expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
     // but the dashboard still learns why the datanet is idle
-    expect(skipReasons(d.recordActivity as any).some((r) => /vote budget\/rate exhausted/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /vote budget\/rate exhausted/.test(r))).toBe(true)
   })
 
   it('skips mint discovery when the mint budget is exhausted (no wasted adapter/LLM work)', async () => {
@@ -282,7 +288,7 @@ describe('runCycle', () => {
     const d = deps({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, canVote: true, canMint: false })) })
     await runCycle(config, 'c-voted-nomint', d)
     // votes happened (datanet 9 + 2 both vote), so no publisher-spec skip should be persisted
-    expect(skipReasons(d.recordActivity as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(false)
+    expect(skipReasons(d.activity.record as any).some((r) => /no on-chain publisher spec/.test(r))).toBe(false)
     expect((d.executor.executeVote as any).mock.calls.length).toBeGreaterThan(0)
   })
 
@@ -294,7 +300,7 @@ describe('runCycle', () => {
     const d = deps()
     await runCycle(cfg, 'c-badadapter', d)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
-    expect(skipReasons(d.recordActivity as any).some((r) => /adapter "typo-adapter" is not registered/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /adapter "typo-adapter" is not registered/.test(r))).toBe(true)
   })
 
   it('records a skip reason when candidates are discovered but none pass scoring/dedup', async () => {
@@ -306,7 +312,7 @@ describe('runCycle', () => {
     const d = deps({ candidateScorer: { scoreCandidate: async () => ({ score: 1, reason: 'weak' }) } }) // below aggressive like-threshold
     await runCycle(cfg, 'c-allrejected', d)
     expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
-    expect(skipReasons(d.recordActivity as any).some((r) => /discovered but none passed scoring\/dedup/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /discovered but none passed scoring\/dedup/.test(r))).toBe(true)
   })
 
   it('isolates a per-datanet failure: a throwing getRubric skips that datanet, others proceed', async () => {
@@ -337,7 +343,7 @@ describe('runCycle', () => {
 
   it('calls registerVoteOnPlatform with (podId, txHash) on an executed vote', async () => {
     const registerVoteOnPlatform = vi.fn(async () => {})
-    const d = deps({ registerVoteOnPlatform })
+    const d = deps({ activity: fakeActivity({ registerVoteOnPlatform }) })
     await runCycle(config, 'c-plat', d)
     // default executeVote returns txHash:'0xvote'; datanets 9 and 2 both vote on pod p1
     expect(registerVoteOnPlatform).toHaveBeenCalledWith('p1', '0xvote')
@@ -347,7 +353,7 @@ describe('runCycle', () => {
   it('does not call registerVoteOnPlatform when txHash is absent', async () => {
     const registerVoteOnPlatform = vi.fn(async () => {})
     const d = deps({
-      registerVoteOnPlatform,
+      activity: fakeActivity({ registerVoteOnPlatform }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true as const, status: 'executed' as const })), // no txHash
         executeMint: vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xm' })),
@@ -360,7 +366,7 @@ describe('runCycle', () => {
   it('does not call registerVoteOnPlatform on non-executed vote status', async () => {
     const registerVoteOnPlatform = vi.fn(async () => {})
     const d = deps({
-      registerVoteOnPlatform,
+      activity: fakeActivity({ registerVoteOnPlatform }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: false as const, status: 'error' as const, txHash: '0xerr', detail: 'fail' })),
         executeMint: vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xm' })),
@@ -371,7 +377,7 @@ describe('runCycle', () => {
   })
 
   it('a rejected registerVoteOnPlatform never aborts the cycle', async () => {
-    const d = deps({ registerVoteOnPlatform: vi.fn(async () => { throw new Error('api down') }) })
+    const d = deps({ activity: fakeActivity({ registerVoteOnPlatform: vi.fn(async () => { throw new Error('api down') }) }) })
     await expect(runCycle(config, 'c-plat-fail', d)).resolves.toBeDefined()
     await Promise.resolve() // flush fire-and-forget .catch handler
   })
@@ -399,7 +405,7 @@ describe('runCycle', () => {
     // the skip is visible in the report and the activity log
     const d9 = report.datanets.find((r) => r.datanetId === '9')!
     expect(d9.skipped).toMatch(/subnet access not granted/)
-    const skips = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+    const skips = (d.activity.record as ReturnType<typeof vi.fn>).mock.calls
       .map((c: unknown[]) => c[0] as { kind: string; datanetId: string; status: string; reason?: string })
       .filter((e) => e.kind === 'skip')
     expect(skips.length).toBe(2) // datanets 9 and 2, one entry each per cycle
@@ -451,7 +457,7 @@ describe('runCycle', () => {
       }),
     })
     await runCycle(config, 'c-err', d)
-    const skips = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+    const skips = (d.activity.record as ReturnType<typeof vi.fn>).mock.calls
       .map((c: unknown[]) => c[0] as { kind: string; datanetId: string; reason?: string })
       .filter((e) => e.kind === 'skip')
     expect(skips).toHaveLength(1)
@@ -486,7 +492,7 @@ describe('runCycle', () => {
     expect(d.getPodsAndFilter).not.toHaveBeenCalled() // skipped before scoring
     const d42 = report.datanets.find((r) => r.datanetId === '42')!
     expect(d42.skipped).toMatch(/non-REPPO access fee needs reppo CLI ≥ 0\.8\.5/)
-    expect(skipReasons(d.recordActivity as any).some((r) => /non-REPPO access fee needs reppo CLI ≥ 0\.8\.5/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /non-REPPO access fee needs reppo CLI ≥ 0\.8\.5/.test(r))).toBe(true)
   })
 
   it('grants a non-REPPO-fee datanet with token=primary when the CLI supports it (capability ON)', async () => {
@@ -527,7 +533,7 @@ describe('runCycle', () => {
     expect(d.getPodsAndFilter).not.toHaveBeenCalled()       // skipped before scoring
     const d42 = report.datanets.find((r) => r.datanetId === '42')!
     expect(d42.skipped).toMatch(/insufficient EXY balance for access fee/)
-    expect(skipReasons(d.recordActivity as any).some((r) => /insufficient EXY balance/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /insufficient EXY balance/.test(r))).toBe(true)
   })
 
   it('grants a non-REPPO datanet with token=primary when the balance covers the fee', async () => {
@@ -584,7 +590,7 @@ describe('runCycle', () => {
       onchain: onchainReads({ wallet: walletReads({ readTokenBalance: vi.fn(async () => 100_000_000n) }) }),
     })
     await runCycle(nonReppoConfig, 'c-grantfee', d)
-    const grants = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+    const grants = (d.activity.record as ReturnType<typeof vi.fn>).mock.calls
       .map((c: unknown[]) => c[0] as { kind: string; reason?: string; status: string })
       .filter((e) => e.kind === 'grant')
     expect(grants).toHaveLength(1)
@@ -671,7 +677,7 @@ describe('runCycle', () => {
       })),
       executor: { executeVote: vi.fn(async () => { cast++; return { ok: true, status: 'executed', txHash: '0xv' } }), executeMint: vi.fn() } as unknown as CycleDeps['executor'],
       ledger: { startCycle: vi.fn(), canVote: () => cast < CAP, canMint: () => false, votesRemaining: () => Math.max(0, CAP - cast) } as unknown as CycleDeps['ledger'],
-      recordActivity: (e) => { activity.push(e) },
+      activity: fakeActivity({ record: (e) => { activity.push(e) } }),
     })
     await runCycle(single, 'c-defer', d)
     expect((d.executor.executeVote as any).mock.calls.length).toBe(1) // only the one that fits is attempted; the rest are not
@@ -704,7 +710,7 @@ describe('runCycle claim phase', () => {
     const report = await runCycle(config, 'c1', d)
     expect(report.claims).toHaveLength(1) // only pod 1 (pod 2 already claimed)
     expect(recorded).toEqual(['1:101'])
-    const activity = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+    const activity = (d.activity.record as ReturnType<typeof vi.fn>).mock.calls
     expect(activity.some((c: unknown[]) => {
       const e = c[0] as { kind: string; podId?: string; reppoClaimed?: number }
       return e.kind === 'claim' && e.podId === '1' && e.reppoClaimed === 12.5
@@ -730,7 +736,7 @@ describe('runCycle claim phase', () => {
     expect(executeVoterClaim).toHaveBeenCalledTimes(1)
     expect(report.claims).toHaveLength(1)
     expect(recorded).toEqual(['voter-1624:105'])            // voter-prefixed — no collision with owner key
-    const activity = (d.recordActivity as ReturnType<typeof vi.fn>).mock.calls
+    const activity = (d.activity.record as ReturnType<typeof vi.fn>).mock.calls
       .map((c: unknown[]) => c[0] as { kind: string; podId?: string; reppoClaimed?: number; detail?: string })
     const row = activity.find((e) => e.kind === 'claim' && e.podId === '1624')
     expect(row?.reppoClaimed).toBe(7)
@@ -840,7 +846,7 @@ describe('runCycle stake top-up', () => {
   it('records the lock-failure reason in the stake activity so the operator sees WHY', async () => {
     const acts: any[] = []
     const lock = vi.fn(async () => ({ ok: false as const, status: 'error' as const, detail: 'INSUFFICIENT_REPPO_BALANCE' }))
-    const d = deps({ getVeReppo: async () => 0, executor: stakeExecutor(lock), recordActivity: (e: any) => acts.push(e) })
+    const d = deps({ getVeReppo: async () => 0, executor: stakeExecutor(lock), activity: fakeActivity({ record: (e: any) => acts.push(e) }) })
     await runCycle(cfgStake(1950), 'c-why', d)
     const stake = acts.find((e) => e.kind === 'stake')
     expect(stake).toBeDefined()
@@ -875,7 +881,7 @@ describe('runCycle per-datanet vote scorer', () => {
     const report = await runCycle(config, 'c-skip', d)
     for (const dn of report.datanets) expect(dn.votes).toHaveLength(0)
     expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
-    expect(skipReasons(d.recordActivity as any).some((r) => /no API key for google/.test(r))).toBe(true)
+    expect(skipReasons(d.activity.record as any).some((r) => /no API key for google/.test(r))).toBe(true)
   })
 })
 
@@ -895,7 +901,7 @@ describe('datanet yield', () => {
     let sharedRubric: DatanetRubric | undefined
     let scorerRubric: VoteRubric | undefined
     const d = deps({
-      recordActivity,
+      activity: fakeActivity({ record: recordActivity }),
       // Capture BOTH the shared (process-cached in production) rubric object and the
       // rubric the scorer receives: yield must ride a vote-scoped CLONE — mutating the
       // shared object leaked the vote-only economics block into the mint path (which
@@ -929,7 +935,7 @@ describe('datanet yield', () => {
   it('volume read throws: yield unavailable with the error, datanet still votes', async () => {
     const recordActivity = vi.fn()
     const d = deps({
-      recordActivity,
+      activity: fakeActivity({ record: recordActivity }),
       onchain: onchainReads({ getEpochVoteVolume: vi.fn(async () => { throw new Error('rpc down') }) }),
     })
     const report = await runCycle(yieldCfg, 'c1', d)
@@ -959,7 +965,7 @@ describe('datanet yield', () => {
 
   it('onchain absent (no RPC): yield reported unavailable WITHOUT a failure reason', async () => {
     const recordActivity = vi.fn()
-    const report = await runCycle(yieldCfg, 'c1', deps({ recordActivity }))
+    const report = await runCycle(yieldCfg, 'c1', deps({ activity: fakeActivity({ record: recordActivity }) }))
     expect(report.datanetEconomics[0].epochVoteVolume).toBeNull()
     expect(report.datanetEconomics[0].unavailableReason).toBeUndefined() // not wired ≠ failed
   })

@@ -345,7 +345,21 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   return {
     dataDir: w.dataDir,
     topN: 12,
-    beginCycle: () => { videoBudget = videoCap; activitySnapshot = null; mintedNamesMemo = null },
+    // Activity log + per-cycle arming + platform vote registration, as one collaborator.
+    activity: {
+      record: (entry) => {
+        try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
+      },
+      beginCycle: () => { videoBudget = videoCap; activitySnapshot = null; mintedNamesMemo = null },
+      // Cred check deferred to call time so late-arriving or rotated creds take effect
+      // without restarting the node (env vars set from SQLite at startup but re-read here).
+      registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+        const agentId = process.env.REPPO_AGENT_ID
+        const apiKey = process.env.REPPO_API_KEY
+        if (!agentId || !apiKey) return Promise.resolve()
+        return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
+      },
+    },
     getRubric: (id) => io.getRubric(id),
     getPodsAndFilter: async (id) => {
       const pods = await reader.listPods(id, { all: true })
@@ -435,14 +449,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getVeReppo: async () => (await reader.balance().catch(() => null))?.veReppo ?? null,
     executor: w.executor,
     ledger: w.ledger,
-    // Cred check deferred to call time so late-arriving or rotated creds take effect
-    // without restarting the node (env vars set from SQLite at startup but re-read here).
-    registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
-      const agentId = process.env.REPPO_AGENT_ID
-      const apiKey = process.env.REPPO_API_KEY
-      if (!agentId || !apiKey) return Promise.resolve()
-      return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
-    },
     // Claim source: detect claimable (pod,epoch) ON-CHAIN when RPC + wallet are known
     // (the platform `emissions-due` API under-reports — it hid 20 claimable pairs). The
     // CLI path is the fallback when no RPC is configured. A throw is tolerated by the
@@ -453,9 +459,6 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     getEmissionsDue: async () => enrichTokens((rpcUrl && walletAddress)
       ? await reader.claimableOnchain(rpcUrl, walletAddress, w.dataDir, { floorEpoch: emissionsFloorEpoch() })
       : (await reader.emissionsDue()).pods),
-    recordActivity: (entry) => {
-      try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
-    },
     strategyFor,
     getExistingPodNames: async (id) => {
       const pods = await reader.listPods(id, { all: true }).catch(() => [] as VoterPod[])

@@ -225,7 +225,7 @@ describe('buildCycleDeps', () => {
 
   it('registerVoteOnPlatform is always wired (cred check deferred to call time)', () => {
     const deps = buildCycleDeps(wiring())
-    expect(deps.registerVoteOnPlatform).toBeDefined()
+    expect(deps.activity.registerVoteOnPlatform).toBeDefined()
   })
 
   it('registerVoteOnPlatform is a no-op when REPPO_AGENT_ID / REPPO_API_KEY are absent', async () => {
@@ -235,7 +235,7 @@ describe('buildCycleDeps', () => {
     delete process.env.REPPO_API_KEY
     try {
       const deps = buildCycleDeps(wiring())
-      await expect(deps.registerVoteOnPlatform!('pod-1', '0xtx')).resolves.toBeUndefined()
+      await expect(deps.activity.registerVoteOnPlatform!('pod-1', '0xtx')).resolves.toBeUndefined()
     } finally {
       if (savedId !== undefined) process.env.REPPO_AGENT_ID = savedId
       if (savedKey !== undefined) process.env.REPPO_API_KEY = savedKey
@@ -395,7 +395,7 @@ describe('buildCycleDeps', () => {
     await deps.getPodsAndFilter('5')  // …must NOT re-scan for datanet 2
     await deps.getEmissionsDue()      // claim-token enrichment shares the snapshot too
     expect(readActivity).toHaveBeenCalledTimes(1)
-    deps.beginCycle!()                // next cycle re-arms the snapshot
+    deps.activity.beginCycle!()                // next cycle re-arms the snapshot
     await deps.getPodsAndFilter('2')
     expect(readActivity).toHaveBeenCalledTimes(2)
   })
@@ -446,7 +446,7 @@ describe('buildCycleDeps', () => {
     expect(a.pods.filter((p) => p.mediaUrl).length).toBe(1)
     expect(b.pods.filter((p) => p.mediaUrl).length).toBe(0) // budget already spent this cycle
     // New cycle: beginCycle re-arms the global budget → the next datanet can mark again.
-    deps.beginCycle!()
+    deps.activity.beginCycle!()
     const c = await deps.getPodsAndFilter('5')
     expect(c.pods.filter((p) => p.mediaUrl).length).toBe(1)
   })

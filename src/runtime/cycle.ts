@@ -46,7 +46,7 @@ async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: Cy
     // manual restart (the operator's "I confirmed the lock but it never locked" report). The
     // idempotency key is stable per target, so a retry that re-locks the same amount is safe.
     if (r.status === 'executed') markStakeTargetAttempted(config.stake.lockReppo)
-    deps.recordActivity({
+    deps.activity.record({
       ts: new Date().toISOString(), cycleId, kind: 'stake', datanetId: '',
       // On failure carry the CLI detail (e.g. INSUFFICIENT_REPPO_BALANCE) so the dashboard
       // explains WHY veREPPO is still zero instead of mislabeling the row as "topped up".
@@ -59,7 +59,7 @@ async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: Cy
   } catch (e) {
     // Never abort the cycle on a stake top-up failure; the node runs on existing veREPPO.
     console.error(`orquestra: veREPPO top-up failed — ${e instanceof Error ? e.message : String(e)}`)
-    deps.recordActivity({
+    deps.activity.record({
       ts: new Date().toISOString(), cycleId, kind: 'stake', datanetId: '',
       reason: `veREPPO top-up failed — ${e instanceof Error ? e.message : String(e)}`, status: 'skipped',
     })
@@ -124,16 +124,26 @@ export interface Dedup {
   grants?: GrantCache
 }
 
-export interface CycleDeps {
-  dataDir: string
-  topN: number
-  getRubric(datanetId: string): Promise<DatanetRubric>
-  getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
+/** How the cycle tells the world what it did: the activity log rows the dashboard is
+ *  built from, plus the per-cycle arming hook and the platform vote registration. */
+export interface ActivityStore {
+  /** Persist one activity row. Wiring never throws this into the cycle. */
+  record(entry: ActivityEntry): void
   /** Arm per-cycle wiring state. Called once at the start of each runCycle so the
    *  `videoPodsPerCycle` budget and the cycle's activity-history snapshot are global
    *  across datanets, not re-armed per datanet. Optional: tests/wirings without that
    *  state omit it. */
   beginCycle?(): void
+  /** Register the on-chain vote with the Reppo platform API so the frontend can display
+   *  it. Fire-and-forget: absence or failure never aborts the cycle. */
+  registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
+}
+
+export interface CycleDeps {
+  dataDir: string
+  topN: number
+  getRubric(datanetId: string): Promise<DatanetRubric>
+  getPodsAndFilter(datanetId: string): Promise<{ pods: VoterPod[]; filter: VoteFilter }>
   getAdapter(adapterId: string): DatanetAdapter | undefined
   /** Per-datanet vote scorer factory. Returns the scorer to use for THIS datanet, or a
    *  skip reason (e.g. no API key for the datanet's chosen provider) — the cycle records
@@ -150,11 +160,9 @@ export interface CycleDeps {
   onchain?: OnchainReads
   executor: WalletExecutor
   ledger: BudgetLedger
-  /** Register the on-chain vote with the Reppo platform API so the frontend can display it.
-   *  Fire-and-forget: absence or failure never aborts the cycle. */
-  registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
   getEmissionsDue(): Promise<ClaimableEmission[]>
-  recordActivity(entry: ActivityEntry): void
+  /** Activity log + per-cycle arming + platform vote registration. */
+  activity: ActivityStore
   /** per-datanet operator strategy passed to the adapter (e.g. gdelt focus/angle/brief). */
   strategyFor?(datanetId: string): Record<string, unknown>
   /** existing on-chain pod names for a datanet (novelty dedup backstop). */
@@ -171,7 +179,7 @@ export interface CycleDeps {
  *  The dashboard health panel and lastSkipReason are derived from these rows. `podId`
  *  scopes a per-pod scoring skip; absent for datanet-level skips. */
 function recordSkipActivity(deps: CycleDeps, cycleId: string, datanetId: string, reason: string, podId?: string): void {
-  deps.recordActivity({
+  deps.activity.record({
     ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId,
     ...(podId !== undefined ? { podId } : {}),
     reason, status: 'skipped',
@@ -268,7 +276,7 @@ async function ensureSubnetAccess(
   // kind:'grant' (NOT 'skip'): a successful grant is setup, not idleness. Logging
   // it as a skip would inflate the skip count and could surface "granted access" as
   // lastSkipReason / mark the datanet idle in buildHealth — see src/dashboard/health.ts.
-  deps.recordActivity({
+  deps.activity.record({
     ts: new Date().toISOString(), cycleId, kind: 'grant', datanetId,
     reason, status: 'executed', txHash: gr.txHash, gasEth: gr.gasEth,
   })
@@ -312,7 +320,7 @@ async function claimPhase(
       r = { ok: false, status: 'error', detail: e instanceof Error ? e.message : String(e) }
     }
     results.push(r)
-    deps.recordActivity({
+    deps.activity.record({
       ts: new Date().toISOString(), cycleId, kind: 'claim', datanetId: em.datanetId,
       // Prefer the actual claimed REPPO read from the tx receipt (em.reppo is 0 under
       // on-chain detection — PodManager V2 has no pre-claim amount view).
@@ -356,7 +364,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   deps.ledger.startCycle(cycleId)
   // Arm per-cycle wiring state once (video-pod budget + activity snapshot — global
   // across datanets, not per-datanet).
-  deps.beginCycle?.()
+  deps.activity.beginCycle?.()
   const datanets: DatanetReport[] = []
   const datanetEconomics: DatanetYield[] = []
 
@@ -385,7 +393,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // CANNOT_VOTE_FOR_OWN_POD is PERMANENT (we minted the pod; the own-pods query missed it).
     if (r.status === 'executed') {
       deps.dedup.recordVote(datanetId, intent.podId)
-      if (r.txHash) deps.registerVoteOnPlatform?.(intent.podId, r.txHash)
+      if (r.txHash) deps.activity.registerVoteOnPlatform?.(intent.podId, r.txHash)
         .catch((e: unknown) => console.error(redactSecrets(`orquestra: platform vote register failed pod ${intent.podId}: ${(e as Error).message}`)))
     } else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
       console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
@@ -394,7 +402,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // A VOTER_LACKS_SUBNET_ACCESS error while the cache says granted means the cache is STALE —
     // evict so the next cycle re-attempts the grant instead of failing forever.
     if (r.status === 'error' && /VOTER_LACKS_SUBNET_ACCESS/.test(r.detail ?? '')) deps.dedup.grants?.revoke(datanetId)
-    deps.recordActivity({
+    deps.activity.record({
       ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
       podId: intent.podId, direction: intent.direction, conviction: intent.conviction, reason: intent.reason,
       status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
@@ -570,7 +578,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             // unconfirmed mint on retry. (This recurred live: each missing-credential error
             // poisoned dedup and required manually clearing the key before retrying.)
             if (r.status === 'executed') deps.dedup.recordMint(datanetId, intent.canonicalKey)
-            deps.recordActivity({
+            deps.activity.record({
               ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
               canonicalKey: intent.canonicalKey, podName: intent.podName,
               // conviction+reason mirror the vote entry so the dashboard shows the
