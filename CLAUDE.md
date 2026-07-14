@@ -55,3 +55,17 @@ A cycle (`src/runtime/cycle.ts → runCycle`) iterates configured datanets and, 
 - ESM throughout (`"type": "module"`, `NodeNext`). **Import with `.js` extensions** even from `.ts` sources.
 - TypeScript `strict`. Tests are colocated `*.test.ts` next to source (vitest, `node` environment); cross-CLI-boundary integration tests live in `test/` with JSON/XML fixtures in `test/fixtures/`.
 - Node ≥ 22.5 (uses `node:sqlite`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary, label string = role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the root + `docs/adr/`. See `docs/agents/domain.md`.
