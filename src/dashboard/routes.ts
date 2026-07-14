@@ -33,7 +33,8 @@ import type { CoreMessage, LanguageModel } from 'ai'
 import type {
   AgentInfo, AgentRenameResult, ClassifiedHealthReport, DatanetNames, DatanetPnlResponse,
   EarnStatus, LearnView, ModelsResponse, OnboardingChatView, OnboardingStatusView,
-  PnlResponse, ProposalDecisionView, RunNowResult, SafeStrategyConfig, SaveStrategyResult,
+  PauseResult, PnlResponse, ProposalDecisionView, RunNowResult, SafeStrategyConfig,
+  SaveStrategyResult,
 } from './apiTypes.js'
 
 // ── route/dispatch types ────────────────────────────────────────────────────────
@@ -126,15 +127,21 @@ function safeConfig(dataDir: string): SafeStrategyConfig {
     if (parsed.success) {
       // nodeName included so the dashboard's save round-trip (GET → edit → POST full
       // candidate) doesn't silently drop the onboarding-chosen name from the config.
-      const { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel, nodeName } = parsed.data
-      return { horizonDays, cadenceHours, claimEmissions, datanets, notes, budget, stake, deliberation, defaultModel, nodeName }
+      // `paused` is exposed so the UI can SHOW the kill-switch state (it is not a secret —
+      // the pause state is operator-visible by design), but the round-trip is not what
+      // protects it: POST /api/strategy carries the PERSISTED flag forward and ignores
+      // whatever the candidate says, because a stale tab or an assistant proposal that
+      // dropped the key would otherwise resume a stopped node. Only POST /api/pause moves it.
+      const { horizonDays, cadenceHours, claimEmissions, paused, datanets, notes, budget, stake, deliberation, defaultModel, nodeName } = parsed.data
+      return { horizonDays, cadenceHours, claimEmissions, paused, datanets, notes, budget, stake, deliberation, defaultModel, nodeName }
     }
     // tolerant fallback for a file the schema rejects (node likely won't run on it either).
     // deliberation falls back to the schema default so the editor reflects real behavior.
     // Best-effort raw echo — the cast is honest about that (values are unvalidated).
     return {
       horizonDays: c.horizonDays, cadenceHours: c.cadenceHours,
-      claimEmissions: c.claimEmissions !== false, datanets: c.datanets, notes: c.notes,
+      claimEmissions: c.claimEmissions !== false, paused: c.paused === true,
+      datanets: c.datanets, notes: c.notes,
       budget: c.budget, stake: c.stake, deliberation: c.deliberation ?? { enabled: true, votePanel: true },
       defaultModel: c.defaultModel, nodeName: c.nodeName,
     } as SafeStrategyConfig
@@ -143,6 +150,20 @@ function safeConfig(dataDir: string): SafeStrategyConfig {
     // otherwise renders a blank header with no trace anywhere.
     console.error(`orquestra: dashboard could not read strategy.config.json — ${(e as Error).message}`)
     return {}
+  }
+}
+
+/** The PERSISTED pause flag, or undefined when there is no config row yet (first write).
+ *  Deliberately tolerant — parsed straight off the raw text, not through loadConfig, so a
+ *  config the schema rejects still yields the operator's kill-switch state instead of throwing.
+ *  Only an explicit `true` counts as paused; anything else (absent, false, garbage) is running. */
+function persistedPaused(dataDir: string): boolean | undefined {
+  const text = readConfigText(dataDir)
+  if (text === null) return undefined
+  try {
+    return (JSON.parse(text) as { paused?: unknown }).paused === true
+  } catch {
+    return undefined
   }
 }
 
@@ -443,9 +464,45 @@ const learnProposalDecision: RouteHandler = ({ dataDir }, req) => {
 const strategySave: RouteHandler = ({ dataDir }, req) => {
   const parsed = StrategyConfigSchema.safeParse(req.body)
   if (!parsed.success) return json(400, { error: 'invalid strategy config', detail: parsed.error.issues.slice(0, 5) })
+  // PAUSE IS NOT A SAVEABLE FIELD. POST /api/pause is the only route that may change it,
+  // so a strategy save carries the PERSISTED value forward regardless of what the candidate
+  // says. Without this, `paused` (schema default false) silently resumes a stopped node on
+  // any save that omits it — an assistant proposal that dropped the key, a stale tab whose
+  // candidate predates the pause, a hand-rolled curl. The operator's kill switch must never
+  // be flipped by a write that was about something else. Refusal only: a save can neither
+  // un-pause nor pause; it just cannot move the flag.
+  // (?? — no config on disk yet means there is no pause to preserve: this is the first write.)
+  const paused = persistedPaused(dataDir) ?? parsed.data.paused
   // Persist to the config row — the node hot-reloads it at the next cycle.
+  writeConfig(dataDir, { ...parsed.data, paused })
+  // Echo the effective flag so a client holding a stale candidate can reconcile.
+  return json(200, { saved: true, appliesNextCycle: true, paused } satisfies SaveStrategyResult)
+}
+
+const pause: RouteHandler = ({ dataDir }, req) => {
+  // Emergency kill switch. Flips config.paused; the cycle refuses to sign ANYTHING while it
+  // is true (src/runtime/cycle.ts, top of runCycle) and the node keeps running. The
+  // dispatcher's cross-site guard runs before every POST — pausing/unpausing is a
+  // budget-relevant write and gets the same CSRF/DNS-rebinding defense as a strategy save.
+  // It writes through the SAME validated path (StrategyConfigSchema → writeConfig) as every
+  // other config mutation, so it cannot smuggle an unvalidated config in via this narrower route.
+  const b = req.body as { paused?: unknown }
+  if (typeof b?.paused !== 'boolean') return json(400, { error: 'paused (boolean) required' })
+  let cfg: StrategyConfig
+  try {
+    cfg = loadConfig(dataDir)
+  } catch (e) {
+    const msg = e instanceof ConfigNotFoundError
+      ? 'no strategy config yet — the node has nothing to pause until onboarding finishes'
+      : 'strategy config is invalid — fix or re-onboard before pausing'
+    return json(409, { error: msg })
+  }
+  const parsed = StrategyConfigSchema.safeParse({ ...cfg, paused: b.paused })
+  if (!parsed.success) return json(400, { error: 'resulting config failed validation' })
   writeConfig(dataDir, parsed.data)
-  return json(200, { saved: true, appliesNextCycle: true } satisfies SaveStrategyResult)
+  // appliesNextCycle: config is hot-reloaded per cycle, so a cycle already in flight
+  // finishes under the old flag. Nothing NEW is signed once the next cycle starts.
+  return json(200, { paused: parsed.data.paused, appliesNextCycle: true } satisfies PauseResult)
 }
 
 // ── the table ───────────────────────────────────────────────────────────────────
@@ -470,5 +527,6 @@ export const routes: Route[] = [
   { method: 'POST', path: '/api/run-now', handler: runNow },
   { method: 'POST', path: '/api/learn/veto', handler: learnVeto },
   { method: 'POST', path: '/api/learn/proposals/', prefix: true, handler: learnProposalDecision },
+  { method: 'POST', path: '/api/pause', handler: pause },
   { method: 'POST', path: '/api/strategy', handler: strategySave },
 ]

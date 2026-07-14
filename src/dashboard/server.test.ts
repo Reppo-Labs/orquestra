@@ -160,6 +160,13 @@ describe('cross-site write defense (CSRF / DNS-rebinding)', () => {
     expect(readConfigText(dir)).toBe(before)
   })
 
+  it('POST /api/pause goes through the SAME guard — a cross-site request is 403 and does not pause', async () => {
+    const before = readConfigText(dir)
+    const r = await rawPost('/api/pause', { host: 'localhost:7070', 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, JSON.stringify({ paused: true }))
+    expect(r.status).toBe(403)
+    expect(readConfigText(dir)).toBe(before) // no write
+  })
+
   it('rejects a non-JSON content-type (text/plain defeats CORS preflight)', async () => {
     const r = await rawPost('/api/strategy', { host: 'localhost:7070', 'content-type': 'text/plain' }, JSON.stringify(VALID_STRATEGY))
     expect(r.status).toBe(403)

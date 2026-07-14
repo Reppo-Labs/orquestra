@@ -76,7 +76,7 @@ export type DatanetEntry = Pick<CanonicalDatanetPolicy, 'vote' | 'mint' | 'stric
  *  optional (a fresh node serves {}), sub-objects partial because the tolerant
  *  fallback serves raw values from a schema-rejected file. POST /api/strategy accepts
  *  a candidate of this shape and re-validates it against the full schema. */
-export interface SafeStrategyConfig extends Partial<Pick<StrategyConfig, 'horizonDays' | 'cadenceHours' | 'claimEmissions' | 'notes' | 'defaultModel' | 'nodeName'>> {
+export interface SafeStrategyConfig extends Partial<Pick<StrategyConfig, 'horizonDays' | 'cadenceHours' | 'claimEmissions' | 'paused' | 'notes' | 'defaultModel' | 'nodeName'>> {
   datanets?: Record<string, DatanetEntry>
   budget?: Partial<StrategyConfig['budget']>
   stake?: Partial<StrategyConfig['stake']>
@@ -107,8 +107,16 @@ export interface DatanetPnlResponse { datanets: DatanetPnl[] }
 /** POST /api/run-now (200 started, 409 not — reason says why). */
 export interface RunNowResult { started: boolean; reason?: string }
 
-/** POST /api/strategy success body. */
-export interface SaveStrategyResult { saved: true; appliesNextCycle: true }
+/** POST /api/strategy success body. `paused` echoes the EFFECTIVE flag (the save carries
+ *  the persisted value forward — /api/pause is the only route that moves it), so a client
+ *  holding a stale candidate can reconcile. */
+export interface SaveStrategyResult { saved: true; appliesNextCycle: true; paused: boolean }
+
+/** POST /api/pause body + success body. The operator's kill switch: while paused the node
+ *  signs NOTHING but keeps running; a cycle already in flight finishes under the old flag
+ *  (config is hot-reloaded per cycle), hence appliesNextCycle. */
+export interface PauseRequest { paused: boolean }
+export interface PauseResult { paused: boolean; appliesNextCycle: true }
 
 /** POST /api/learn/proposals/:id body + result. */
 export interface ProposalDecisionRequest { decision: 'accept' | 'reject' }

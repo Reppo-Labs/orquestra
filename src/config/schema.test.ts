@@ -38,6 +38,20 @@ describe('StrategyConfigSchema', () => {
   })
 })
 
+describe('paused (operator kill switch)', () => {
+  it('defaults to false — every pre-existing config loads UNPAUSED', () => {
+    expect(StrategyConfigSchema.parse(valid).paused).toBe(false)
+  })
+
+  it('round-trips true', () => {
+    expect(StrategyConfigSchema.parse({ ...valid, paused: true }).paused).toBe(true)
+  })
+
+  it('rejects a non-boolean (a truthy string must not silently pause/unpause a node)', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, paused: 'yes' })).toThrow()
+  })
+})
+
 describe('StrategyConfig budget/stake ceilings (caps are the real security boundary)', () => {
   it('rejects mintReppoMax above the 1M ceiling, accepts at the ceiling', () => {
     expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintReppoMax: 1_000_001 } })).toThrow()

@@ -385,6 +385,29 @@ export interface CycleReport {
 /** One swarm cycle: for each configured datanet, vote (if enabled + capable) and
  *  mint (if enabled + adapter + capable). The executor enforces the budget. */
 export async function runCycle(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<CycleReport> {
+  // ── PAUSE: the operator's kill switch (config.paused, hot-reloaded each cycle). ──────
+  // This is the single chokepoint through which EVERY signing path in the node runs — the
+  // stake lock, the subnet grant, votes, mints and claims all originate below this line —
+  // so one refusal here means literally nothing is signed while paused. It sits BEFORE
+  // maybeTopUpStake (which locks veREPPO) and before ledger.startCycle, and it returns an
+  // empty report, so no datanet is even iterated. The scheduler keeps ticking and the
+  // dashboard keeps serving; clearing the flag resumes normal behavior on the next cycle
+  // with no restart.
+  // ADDITIVE, never a replacement: the BudgetLedger still reserves-before-signing and still
+  // refuses past its caps on every unpaused cycle. Pausing adds a refusal; it removes none.
+  if (config.paused) {
+    console.error(`orquestra: cycle ${cycleId} — node is PAUSED; no votes, mints, claims, grants or locks this cycle`)
+    // datanetId '' (wallet-global, like the 'stake' breadcrumb) so the row explains the
+    // silence in the activity feed without registering a phantom datanet in buildHealth
+    // (which skips entries with no datanetId) or flipping a real datanet to idle.
+    deps.activity.record({
+      ts: new Date().toISOString(), cycleId, kind: 'skip', datanetId: '',
+      reason: 'node paused by the operator — no votes, mints, claims, grants or locks this cycle (spending resumes as soon as you unpause)',
+      status: 'skipped',
+    })
+    return { datanets: [], claims: [], emissionsDue: [], datanetEconomics: [] }
+  }
+
   // Live veREPPO top-up FIRST (on the hot-reloaded config), before any datanet work. Never
   // aborts the cycle — fail-closed inside maybeTopUpStake.
   await maybeTopUpStake(config, cycleId, deps)

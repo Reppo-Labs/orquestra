@@ -303,3 +303,91 @@ describe('write handlers', () => {
     expect(JSON.parse(readConfigText(dir)!).cadenceHours).toBe(6)
   })
 })
+
+describe('POST /api/pause (emergency kill switch)', () => {
+  const VALID_STRATEGY = {
+    horizonDays: 7, cadenceHours: 1,
+    stake: { lockReppo: 0, lockDurationDays: 7 },
+    budget: { voteRateMaxPerCycle: 13, mintReppoMax: 50, mintGasEthMax: 0.01 },
+    datanets: { '2': { vote: true, mint: false, strictness: 'balanced' } },
+    notes: 'from routes test',
+  }
+
+  it('pauses the node, persists, and surfaces on /api/config', async () => {
+    const r = await call('POST', '/api/pause', { body: { paused: true } })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ paused: true, appliesNextCycle: true })
+    // persisted → the next cycle's hot-reload picks it up
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+    // and exposed on /api/config, so the dashboard can SHOW the kill-switch state
+    const cfg = await call('GET', '/api/config')
+    expect((cfg.body as { paused?: boolean }).paused).toBe(true)
+  })
+
+  it('unpauses cleanly', async () => {
+    await call('POST', '/api/pause', { body: { paused: true } })
+    const r = await call('POST', '/api/pause', { body: { paused: false } })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(false)
+  })
+
+  it('never RAISES a budget cap (it re-serializes through the same schema every save uses)', async () => {
+    const before = JSON.parse(readConfigText(dir)!)
+    await call('POST', '/api/pause', { body: { paused: true } })
+    const after = JSON.parse(readConfigText(dir)!)
+    // Every cap the operator had set survives. The pause write goes through
+    // StrategyConfigSchema, so caps the file omitted are now written out at their schema
+    // DEFAULT — the same value loadConfig already applied on every read, so no effective
+    // cap changes. toMatchObject (not toEqual) asserts exactly that: nothing was altered,
+    // only defaults made explicit.
+    expect(after.budget).toMatchObject(before.budget)
+    expect(after.budget.mintReppoMax).toBe(before.budget.mintReppoMax)
+    expect(after.budget.voteRateMaxPerCycle).toBe(before.budget.voteRateMaxPerCycle)
+    expect(after.datanets).toMatchObject(before.datanets)
+    expect(after.stake).toEqual(before.stake)
+  })
+
+  it('rejects a non-boolean body with 400, config untouched', async () => {
+    const before = readConfigText(dir)
+    const r = await call('POST', '/api/pause', { body: { paused: 'yes' } })
+    expect(r.status).toBe(400)
+    expect(readConfigText(dir)).toBe(before)
+  })
+
+  it('409s when there is no strategy config yet (nothing to pause until onboarding finishes)', async () => {
+    const bare = mkdtempSync(join(tmpdir(), 'orq-routes-pause-'))
+    try {
+      const r = await call('POST', '/api/pause', { body: { paused: true }, ctx: { ...ctx(), dataDir: bare } })
+      expect(r.status).toBe(409)
+      expect((r.body as { error: string }).error).toMatch(/onboarding/)
+    } finally { rmSync(bare, { recursive: true, force: true }) }
+  })
+
+  // `paused` is the operator's kill switch, not a normal config field. POST /api/pause is the
+  // ONLY route allowed to change it: a strategy save (hand-edited, an assistant proposal that
+  // dropped the key, or a stale tab whose candidate still says paused:false) must never resume
+  // a node the operator stopped. The schema defaults paused to false, so an omitted key would
+  // otherwise silently un-pause.
+  it('a strategy save that OMITS paused cannot un-pause the node', async () => {
+    await call('POST', '/api/pause', { body: { paused: true } })
+    const r = await call('POST', '/api/strategy', { body: VALID_STRATEGY }) // no `paused` key at all
+    expect(r.status).toBe(200)
+    expect((r.body as { paused?: boolean }).paused).toBe(true) // the response tells the client the truth
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+    // the rest of the save still applied
+    expect(JSON.parse(readConfigText(dir)!).notes).toBe('from routes test')
+  })
+
+  it('a strategy save that explicitly sends paused:false cannot un-pause the node either', async () => {
+    await call('POST', '/api/pause', { body: { paused: true } })
+    const r = await call('POST', '/api/strategy', { body: { ...VALID_STRATEGY, paused: false } })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+  })
+
+  it('a strategy save does not PAUSE a running node either — /api/pause owns the flag both ways', async () => {
+    const r = await call('POST', '/api/strategy', { body: { ...VALID_STRATEGY, paused: true } })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(false)
+  })
+})

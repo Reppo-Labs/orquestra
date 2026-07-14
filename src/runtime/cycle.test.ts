@@ -1005,3 +1005,81 @@ describe('datanet yield', () => {
     expect(executeVoterClaim).not.toHaveBeenCalled()           // wallet tier off → no voter-claim scan
   })
 })
+
+describe('runCycle pause (operator kill switch)', () => {
+  // A paused node must sign NOTHING. This config would otherwise vote, mint, claim, grant
+  // AND lock (stake.lockReppo > 0 against veREPPO 0, claimEmissions on, an emission due) —
+  // so if any executor method were reachable while paused, this test catches it.
+  const pausedCfg = StrategyConfigSchema.parse({
+    horizonDays: 30, cadenceHours: 6, paused: true, claimEmissions: true,
+    stake: { lockReppo: 500, lockDurationDays: 30 },
+    budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+    datanets: { '9': { vote: true, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+  })
+  const activeCfg = StrategyConfigSchema.parse({ ...pausedCfg, paused: false })
+
+  const spyingDeps = () => {
+    const executor = {
+      executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvote' })),
+      executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xmint' })),
+      executeClaim: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xclaim' })),
+      executeVoterClaim: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xvclaim' })),
+      executeGrantAccess: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xgrant' })),
+      lock: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xlock' })),
+    }
+    const ledger = { startCycle: vi.fn(), canVote: () => true, canMint: () => true, votesRemaining: () => 99 }
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      executor: executor as unknown as CycleDeps['executor'],
+      ledger: ledger as unknown as CycleDeps['ledger'],
+      reads: fakeReads({
+        getVeReppo: async () => 0, // 0 vs a 500 target ⇒ an unpaused cycle WOULD lock
+        getEmissionsDue: async () => [{ datanetId: '9', podId: 'p1', epoch: 3, reppo: 10 }],
+      }),
+      dedup: fakeDedup({ grants: grantCache() }), // nothing granted ⇒ an unpaused cycle WOULD grant
+    })
+    return { d, executor, ledger, recordActivity }
+  }
+
+  it('signs NOTHING while paused — zero executor calls of any kind', async () => {
+    const { d, executor, ledger } = spyingDeps()
+    const report = await runCycle(pausedCfg, 'c1', d)
+
+    expect(executor.executeVote).not.toHaveBeenCalled()
+    expect(executor.executeMint).not.toHaveBeenCalled()
+    expect(executor.executeClaim).not.toHaveBeenCalled()
+    expect(executor.executeVoterClaim).not.toHaveBeenCalled()
+    expect(executor.executeGrantAccess).not.toHaveBeenCalled()
+    expect(executor.lock).not.toHaveBeenCalled() // the stake top-up runs BELOW the pause gate
+    // The cycle never opens: no datanet is iterated, so no LLM spend either.
+    expect(ledger.startCycle).not.toHaveBeenCalled()
+    expect(report).toEqual({ datanets: [], claims: [], emissionsDue: [], datanetEconomics: [] })
+  })
+
+  it('records a clear reason so the dashboard explains the silence', async () => {
+    const { d, recordActivity } = spyingDeps()
+    await runCycle(pausedCfg, 'c1', d)
+    expect(recordActivity).toHaveBeenCalledTimes(1)
+    const row = recordActivity.mock.calls[0][0]
+    expect(row).toMatchObject({ kind: 'skip', status: 'skipped', datanetId: '', cycleId: 'c1' })
+    expect(row.reason).toMatch(/paused by the operator/)
+    expect(row.reason).toMatch(/unpause/)
+  })
+
+  it('unpausing restores normal behavior on the very next cycle (same deps, no restart)', async () => {
+    const { d, executor, ledger } = spyingDeps()
+    await runCycle(pausedCfg, 'c1', d)
+    expect(executor.executeVote).not.toHaveBeenCalled()
+
+    // Config is hot-reloaded each cycle — the next tick simply passes the unpaused config.
+    const report = await runCycle(activeCfg, 'c2', d)
+    expect(ledger.startCycle).toHaveBeenCalledWith('c2')
+    expect(executor.lock).toHaveBeenCalled()               // stake top-up resumes
+    expect(executor.executeGrantAccess).toHaveBeenCalled() // subnet grant resumes
+    expect(executor.executeVote).toHaveBeenCalled()        // voting resumes
+    expect(executor.executeMint).toHaveBeenCalled()        // minting resumes
+    expect(executor.executeClaim).toHaveBeenCalled()       // claiming resumes
+    expect(report.datanets).toHaveLength(1)
+  })
+})
