@@ -90,6 +90,63 @@ describe('detectAndMark', () => {
   })
 })
 
+describe('prefetch (bounded-concurrency detection, issue #59)', () => {
+  function deferredDetect() {
+    const resolvers: Array<(v: { mediaType: string; contentLength: number | null } | null) => void> = []
+    const detectType = vi.fn(
+      () => new Promise<{ mediaType: string; contentLength: number | null } | null>((res) => { resolvers.push(res) }),
+    )
+    return { detectType, resolvers }
+  }
+
+  it('probes pods concurrently, not one at a time', async () => {
+    const { detectType, resolvers } = deferredDetect()
+    const p = pipeline({ detectType })
+    const pods = [pod({ podId: 'a', url: 'https://x/a' }), pod({ podId: 'b', url: 'https://x/b' }), pod({ podId: 'c', url: 'https://x/c' })]
+    const done = p.prefetch(pods)
+    await Promise.resolve() // let the pool start its workers
+    // Serial detection would have exactly ONE probe in flight here.
+    expect(detectType.mock.calls.length).toBeGreaterThan(1)
+    for (const r of resolvers) r({ mediaType: 'video/mp4', contentLength: 1 })
+    await done
+    expect(detectType).toHaveBeenCalledTimes(3)
+  })
+
+  it('detectAndMark after prefetch reuses the probe result (no second probe) and the cap stays deterministic in pod order', async () => {
+    const detectType = vi.fn(async () => ({ mediaType: 'video/mp4', contentLength: 1 }))
+    const p = pipeline({ detectType, videoPodsPerCycle: 1 })
+    const a = pod({ podId: 'a', url: 'https://x/a' })
+    const b = pod({ podId: 'b', url: 'https://x/b' })
+    await p.prefetch([a, b])
+    expect(detectType).toHaveBeenCalledTimes(2)
+    // Marking happens in the caller's stable pod order — a gets the only budget slot.
+    expect(await p.detectAndMark(a)).toBe(true)
+    expect(await p.detectAndMark(b)).toBe(true) // detected video: never text-fetched
+    expect(isVideoPod(a)).toBe(true)
+    expect(isVideoPod(b)).toBe(false) // over budget — unmarked
+    expect(detectType).toHaveBeenCalledTimes(2) // cache hits, no re-probe
+  })
+
+  it('beginCycle clears the probe cache (results do not leak across cycles)', async () => {
+    const detectType = vi.fn(async () => ({ mediaType: 'video/mp4', contentLength: 1 }))
+    const p = pipeline({ detectType })
+    const a = pod({ podId: 'a', url: 'https://x/a' })
+    await p.prefetch([a])
+    p.beginCycle()
+    await p.detectAndMark(pod({ podId: 'a2', url: 'https://x/a' }))
+    expect(detectType).toHaveBeenCalledTimes(2)
+  })
+
+  it('a failed probe is cached as null (text path), never thrown', async () => {
+    const detectType = vi.fn(async () => { throw new Error('boom') })
+    const p = pipeline({ detectType })
+    const a = pod({ podId: 'a', url: 'https://x/a' })
+    await expect(p.prefetch([a])).resolves.toBeUndefined()
+    expect(await p.detectAndMark(a)).toBe(false)
+    expect(detectType).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('detectAndMark per-cycle budget', () => {
   it('over the cap a DETECTED video still returns true (never text-fetched) but is left unmarked', async () => {
     const v = pipeline({ videoPodsPerCycle: 1 })
