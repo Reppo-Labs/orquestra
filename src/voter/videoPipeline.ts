@@ -58,6 +58,13 @@ export interface VideoPipeline {
    *  detectAndMark runs once per datanet, so a per-call counter would let
    *  `videoPodsPerCycle × datanets` videos through. */
   beginCycle(): void
+  /** Probe the given pods' Content-Types concurrently (bounded pool) and cache the
+   *  results for this cycle, so the caller's SERIAL detectAndMark loop hits the cache
+   *  instead of the network. Detection latency drops from sum-of-probes to
+   *  ~(N / pool) × slowest probe, while budget MARKING stays in the caller's stable
+   *  pod order — which pods get the video slots is never race-dependent (issue #59).
+   *  Never throws; a failed probe is cached as null (text path). */
+  prefetch(pods: VoterPod[]): Promise<void>
   /** Probe the pod's url (Drive share links are rewritten to direct downloads first) and,
    *  when it is a video, mark it (mediaUrl/mediaType/contentLength) within the budget.
    *  Returns true for ANY detected video — marked or over-budget — because a detected
@@ -113,9 +120,31 @@ export function createVideoPipeline(deps: VideoPipelineDeps): VideoPipeline {
   const resolve = deps.resolveModel ?? resolveModel
   const videoCap = deps.videoPodsPerCycle ?? 4
   let videoBudget = videoCap
+  // Per-cycle probe memo: prefetch fills it concurrently, detectAndMark reads it in the
+  // caller's serial loop. Keyed by the RESOLVED media url. Cleared each cycle so a host
+  // whose Content-Type changes isn't pinned to a stale verdict.
+  let probeCache = new Map<string, ContentTypeInfo | null>()
+  const DETECT_POOL = 8
+
+  const probe = async (mediaSrc: string): Promise<ContentTypeInfo | null> => {
+    if (probeCache.has(mediaSrc)) return probeCache.get(mediaSrc) ?? null
+    let info: ContentTypeInfo | null = null
+    try { info = await detectType(mediaSrc) } catch { info = null }
+    probeCache.set(mediaSrc, info)
+    return info
+  }
 
   return {
-    beginCycle: () => { videoBudget = videoCap },
+    beginCycle: () => { videoBudget = videoCap; probeCache = new Map() },
+
+    async prefetch(pods: VoterPod[]): Promise<void> {
+      const urls = [...new Set(pods.filter((p) => p.url).map((p) => resolveDriveUrl(p.url!)))]
+      let next = 0
+      const worker = async (): Promise<void> => {
+        while (next < urls.length) await probe(urls[next++])
+      }
+      await Promise.all(Array.from({ length: Math.min(DETECT_POOL, urls.length) }, worker))
+    },
 
     async detectAndMark(pod: VoterPod): Promise<boolean> {
       if (!pod.url) return false
@@ -126,8 +155,7 @@ export function createVideoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       // Non-Drive URLs pass through unchanged.
       const mediaSrc = resolveDriveUrl(pod.url)
       const resolvedFromDrive = mediaSrc !== pod.url
-      let info: ContentTypeInfo | null = null
-      try { info = await detectType(mediaSrc) } catch { info = null }
+      const info: ContentTypeInfo | null = await probe(mediaSrc)
       // video/* routes to the Gemini path. A Drive-resolved URL whose download endpoint
       // reports a generic binary type (application/octet-stream — common for Drive file
       // downloads) is also treated as the clip: we only rewrite Drive links, and a binary

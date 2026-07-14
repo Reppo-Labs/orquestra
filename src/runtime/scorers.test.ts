@@ -132,6 +132,7 @@ describe('buildScorers video seam (scorer → VideoPodPipeline)', () => {
     const scoreVideoPod = vi.fn(async (..._args: unknown[]) => ({ score: 7, reason: 'good clip' }))
     const pipeline: VideoPipeline = {
       beginCycle: vi.fn(),
+      prefetch: vi.fn(async () => {}),
       detectAndMark: vi.fn(async () => false),
       scoreVideoPod: scoreVideoPod as VideoPipeline['scoreVideoPod'],
     }

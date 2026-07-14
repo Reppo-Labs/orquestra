@@ -316,9 +316,14 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
         // within its per-CYCLE budget. A DETECTED video is NEVER text-fetched — under
         // the cap it is marked; over the cap it is left unmarked and skipped (continue)
         // this cycle. Detection, marking, and the budget all live in the pipeline.
+        const isEligible = (p: (typeof pods)[number]): boolean =>
+          (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
+        // Warm the pipeline's probe cache concurrently (bounded pool) so the serial
+        // loop below hits the cache — detection wall-clock stops being additive per pod,
+        // while budget MARKING keeps the stable pod order (issue #59).
+        await video.prefetch(pods.filter((p) => isEligible(p) && p.url))
         for (const p of pods) {
-          const eligible = (currentEpoch === null || p.validityEpoch === currentEpoch) && !ownSet.has(p.podId) && !votedSet.has(p.podId)
-          if (!eligible || !p.url) continue
+          if (!isEligible(p) || !p.url) continue
           if (await video.detectAndMark(p)) continue
           // The CLI now surfaces the pod's full writeup as `description` (reppo-cli >=0.12).
           // When we already have that real writeup (description differs from the bare title),

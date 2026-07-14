@@ -114,6 +114,27 @@ function wiring(over: Partial<CycleWiring> = {}): CycleWiring {
 }
 
 describe('buildCycleDeps', () => {
+  it('getPodsAndFilter probes content-types CONCURRENTLY before the serial enrichment loop (issue #59)', async () => {
+    const w = wiring()
+    const resolvers: Array<(v: null) => void> = []
+    const detectType = vi.fn(() => new Promise<null>((res) => { resolvers.push(res) }))
+    const deps = buildCycleDeps({
+      ...w,
+      reader: fakeReader({
+        listPods: async (_id, opts) => opts.all
+          ? [pod('p1', { url: 'https://x/1' }), pod('p2', { url: 'https://x/2' }), pod('p3', { url: 'https://x/3' })]
+          : [],
+      }),
+      io: { fetchContent: async () => '', detectType },
+    })
+    const done = deps.reads.getPodsAndFilter('2')
+    await vi.waitFor(() => { expect(detectType.mock.calls.length).toBeGreaterThan(1) })
+    // Serial detection would have exactly ONE probe in flight at this point.
+    for (const r of resolvers) r(null)
+    await done
+    expect(detectType).toHaveBeenCalledTimes(3)
+  })
+
   it('getPodsAndFilter enriches ONLY eligible pods (not own, not voted, current epoch)', async () => {
     const w = wiring()
     w.dedup.recordVote('2', 'voted1')
