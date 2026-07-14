@@ -1,0 +1,124 @@
+name: auto-release
+
+# Every merge to main ships a new node image: bump patch from the latest v* tag,
+# build + push ghcr.io/reppo-labs/orquestra:{X.Y.Z, X.Y, latest}, then create the
+# git tag + GitHub release.
+#
+# Version comes from git tags, NOT package.json (tags are at v0.4.x while
+# package.json still says 0.1.0 — tags are the source of truth). Nothing is
+# committed back to main, so a release can never cascade into another release.
+#
+# Ordering: image FIRST, tag/release second. A failed image push leaves no tag
+# behind, so an operator pinning :X.Y.Z can never hit a tag whose image 404s.
+# The reverse (image pushed, tag push fails) self-heals: the next merge
+# recomputes the same version and overwrites the image.
+#
+# release.yml (manual v* tag push) stays as the fallback for cutting a specific
+# version, e.g. a minor/major bump. Tags created here use GITHUB_TOKEN, which
+# does not trigger other workflows — the two paths never double-build.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: auto-release-main
+  cancel-in-progress: false
+
+jobs:
+  # Same gate as release.yml: a commit that builds but fails tests must not ship
+  # to operators running against funded wallets.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm --prefix web ci
+      - run: npm --prefix web run test
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Manual-release escape hatch: if this commit is already tagged (someone
+      # cut a release by hand and merged it), release.yml owns it — skip.
+      - name: Compute next version
+        id: version
+        run: |
+          set -euo pipefail
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LATEST=$(git tag --list 'v*' --sort=-version:refname | head -1)
+          LATEST=${LATEST:-v0.0.0}
+          IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+          NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        if: steps.version.outputs.skip == 'false'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.version.outputs.skip == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.version.outputs.skip == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        if: steps.version.outputs.skip == 'false'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/reppo-labs/orquestra
+          tags: |
+            type=semver,pattern={{version}},value=v${{ steps.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ steps.version.outputs.version }}
+            type=raw,value=latest
+
+      - name: Build and push
+        if: steps.version.outputs.skip == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tag and create GitHub release
+        if: steps.version.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
+          gh release create "v${VERSION}" --generate-notes --title "v${VERSION}"
