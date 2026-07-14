@@ -76,6 +76,20 @@ describe('snapshot', () => {
     expect(readSnapshot(dir)?.datanetEconomics?.[0].yieldPerVote).toBe(0.00025)
   })
 
+  it('collectSnapshot flags lowGas when the wallet ETH is below the warn threshold', async () => {
+    const readers = {
+      balance: async () => ({ eth: 0.0002, reppo: 10, veReppo: 100, usdc: 0 }),
+      votingPower: async () => ({ power: 100, lockupCount: 1 }),
+      emissionsDue: async () => ({ totalReppo: 0, pods: [] }),
+      epoch: async () => ({ epoch: 97, epochStart: 1780493161, epochDurationSeconds: 172800, secondsRemaining: 72636 }),
+      budget: () => snap().budget,
+    }
+    expect((await collectSnapshot(dir, 'c-low', readers)).lowGas).toBe(true)
+    expect((await collectSnapshot(dir, 'c-ok', {
+      ...readers, balance: async () => ({ eth: 0.05, reppo: 10, veReppo: 100, usdc: 0 }),
+    })).lowGas).toBe(false)
+  })
+
   it('collectSnapshot merges over the last snapshot when a sub-call fails', async () => {
     writeSnapshot(dir, snap({ balance: { eth: 9, reppo: 9, veReppo: 9, usdc: 9 } }))
     const result = await collectSnapshot(dir, 'c2', {

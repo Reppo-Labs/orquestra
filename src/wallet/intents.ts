@@ -11,6 +11,11 @@ export interface VoteIntent {
   direction: 'up' | 'down'
   /** 1-10 conviction from the voter; used to prioritise scarce voting power. */
   conviction: number
+  /** Exact on-chain vote weight (raw 18-dec veREPPO-power, stringified bigint), sized by
+   *  the cycle's per-epoch vote-power budget (src/voter/weight.ts). STRING because the
+   *  value exceeds JS safe-integer precision. Absent (RPC-less node or a failed budget
+   *  read) ⇒ the executor falls back to the legacy conviction×1e18 sizing. */
+  voteWeightWei?: string
   reason: string
   /** multi-agent panel transcript when a panel produced this decision (see src/panel). */
   panel?: PanelTranscript

@@ -7,12 +7,13 @@ import type { WalletExecutor } from '../wallet/executor.js'
 import { MINT_REPPO_FALLBACK } from '../wallet/executor.js'
 import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult, VoteIntent, ClaimIntent } from '../wallet/intents.js'
-import type { ClaimableEmission } from '../reppo/reader.js'
+import type { ClaimableEmission, VotePowerBudget } from '../reppo/reader.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { redactSecrets } from '../util/redact.js'
 import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
 import { selectVotes } from '../voter/select.js'
 import { allocateVoteSlots } from '../voter/allocate.js'
+import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 
@@ -82,6 +83,10 @@ export interface OnchainWalletReads {
   /** Claimable VOTER emissions (pods the wallet voted on, not owned). RPC-only — no
    *  platform-API fallback exists. Claimed via executor.executeVoterClaim. */
   getVoterEmissionsDue(): Promise<ClaimableEmission[]>
+  /** Wallet's spendable vote-power budget this epoch (votingPower − votesCasted, plus the
+   *  epoch end for pacing) — sizes each vote's on-chain weight (src/voter/weight.ts).
+   *  Optional: older wirings without it keep the legacy conviction×1e18 sizing. */
+  getVotePowerBudget?(): Promise<VotePowerBudget>
 }
 
 /** RPC-backed reads, present-or-absent AS A UNIT (`onchain?: OnchainReads`): wiring
@@ -407,11 +412,46 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   const leftoverIntents = new Map<string, VoteIntent[]>() // scored-but-unvoted, per datanet
   const voteSinks = new Map<string, ExecResult[]>()        // each datanet's `votes` array (same ref the report holds)
 
+  // Vote-weight budget: read the wallet's REAL spendable power for this epoch ONCE per
+  // cycle; every cast draws from it (src/voter/weight.ts paces the spend over the epoch's
+  // remaining cycles). A failed read or an RPC-less node ⇒ weigher stays null and votes
+  // fall back to the legacy conviction×1e18 sizing — dust next to a locked stake, but
+  // never more fragile than before.
+  let voteWeigher: VoteWeigher | null = null
+  if (voteWeights.size > 0) {
+    if (deps.onchain?.wallet?.getVotePowerBudget) {
+      try {
+        const budget = await deps.onchain.wallet.getVotePowerBudget()
+        voteWeigher = createVoteWeigher({
+          remainingWei: budget.remainingWei,
+          secondsRemainingInEpoch: Math.max(0, budget.epochEndsAtSec - Math.floor(Date.now() / 1000)),
+          cadenceHours: config.cadenceHours,
+          voteRateMaxPerCycle: config.budget.voteRateMaxPerCycle,
+        })
+      } catch (e) {
+        console.error(redactSecrets(`orquestra: vote-power budget read failed — votes fall back to legacy conviction sizing this cycle: ${(e as Error).message}`))
+      }
+    } else {
+      console.error('orquestra: votes use legacy conviction×1e18 sizing (dust vs the locked stake) — set RPC_URL so votes are sized from the wallet\'s real voting power')
+    }
+  }
+
   // Cast one vote intent: execute, then record dedup / own-pod / stale-grant eviction + the
   // activity row — EXCEPT on refused-budget, where the per-pod row is suppressed and the
   // caller emits a single deferral breadcrumb instead. Shared by Pass 1 and the Pass 2
   // redistribution so both keep identical dedup/activity semantics.
   const castVote = async (datanetId: string, intent: VoteIntent, sink: ExecResult[]): Promise<ExecResult> => {
+    if (voteWeigher) {
+      const weightWei = voteWeigher(intent.conviction)
+      if (weightWei === 0n) {
+        // Epoch vote-power budget exhausted — signing would revert InsufficientVotingPower
+        // and waste gas. Same deferral semantics as a ledger refusal (no per-pod row).
+        const refused: ExecResult = { ok: false, status: 'refused-budget', detail: 'vote-power budget exhausted this epoch' }
+        sink.push(refused)
+        return refused
+      }
+      intent = { ...intent, voteWeightWei: weightWei.toString() }
+    }
     const r = await deps.executor.executeVote(intent)
     sink.push(r)
     if (r.status === 'refused-budget') return r

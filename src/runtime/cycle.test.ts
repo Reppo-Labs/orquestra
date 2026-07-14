@@ -144,6 +144,55 @@ describe('runCycle video-pod skips', () => {
   })
 })
 
+describe('runCycle vote-weight budget', () => {
+  const REPPO = 10n ** 18n
+  const budget = (remaining: bigint) => vi.fn(async () => ({
+    votingPowerWei: remaining, votesCastedWei: 0n, remainingWei: remaining,
+    epoch: 117, epochEndsAtSec: Math.floor(Date.now() / 1000) + 6 * 3600, // exactly 1 cadence left
+  }))
+
+  it('sizes each vote from the wallet budget and threads voteWeightWei to the executor', async () => {
+    const getVotePowerBudget = budget(59_400n * REPPO)
+    const d = deps({ onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget }) }) })
+    await runCycle(config, 'cyc-weight', d)
+    expect(getVotePowerBudget).toHaveBeenCalledTimes(1) // one read per cycle, not per vote
+    const intents = (d.executor.executeVote as any).mock.calls.map((c: any[]) => c[0])
+    expect(intents.length).toBe(2)
+    for (const i of intents) {
+      // 1 cycle left × cap 99 → perVote = 600 REPPO; conviction 9 → 540 REPPO — real
+      // weight from the stake, not the legacy 9e18 conviction dust.
+      expect(BigInt(i.voteWeightWei)).toBe(540n * REPPO)
+    }
+  })
+
+  it('refuses instead of signing once the epoch budget is exhausted', async () => {
+    // Tiny budget: perVote floors at 1 power → the first vote drains it, the second
+    // must be refused WITHOUT reaching the executor (a signed tx would revert).
+    const d = deps({ onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: budget(1n * REPPO) }) }) })
+    const report = await runCycle(config, 'cyc-drain', d)
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(1)
+    const statuses = report.datanets.flatMap((r) => r.votes.map((v) => v.status))
+    expect(statuses).toContain('refused-budget')
+  })
+
+  it('falls back to legacy conviction sizing when the budget read fails', async () => {
+    const d = deps({
+      onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: vi.fn(async () => { throw new Error('rpc down') }) }) }),
+    })
+    await runCycle(config, 'cyc-fallback', d)
+    const intents = (d.executor.executeVote as any).mock.calls.map((c: any[]) => c[0])
+    expect(intents.length).toBe(2) // still votes
+    for (const i of intents) expect(i.voteWeightWei).toBeUndefined() // executor applies conviction×1e18
+  })
+
+  it('leaves voteWeightWei absent on an RPC-less node (legacy sizing)', async () => {
+    const d = deps() // no onchain unit at all
+    await runCycle(config, 'cyc-legacy', d)
+    const intents = (d.executor.executeVote as any).mock.calls.map((c: any[]) => c[0])
+    for (const i of intents) expect(i.voteWeightWei).toBeUndefined()
+  })
+})
+
 describe('runCycle', () => {
   it('starts the cycle, votes on every vote-enabled datanet, mints only where adapter+canMint', async () => {
     const d = deps()

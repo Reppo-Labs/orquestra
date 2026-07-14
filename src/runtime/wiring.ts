@@ -248,6 +248,9 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
               wallet: {
                 address: walletAddress,
                 readTokenBalance: (token: string, owner: string) => reader.tokenBalance(rpcUrl, token, owner),
+                // Per-epoch spendable vote power (votingPower − votesCasted) — sizes each
+                // vote's on-chain weight instead of the legacy conviction×1e18 dust.
+                getVotePowerBudget: () => reader.votePowerBudget(rpcUrl, walletAddress),
                 // Voter emissions: claimable on pods the wallet VOTED on (not owned). The pod
                 // set comes from our executed-vote activity (the wallet doesn't own them, so
                 // they're absent from the owner Transfer-log cache); claimable (pod,epoch) is

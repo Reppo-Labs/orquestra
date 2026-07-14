@@ -34,7 +34,16 @@ export interface Snapshot {
    *  over the previous snapshot (a stale yield is worse than an absent one). Optional
    *  for back-compat with pre-feature rows. */
   datanetEconomics?: DatanetYield[]
+  /** true when the wallet's ETH is below LOW_GAS_WARN_ETH — every vote/mint/claim is an
+   *  on-chain tx, so an empty gas tank silently stalls the whole node (each attempt fails
+   *  per-datanet and the cycle carries on). Optional for back-compat with pre-feature rows. */
+  lowGas?: boolean
 }
+
+/** Warn threshold for the wallet's ETH balance. Base txs are cheap (a vote lands well
+ *  under 1e-4 ETH), but below this an epoch's worth of votes (~50) is no longer covered
+ *  and the node is about to start failing every signature for gas. */
+export const LOW_GAS_WARN_ETH = 0.001
 
 const LEGACY = 'snapshot.json'
 
@@ -118,5 +127,12 @@ export async function collectSnapshot(dataDir: string, cycleId: string, readers:
   const emissionsDue = await safe(readers.emissionsDue, prev?.emissionsDue ?? { totalReppo: 0, pods: [] }, 'emissionsDue')
   const epoch = await safe(readers.epoch, prev?.epoch ?? { epoch: 0, epochStart: 0, epochDurationSeconds: 0, secondsRemaining: 0 }, 'epoch')
   const ts = new Date().toISOString()
-  return { ts, cycleId, balance, votingPower, emissionsDue, epoch, budget: readers.budget() }
+  const lowGas = balance.eth < LOW_GAS_WARN_ETH
+  if (lowGas) {
+    console.error(
+      `orquestra: WARNING — wallet ETH balance ${balance.eth} is below ${LOW_GAS_WARN_ETH}: ` +
+      'votes/mints/claims are about to start failing for gas. Top up the wallet with ETH on Base.',
+    )
+  }
+  return { ts, cycleId, balance, votingPower, emissionsDue, epoch, budget: readers.budget(), lowGas }
 }
