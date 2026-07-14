@@ -99,7 +99,10 @@ export function agentDisplayName(envName: string | undefined, walletAddress: str
 export async function registerAgentJson(name: string, description: string): Promise<AgentCreds> {
   // via runReppoStdout so a registration failure's folded command line (which
   // carries the --rpc-url key) is redacted like every other reppo call.
-  const stdout = await runReppoStdout(['register-agent', '--name', name, '--description', description, '--json'], 120_000)
+  // --is-orquestra (@reppo/cli >= 0.12.3): without it the platform registers a
+  // "custom" agent and rejects on-chain pod ids on the /votes endpoint with
+  // 404 "Pod not found" — votes execute on-chain but never appear on the platform.
+  const stdout = await runReppoStdout(['register-agent', '--name', name, '--description', description, '--is-orquestra', '--json'], 120_000)
   return parseRegisterAgentOutput(stdout)
 }
 

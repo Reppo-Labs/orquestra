@@ -5,8 +5,9 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 /** Minimum @reppo/cli version the node's vote/mint/grant flags require.
- *  (0.8.0: subnet-uuid minting, grant-access, rubric metadata.) */
-export const REQUIRED_REPPO_VERSION = '0.8.0'
+ *  (0.12.3: register-agent --is-orquestra, required for platform vote
+ *  registration; 0.8.0: subnet-uuid minting, grant-access, rubric metadata.) */
+export const REQUIRED_REPPO_VERSION = '0.12.3'
 
 export interface VersionCheckDeps {
   getVersion?: () => Promise<string>
