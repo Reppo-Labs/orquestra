@@ -92,7 +92,9 @@ function fakeReader(over: Partial<ReppoReader> = {}): ReppoReader {
     subnetEmissionInfo: async () => ({ primaryToken: '0x0', primaryEmissionsPerEpoch: 0n, reppoEmissionsPerEpoch: 0n }),
     tokenBalance: async () => 0n,
     epochVoteVolume: async () => ({ epoch: 0, totalRaw: 0n }),
-    votePowerBudget: async () => ({ votingPowerWei: 0n, votesCastedWei: 0n, remainingWei: 0n, epoch: 0, epochEndsAtSec: 0 }),
+    // Generous default: a ZERO budget would flip votes to refused-budget and silently
+    // change vote behavior in unrelated tests — quiet-chain here means "never the constraint".
+    votePowerBudget: async () => ({ votingPowerWei: 10_000n * 10n ** 18n, votesCastedWei: 0n, remainingWei: 10_000n * 10n ** 18n, epoch: 0, epochEndsAtSec: Math.floor(Date.now() / 1000) + 3600 }),
     claimableOnchain: async () => [],
     voterClaimableOnchain: async () => [],
     ...over,
