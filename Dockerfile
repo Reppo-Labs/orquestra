@@ -13,8 +13,9 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.12.1
-# @reppo/cli@0.12.1: post-approve allowance-visibility poll — closes the replica-lag race
+ && npm i -g @reppo/cli@0.12.3
+# @reppo/cli@0.12.3: register-agent --is-orquestra — platform resolves on-chain pod ids
+# on /votes for Orquestra agents (0.12.1: post-approve allowance-visibility poll)
 # where a fresh wallet's first lock/grant-access reverted InsufficientAllowance (0x13be252b)
 # right after a successful auto-approve. 0.12.0: `list pods --all` surfaces the pod's full description + media url —
 # lets the voter score the real writeup instead of a client-rendered SPA shell (the node

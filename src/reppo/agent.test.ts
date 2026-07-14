@@ -3,7 +3,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, syncAgentName, type EnsureAgentDeps, type SyncAgentNameDeps } from './agent.js'
+import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, syncAgentName, registerAgentJson, type EnsureAgentDeps, type SyncAgentNameDeps } from './agent.js'
+import { runReppoStdout } from './exec.js'
+
+vi.mock('./exec.js', () => ({ runReppoStdout: vi.fn() }))
+
+describe('registerAgentJson (CLI invocation)', () => {
+  it('always registers with --is-orquestra so the platform resolves on-chain pod ids', async () => {
+    vi.mocked(runReppoStdout).mockResolvedValue(JSON.stringify({ agentId: 'ag_1', apiKey: 'sk_1' }))
+    await registerAgentJson('node-a', 'swarm node')
+    expect(runReppoStdout).toHaveBeenCalledWith(
+      ['register-agent', '--name', 'node-a', '--description', 'swarm node', '--is-orquestra', '--json'],
+      120_000,
+    )
+  })
+})
 
 describe('agentDisplayName (node-unique identity)', () => {
   it('uses REPPO_AGENT_NAME when set (trimmed)', () => {
