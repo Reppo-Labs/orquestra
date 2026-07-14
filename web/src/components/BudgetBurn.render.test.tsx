@@ -26,7 +26,7 @@ function snap(mintReppoSpent: number, caps: BudgetCaps): Snapshot {
       claimGasSpentEth: 0,
       caps,
     },
-  } as unknown as Snapshot // deliberately partial — only the budget slice is rendered
+  } as Snapshot
 }
 
 const bar = (c: HTMLElement) => c.querySelector('.bar') as HTMLElement

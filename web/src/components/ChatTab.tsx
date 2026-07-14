@@ -51,9 +51,15 @@ export function ChatTab({ strategy, onGoToStrategy }: {
     <div className="chat-wrap">
       {strategy.proposalLoaded && (
         <div className="proposal-banner">
+          {/* The assistant proposes a strategy; it does NOT touch the kill switch. A proposal
+              that simply omits `paused` parses back to the schema default (false) server-side,
+              so applyProposal carries the operator's pause across it — see useStrategy. */}
           <span className="grow">A proposal is loaded into your strategy — review the diff before it goes live.</span>
           <button className="btn ghost sm" onClick={onGoToStrategy}>Review</button>
           <button className="btn primary sm" onClick={() => void strategy.save()}>Save</button>
+          {strategy.saveMsg && (
+            <span className="muted" style={{ fontSize: 12 }} role="status">{strategy.saveMsg}</span>
+          )}
         </div>
       )}
       {log.length === 0 && (

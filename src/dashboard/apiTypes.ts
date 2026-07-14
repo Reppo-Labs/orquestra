@@ -13,7 +13,12 @@ import type { Pnl } from './pnl.js'
 import type { DatanetPnl } from './datanetPnl.js'
 import type { Snapshot, SnapshotBudget } from './snapshot.js'
 import type { PersistedEarn } from './earnStatus.js'
+import type { ActivityEntry } from './activityLog.js'
+import type { DatanetHealth, TxRate } from './health.js'
+import type { ClassifiedError } from './errorClass.js'
 import type { BudgetCaps } from '../wallet/ledger.js'
+import type { WalletBalance } from '../reppo/queryBalance.js'
+import type { EmissionsDue } from '../reppo/queryEmissionsDue.js'
 import type { StrategyConfig } from '../config/schema.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { OnboardingAnswers } from '../onboarding/types.js'
@@ -51,18 +56,53 @@ export type BudgetCapsView = Partial<BudgetCaps>
 
 export type SnapshotBudgetView = Omit<SnapshotBudget, 'caps'> & { caps: BudgetCapsView }
 
+/** Balance/emissions as they ride a persisted snapshot row: eth/usdc and totalReppo
+ *  arrived after early snapshot rows were written, so old rows simply lack them. */
+export type WalletBalanceView = Omit<WalletBalance, 'eth' | 'usdc'> & Partial<Pick<WalletBalance, 'eth' | 'usdc'>>
+export type EmissionsDueView = Omit<EmissionsDue, 'totalReppo'> & Partial<Pick<EmissionsDue, 'totalReppo'>>
+
 /** /api/pnl's `snapshot`: the latest persisted cycle row is served verbatim, and rows
- *  written by OLDER node versions may predate votingPower/budget — exactly those are
- *  loosened; everything else stays canonical. */
-export type SnapshotView = Omit<Snapshot, 'votingPower' | 'budget'> &
-  Partial<Pick<Snapshot, 'votingPower'>> & { budget?: SnapshotBudgetView }
+ *  written by OLDER node versions may predate cycleId/votingPower/budget (or carry an
+ *  epoch-millis ts from the JSON era) — exactly those are loosened; everything else
+ *  stays canonical. */
+export type SnapshotView = Omit<Snapshot, 'ts' | 'cycleId' | 'votingPower' | 'budget' | 'balance' | 'emissionsDue'> &
+  Partial<Pick<Snapshot, 'cycleId' | 'votingPower'>> & {
+    ts: string | number
+    balance: WalletBalanceView
+    budget?: SnapshotBudgetView
+    emissionsDue: EmissionsDueView
+  }
+
+/** Pnl as the SPA consumes it: claimablePairs postdates older nodes' responses. */
+export type PnlView = Omit<Pnl, 'claimablePairs'> & Partial<Pick<Pnl, 'claimablePairs'>>
 
 /** GET /api/pnl. */
-export interface PnlResponse { pnl: Pnl | null; snapshot: SnapshotView | null }
+export interface PnlResponse { pnl: PnlView | null; snapshot: SnapshotView | null }
 
-/** GET /api/earn: rows persisted by older nodes may predate claimedTokens. */
-export type EarnStatus = Omit<PersistedEarn, 'claimedTokens'> &
-  Partial<Pick<PersistedEarn, 'claimedTokens'>>
+/** Activity rows as the SPA consumes them: rows imported from the JSONL era may predate
+ *  cycleId or carry a numeric ts; datanetId is '' on wallet-global breadcrumbs; the
+ *  narrow unions (status/direction) stay plain strings on the wire so an old row with a
+ *  retired value still renders instead of failing the whole feed. */
+export type ActivityEntryView = Omit<ActivityEntry, 'ts' | 'cycleId' | 'datanetId' | 'status' | 'direction' | 'conviction' | 'epoch'> & {
+  ts: string | number
+  cycleId?: string
+  datanetId?: string
+  status?: string
+  direction?: string
+  conviction?: string | number
+  epoch?: string | number
+}
+
+/** /api/health rows as the SPA consumes them: claims/skips/txRate postdate older nodes,
+ *  and `classification` is attached only while a datanet currently has a failure to
+ *  explain (see errorClass.ts attachClassification). */
+export type DatanetHealthView = Omit<DatanetHealth, 'claims' | 'skips' | 'txRate'> &
+  Partial<Pick<DatanetHealth, 'claims' | 'skips' | 'txRate'>> & { classification?: ClassifiedError }
+export interface HealthReportView { datanets: DatanetHealthView[]; txRate?: TxRate; entriesScanned?: number }
+
+/** GET /api/earn: rows persisted by older nodes may predate claimedTokens/pods/ts. */
+export type EarnStatus = Omit<PersistedEarn, 'ts' | 'pods' | 'claimedTokens' | 'claimablePairs'> &
+  Partial<Pick<PersistedEarn, 'ts' | 'pods' | 'claimedTokens' | 'claimablePairs'>>
 
 type CanonicalDatanetPolicy = StrategyConfig['datanets'][string]
 

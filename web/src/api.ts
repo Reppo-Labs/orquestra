@@ -6,18 +6,21 @@
 // error instead of a silent runtime mismatch. Writes are unauthenticated — the
 // server binds localhost and exposure is the operator's responsibility.
 import type {
-  ActivityEntry,
+  ActivityEntryView,
   AgentInfo,
   DatanetNames,
+  DatanetPnl,
+  DatanetPnlResponse,
   EarnStatus,
-  HealthReport,
+  HealthReportView,
   LearnView,
   ModelsResponse,
   OnboardingAnswers,
   OnboardingChatRequest,
   OnboardingChatView,
   OnboardingStatusView,
-  Pnl,
+  PauseResult,
+  PnlView,
   PnlResponse,
   ProposalDecisionView,
   RunNowResult,
@@ -30,7 +33,7 @@ import type {
 // Re-export under the names the components use (local aliases only — the
 // definitions live in src/dashboard/apiTypes.ts and the domain modules behind it).
 export type {
-  Pnl,
+  PnlView as Pnl,
   EpochInfo,
   DatanetYield,
   PanelTranscript,
@@ -42,16 +45,22 @@ export type {
   ModelProvider,
   ModelsResponse,
   DatanetEntry,
+  DatanetPnl,
+  ErrorCode,
+  SuggestedAction,
   LearnDatanetView,
   SnapshotView as Snapshot,
   SnapshotBudgetView as SnapshotBudget,
   BudgetCapsView as BudgetCaps,
   ClaimableEmission as EmissionPod,
   LlmUsageSnapshot as LlmUsage,
-  ActivityEntry as ActivityRow,
+  ActivityEntryView as ActivityRow,
   KindCounts as HealthCounts,
-  DatanetHealth as HealthDatanet,
-  HealthReport as Health,
+  // /api/health serves the CLASSIFIED report: buildHealth's counters plus an operator-facing
+  // { code, operatorMessage, suggestedAction } per currently-failing datanet.
+  ClassifiedError as Classification,
+  DatanetHealthView as HealthDatanet,
+  HealthReportView as Health,
   EarnStatus as Earn,
   SafeStrategyConfig as StrategyConfig,
   ChatMessage as ChatMsg,
@@ -66,12 +75,16 @@ export type {
 } from '../../src/dashboard/apiTypes.js'
 
 export interface DashData {
-  pnl: Pnl | null
+  pnl: PnlView | null
   snapshot: SnapshotView | null
-  activity: ActivityEntry[]
+  activity: ActivityEntryView[]
   config: SafeStrategyConfig
   earn: EarnStatus | null
   netNames: DatanetNames
+  /** Per-datanet lifetime profit, worst net first — the single most actionable number an
+   *  operator has ("datanet 11 spent 5,200 REPPO over 28 mints and earned 0 back").
+   *  [] on an older node with no /api/datanet-pnl. */
+  datanetPnl: DatanetPnl[]
 }
 
 /** Fetch JSON, returning `fallback` on any HTTP error or network/parse failure.
@@ -98,12 +111,13 @@ async function getJsonOrThrow<T>(url: string, fallback: T): Promise<T> {
 }
 
 export async function loadAll(): Promise<DashData> {
-  const [pnlRes, activity, config, earn, netNames] = await Promise.all([
+  const [pnlRes, activity, config, earn, netNames, dnPnl] = await Promise.all([
     getJsonOrThrow<Partial<PnlResponse>>('/api/pnl', {}),
-    getJson<ActivityEntry[]>('/api/activity', []),
+    getJson<ActivityEntryView[]>('/api/activity', []),
     getJson<SafeStrategyConfig>('/api/config', {}),
     getJson<EarnStatus | null>('/api/earn', null),
     getJson<DatanetNames>('/api/datanets', {}),
+    getJson<Partial<DatanetPnlResponse>>('/api/datanet-pnl', {}),
   ])
   return {
     pnl: pnlRes.pnl ?? null,
@@ -113,14 +127,38 @@ export async function loadAll(): Promise<DashData> {
     config: config ?? {},
     earn,
     netNames: netNames || {},
+    datanetPnl: Array.isArray(dnPnl.datanets) ? dnPnl.datanets : [],
   }
 }
 
-/** 7-day reliability view (mirrors GET /api/health → src/dashboard/health.ts buildHealth).
+/** Emergency kill switch (POST /api/pause). While paused the node signs nothing but keeps
+ *  running. `appliesNextCycle` is always true and must be surfaced, not hidden: a cycle
+ *  already in flight finishes under the old flag.
+ *
+ *  NEVER REJECTS. This is the "stop spending my money" control: a rejected promise leaves
+ *  the caller's `setBusy(false)` unreached, so the button locks on "…" forever and the
+ *  operator is told nothing while the node keeps signing. A network failure is a RESULT
+ *  here ({ ok: false }), not an exception. */
+export async function setPaused(paused: boolean): Promise<{ ok: boolean; paused?: boolean; appliesNextCycle?: boolean; error?: string }> {
+  let r: Response
+  try {
+    r = await fetch('/api/pause', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paused }),
+    })
+  } catch {
+    return { ok: false, error: 'could not reach the node — nothing changed' }
+  }
+  const out = (await r.json().catch(() => ({}))) as Partial<PauseResult> & { error?: string }
+  return r.ok ? { ok: true, ...out } : { ok: false, error: out.error ?? `HTTP ${r.status}` }
+}
+
+/** 7-day reliability view (mirrors GET /api/health → buildHealth + attachClassification).
  *  Degrades to null on any error — the Health tab shows an unavailable state, and a
  *  transiently failing poll never wipes an already-rendered panel with a crash. */
-export async function loadHealth(): Promise<HealthReport | null> {
-  return getJson<HealthReport | null>('/api/health', null)
+export async function loadHealth(): Promise<HealthReportView | null> {
+  return getJson<HealthReportView | null>('/api/health', null)
 }
 
 /** Platform agent identity as served by /api/agent — never includes the apiKey. */
@@ -139,22 +177,53 @@ export async function renameAgent(name: string): Promise<{ ok: boolean; error?: 
 }
 
 /** Trigger an off-schedule cycle. started:false (HTTP 409) means a cycle is already
- *  running or the node is still starting — not an error, surfaced as `reason`. */
+ *  running or the node is still starting — not an error, surfaced as `reason`.
+ *  Never rejects: this is awaited between setBusy(true) and setBusy(false) by the "retry"
+ *  remedy, and a rejection would strand that button on "working…" with no message. */
 export async function runNow(): Promise<{ started: boolean; reason?: string; error?: string }> {
-  const r = await fetch('/api/run-now', { method: 'POST' })
+  let r: Response
+  try {
+    r = await fetch('/api/run-now', { method: 'POST' })
+  } catch {
+    return { started: false, error: 'could not reach the node' }
+  }
   const out = (await r.json().catch(() => ({}))) as Partial<RunNowResult> & { error?: string }
   if (r.ok) return { started: true }
   return { started: false, reason: out.reason, error: out.error }
 }
 
+/** NEVER REJECTS, for the same reason setPaused does not: the one-click remedies await this
+ *  between setBusy(true) and setBusy(false). A rejection there strands the button on
+ *  "working…" and the operator never learns the save failed. */
 export async function saveStrategy(candidate: unknown): Promise<{ ok: boolean; error?: string }> {
-  const r = await fetch('/api/strategy', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(candidate),
-  })
+  let r: Response
+  try {
+    r = await fetch('/api/strategy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(candidate),
+    })
+  } catch {
+    return { ok: false, error: 'could not reach the node — nothing was saved' }
+  }
   const out = await r.json().catch(() => ({}))
   return r.ok ? { ok: true } : { ok: false, error: out.error || String(r.status) }
+}
+
+/** The config the node holds RIGHT NOW. The one-click remedies read this immediately before
+ *  they write, so they mutate the live config rather than a candidate loaded minutes ago —
+ *  a whole-config POST built on a stale copy silently reverts anything the node or another
+ *  surface (a learning proposal, a pause, another tab) has written since page load.
+ *  null = unreachable or no config; the caller must NOT fall back to a stale copy. */
+export async function fetchConfig(): Promise<SafeStrategyConfig | null> {
+  try {
+    const r = await fetch('/api/config')
+    if (!r.ok) return null
+    const c = (await r.json()) as SafeStrategyConfig | null
+    return c && typeof c === 'object' ? c : null
+  } catch {
+    return null
+  }
 }
 
 /** Providers whose API key is present in the node's env, with seed model slugs

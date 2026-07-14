@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { DatanetEntry, ModelProvider } from '../api'
+import type { DatanetEntry, DatanetPnl, ModelProvider, Snapshot } from '../api'
 import { Tip } from './Tip'
+import { buildMintEstimate } from '../lib/mintEstimate'
+import { MintEstimate } from './MintEstimate'
 import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
 const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
@@ -8,10 +10,15 @@ const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
 // "Add a datanet" dialog. The datanet is picked BY NAME from the live catalog
 // (/api/datanets id→name map) — ids never surface in the UI. Already-configured
 // datanets are excluded from the list.
-export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose }: {
+//
+// Adding a datanet with MINT on is a spending decision (a one-time access fee plus a REPPO
+// fee per mint), so the price appears in the dialog, next to the toggle that commits to it.
+export function AddDatanetModal({ existing, netNames, providers, snapshot, datanetPnl, onAdd, onClose }: {
   existing: string[]
   netNames: Record<string, string>
   providers: ModelProvider[]
+  snapshot: Snapshot | null
+  datanetPnl: DatanetPnl[]
   onAdd: (id: string, entry: DatanetEntry) => void
   onClose: () => void
 }) {
@@ -19,7 +26,7 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
   const [vote, setVote] = useState(true)
   const [mint, setMint] = useState(false)
   const [adapter, setAdapter] = useState('')
-  const [strictness, setStrictness] = useState<DatanetEntry['strictness']>('balanced')
+  const [strictness, setStrictness] = useState('balanced')
   const [voteShare, setVoteShare] = useState('1')
   const [modelProvider, setModelProvider] = useState('') // '' = node default
   const [modelSlug, setModelSlug] = useState('')
@@ -53,10 +60,10 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
     // ⇒ omit, so the node applies the default of 1.
     const share = parseInt(voteShare, 10)
     const entry: DatanetEntry = {
-      vote, mint, strictness,
+      vote, mint, strictness: strictness as DatanetEntry['strictness'],
       ...(adapter ? { adapter } : {}),
       ...(Number.isInteger(share) && share >= 1 ? { voteShare: share } : {}),
-      ...(modelProvider && modelSlug ? { model: { provider: modelProvider, model: modelSlug } as DatanetEntry['model'] } : {}),
+      ...(modelProvider && modelSlug ? { model: { provider: modelProvider as NonNullable<DatanetEntry['model']>['provider'], model: modelSlug } } : {}),
     }
     onAdd(selectedId, entry)
     onClose()
@@ -96,6 +103,15 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
             </div>
           </div>
 
+          {/* The price of the decision, at the decision. Only once a datanet is actually
+              picked — an estimate with no subject would be theatre. */}
+          {mint && selectedId && (
+            <MintEstimate
+              est={buildMintEstimate({ datanetId: selectedId, snapshot, datanetPnl })}
+              name={netNames[selectedId]}
+            />
+          )}
+
           <label className="field">
             <span>adapter {mint && !adapter ? '(required to mint)' : ''}</span>
             <select value={adapter} onChange={(e) => setAdapter(e.target.value)}>
@@ -105,7 +121,7 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
 
           <label className="field">
             <span>strictness <Tip label="what strictness means">{strictnessTip()}</Tip></span>
-            <select value={strictness} onChange={(e) => setStrictness(e.target.value as DatanetEntry['strictness'])}>
+            <select value={strictness} onChange={(e) => setStrictness(e.target.value)}>
               {STRICT.map((x) => <option key={x} value={x}>{STRICT_LABEL[x]}</option>)}
             </select>
           </label>

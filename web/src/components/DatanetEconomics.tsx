@@ -1,5 +1,5 @@
 import type { DatanetYield, Snapshot } from '../api'
-import { netLabel } from '../lib/format'
+import { fmt, fmtPerVote, netLabel } from '../lib/format'
 
 /** Rank for the "best places to vote" board: uncontested datanets first (nobody has
  *  voted this epoch — the first voter takes the whole epoch's emissions), then by
@@ -17,9 +17,8 @@ function rank(a: DatanetYield, b: DatanetYield): number {
 export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
   snapshot: Snapshot | null
   netNames: Record<string, string>
-  /** Jump to the Strategy tab; with a datanetId, scroll to + flash that datanet's card.
-   *  (The board ranks CONFIGURED datanets only — the row's action is tuning its vote
-   *  share, never "add". Discovery of new datanets is the Learning tab's job.) */
+  /** With a datanetId (a leaderboard row click): land ON that datanet's row — scrolled,
+   *  focused, flashed. Without one ("adjust vote shares"): just open the Datanets tab. */
   onGoToStrategy: (datanetId?: string) => void
 }) {
   const all = snapshot?.datanetEconomics ?? []
@@ -33,9 +32,7 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
   return (
     <div>
       <div className="sec-head">
-        <h2>Best places to vote</h2>
-        <span className="muted" style={{ fontSize: 12 }}>among your configured datanets</span>
-        <div className="rule" />
+        <h2>Best places to vote</h2><div className="rule" />
         <button className="link-btn" onClick={() => onGoToStrategy()}>adjust vote shares →</button>
       </div>
       <div className="panel-box">
@@ -43,8 +40,7 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
           <div className="yield-board">
             {top.map((y, i) => (
               <button key={y.datanetId} className="yield-row" onClick={() => onGoToStrategy(y.datanetId)}
-                title="open this datanet's card on the Strategy tab">
-
+                title="open Datanets on this datanet's row">
                 <span className="yield-rank mono">#{i + 1}</span>
                 <span className="yield-net">{netLabel(y.datanetId, netNames)}</span>
                 {y.uncontested
@@ -53,13 +49,16 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
                   // even when contested — never assert non-null here (crashed the SPA).
                   : y.yieldPerVote === null
                     ? <span className="yield-num mono muted">pays {y.nativeTokenSymbol ?? '?'} (native)</span>
-                    : <span className="yield-num mono">⚡ {y.yieldPerVote.toExponential(2)}/vote</span>}
+                    // Never scientific notation: fmtPerVote renders a readable amount, or a
+                    // "<0.001 REPPO/vote" bound when the yield is too small to be meaningful.
+                    // The exact value stays available on hover.
+                    : <span className="yield-num mono" title={`${y.yieldPerVote} REPPO per vote`}>⚡ {fmtPerVote(y.yieldPerVote)}</span>}
                 <span className="yield-ctx muted">
                   {y.emissionsPerEpochReppo > 0
-                    ? `${y.emissionsPerEpochReppo.toLocaleString()} REPPO/epoch`
+                    ? `${fmt(y.emissionsPerEpochReppo)} REPPO/epoch`
                     : `${y.nativeTokenSymbol} (native)`}
                   {!y.uncontested && y.epochVoteVolume !== null
-                    ? ` · vol ${y.epochVoteVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                    ? ` · ${fmt(y.epochVoteVolume)} votes this epoch`
                     : ''}
                 </span>
               </button>
