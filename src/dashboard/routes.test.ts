@@ -9,6 +9,7 @@ import { matchRoute, routes, type RouteContext, type OnboardingSession } from '.
 import { appendActivity } from './activityLog.js'
 import { writeEarnStatus } from './earnStatus.js'
 import { writeConfig, readConfigText } from '../config/load.js'
+import { getDb } from './db.js'
 import { insertProposal, readProposals } from '../learn/store.js'
 
 let dir: string
@@ -302,9 +303,39 @@ describe('write handlers', () => {
     expect(r.body).toMatchObject({ saved: true })
     expect(JSON.parse(readConfigText(dir)!).cadenceHours).toBe(6)
   })
+
+  it('/api/onboarding/confirm never un-pauses a paused node (kill switch survives re-onboarding)', async () => {
+    // Only POST /api/pause moves the flag: buildStrategyConfig fills the schema
+    // default (paused:false), so a raw persist would silently resume a node the
+    // operator deliberately stopped. strategySave already carries the persisted
+    // value forward; the onboarding write path must do the same.
+    await call('POST', '/api/pause', { body: { paused: true } })
+    const r = await call('POST', '/api/onboarding/confirm', {
+      body: {
+        datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
+        lockReppo: 0, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+        mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'still paused',
+      },
+    })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+  })
 })
 
 describe('POST /api/pause (emergency kill switch)', () => {
+  it('pausing still works when the on-disk config is schema-INVALID — the kill switch must not 409 exactly when last-good keeps signing', async () => {
+    // A schema-invalid (but parseable) config makes the tick keep its last-good,
+    // unpaused config — the node keeps signing. Pausing must not depend on full
+    // config validity; un-pausing (resuming) still requires a valid config.
+    getDb(dir).prepare(
+      'INSERT INTO config (id, data, updatedTs) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedTs = excluded.updatedTs',
+    ).run(JSON.stringify({ horizonDays: -1, paused: false }), new Date().toISOString())
+    const r = await call('POST', '/api/pause', { body: { paused: true } })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).paused).toBe(true)
+    expect((await call('POST', '/api/pause', { body: { paused: false } })).status).toBe(409)
+  })
+
   const VALID_STRATEGY = {
     horizonDays: 7, cadenceHours: 1,
     stake: { lockReppo: 0, lockDurationDays: 7 },

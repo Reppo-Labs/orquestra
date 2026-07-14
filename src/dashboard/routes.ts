@@ -16,7 +16,7 @@ import { buildHealth } from './health.js'
 import { attachClassification } from './errorClass.js'
 import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
 import { KNOWN_MODELS, type LlmProvider } from '../llm/model.js'
-import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError } from '../config/load.js'
+import { loadConfig, readConfigText, writeConfig, ConfigNotFoundError, forcePausedRaw } from '../config/load.js'
 import { buildLearnView } from '../learn/view.js'
 import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from '../learn/store.js'
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
@@ -379,7 +379,11 @@ const onboardingConfirm: RouteHandler = ({ dataDir, session }, req) => {
   // persisted exactly like the CLI flow. The waiting node sees the file appear.
   const v = validateAnswers(req.body)
   if (!v.ok) return json(400, { error: v.error })
-  persistOnboarding(dataDir, buildStrategyConfig(v.answers))
+  // Kill-switch invariant (same as strategySave): only POST /api/pause moves
+  // `paused`. buildStrategyConfig fills the schema default (false), so a raw
+  // persist would silently RESUME a deliberately stopped node on re-onboarding.
+  const built = buildStrategyConfig(v.answers)
+  persistOnboarding(dataDir, { ...built, paused: persistedPaused(dataDir) ?? built.paused })
   session.messages = []; session.draft = null; session.finalized = null
   return json(200, { saved: true })
 }
@@ -492,10 +496,18 @@ const pause: RouteHandler = ({ dataDir }, req) => {
   try {
     cfg = loadConfig(dataDir)
   } catch (e) {
-    const msg = e instanceof ConfigNotFoundError
-      ? 'no strategy config yet — the node has nothing to pause until onboarding finishes'
-      : 'strategy config is invalid — fix or re-onboard before pausing'
-    return json(409, { error: msg })
+    if (e instanceof ConfigNotFoundError) {
+      return json(409, { error: 'no strategy config yet — the node has nothing to pause until onboarding finishes' })
+    }
+    // Schema-INVALID config: the tick keeps signing under its last-good config — this is
+    // exactly when the kill switch matters most, so PAUSING must not depend on validity.
+    // forcePausedRaw merges `paused:true` into the raw row (the codebase's one sanctioned
+    // schema bypass); the tick's raw fallback honors it. RESUMING still requires a valid
+    // config — running on a config we cannot validate is not an emergency action.
+    if (b.paused === true && forcePausedRaw(dataDir)) {
+      return json(200, { paused: true, appliesNextCycle: true } satisfies PauseResult)
+    }
+    return json(409, { error: 'strategy config is invalid — fix or re-onboard before resuming' })
   }
   const parsed = StrategyConfigSchema.safeParse({ ...cfg, paused: b.paused })
   if (!parsed.success) return json(400, { error: 'resulting config failed validation' })

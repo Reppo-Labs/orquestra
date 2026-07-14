@@ -201,14 +201,6 @@ function AlertCard({ alert, strategy, snapshot, onDismiss, onOpenCaps, onGoTo }:
           affected datanet at a model on a provider that still has headroom.
         </div>
       )}
-      {explain && action.kind === 'explain_model_quota' && (
-        <div className="remedy-note" role="status">
-          This is your AI model provider — not your node, not your wallet, not Reppo. It stopped
-          answering because the account's quota or credit ran out. Open the provider's billing or
-          quota page and top it up, or wait for the daily quota to reset. You can also point the
-          affected datanet at a model on a provider that still has headroom.
-        </div>
-      )}
       {explain && action.kind === 'explain_funding' && (
         <div className="remedy-note" role="status">
           Send REPPO (mint fees) or ETH (gas) to the wallet whose key is in the node's{' '}

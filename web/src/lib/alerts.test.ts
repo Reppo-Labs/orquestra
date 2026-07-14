@@ -413,6 +413,17 @@ describe('deriveAlerts — what is deliberately NOT an alert', () => {
     expect(a).toEqual([])
   })
 
+  it("never calls a datanet idle while the node is PAUSED — the silence is the operator's own choice", () => {
+    // Paused with configured datanets whose last executed row predates the pause by days:
+    // without the gate every enabled datanet crosses staleAfter and screams "earning you
+    // nothing", misattributing a deliberate stop (rule 3: paused is not an alert).
+    const a = deriveAlerts(input({
+      config: { paused: true, cadenceHours: 1, datanets: on('9') },
+      activity: [vote('9', ago(5 * DAY))],
+    }))
+    expect(a.filter((x) => x.id.startsWith('idle:'))).toEqual([])
+  })
+
   it('is completely silent on a healthy node — no "all clear" chrome', () => {
     const a = deriveAlerts(input({
       config: { cadenceHours: 1, datanets: on('9') },

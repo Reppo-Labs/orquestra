@@ -6,6 +6,7 @@ import { buildCycleDeps, buildTick, type CycleWiring } from './wiring.js'
 import { DedupState } from './state.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import { appendActivity, readActivity } from '../dashboard/activityLog.js'
+import { getDb } from '../dashboard/db.js'
 import type { VoterPod } from '../voter/types.js'
 import type { LlmProvider } from '../llm/model.js'
 import type { DatanetRubric } from '../rubric/types.js'
@@ -674,6 +675,20 @@ describe('buildTick self-learning (reporting path)', () => {
   const learnDeps = (w: CycleWiring) => buildCycleDeps({
     ...w,
     io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } },
+  })
+
+  it('a RAW paused:true still stops the cycle when the config reload fails (kill switch survives an invalid config)', async () => {
+    // The reload path keeps the last-good (unpaused) config on a failed reload —
+    // without a raw best-effort read of `paused`, the one failure mode where the
+    // operator most needs the kill switch is the one where it silently stops working.
+    getDb(dir).prepare(
+      'INSERT INTO config (id, data, updatedTs) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedTs = excluded.updatedTs',
+    ).run(JSON.stringify({ horizonDays: -1, paused: true }), new Date().toISOString())
+    const w = wiring() // last-good config is unpaused
+    const tick = buildTick(w, learnDeps(w), { reloadConfig: () => { throw new Error('corrupt json') } })
+    await tick()
+    const rows = readActivity(dir, { limit: 10 })
+    expect(rows.some((r) => r.kind === 'skip' && /paused/i.test(r.reason ?? ''))).toBe(true)
   })
 
   it('collects outcomes per learn-datanet and reflects once per epoch when a learnModel is set', async () => {

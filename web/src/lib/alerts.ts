@@ -253,7 +253,10 @@ export function deriveAlerts(input: AlertInput): Alert[] {
   const healthById = new Map(health.map((h) => [h.datanetId, h]))
 
   for (const id of Object.keys(cfgNets)) {
-    if (id === '*' || !enabled(id) || blockedIds.has(id)) continue
+    // Paused gate (rule 3: PAUSED IS NOT AN ALERT): while paused, per-datanet silence is
+    // the operator's own choice — lastSeen freezes and every datanet would cross
+    // staleAfter, misattributing the stop with an "earning you nothing" card each.
+    if (config.paused === true || id === '*' || !enabled(id) || blockedIds.has(id)) continue
     const seen = lastSeen.get(id)
     // No executed row → measure from the datanet's OWN oldest row. A datanet the log has
     // never mentioned (just enabled, node hasn't reached it) gets NO alert: we would be

@@ -4,6 +4,7 @@
 // index.ts stays a thin shell: env, service construction, argv dispatch, signals.
 import type { LanguageModel } from 'ai'
 import type { StrategyConfig } from '../config/schema.js'
+import { readConfigText } from '../config/load.js'
 import type { CycleDeps, CycleReport, OnchainReads } from './cycle.js'
 import type { DatanetAdapter } from '../adapter/types.js'
 import type { VoterPod } from '../voter/types.js'
@@ -412,6 +413,18 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
         w.config = fresh // buildCycleDeps closures (strategyFor) read w.config at call time
       } catch (e) {
         console.error(`orquestra: config reload failed — keeping last-good config: ${e instanceof Error ? e.message : String(e)}`)
+        // Kill-switch fallback: last-good is by definition UNPAUSED-as-loaded, so a paused
+        // flag written while the config is invalid (POST /api/pause's raw path) would be
+        // invisible here and the node would keep signing. Read `paused` raw, best-effort —
+        // one JSON.parse per failed reload, never per healthy cycle.
+        try {
+          const raw = JSON.parse(readConfigText(w.dataDir) ?? 'null') as { paused?: unknown } | null
+          if (raw?.paused === true && !config.paused) {
+            console.error('orquestra: raw paused flag detected — honoring the kill switch over last-good')
+            config = { ...config, paused: true }
+            w.config = config
+          }
+        } catch { /* unreadable text: stay on last-good */ }
       }
     }
     const cycleId = new Date().toISOString()

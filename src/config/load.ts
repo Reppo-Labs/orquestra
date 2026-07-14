@@ -125,3 +125,21 @@ export function writeConfig(dataDir: string, config: StrategyConfig): void {
     .prepare('INSERT INTO config (id, data, updatedTs) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedTs = excluded.updatedTs')
     .run(JSON.stringify(config), new Date().toISOString())
 }
+
+/** KILL-SWITCH-ONLY raw write: set `paused: true` on the persisted config WITHOUT full
+ *  schema validation. The one write in the codebase allowed to bypass the schema, on
+ *  purpose: when the stored config is schema-invalid the tick keeps signing under its
+ *  last-good config — pausing must not depend on the validity of a config the operator
+ *  cannot currently fix. Only pausing (never resuming) may take this path, and only when
+ *  the stored text still parses as a JSON object; returns false otherwise. */
+export function forcePausedRaw(dataDir: string): boolean {
+  const text = readConfigText(dataDir)
+  if (text === null) return false
+  let obj: unknown
+  try { obj = JSON.parse(text) } catch { return false }
+  if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return false
+  conn(dataDir)
+    .prepare('INSERT INTO config (id, data, updatedTs) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updatedTs = excluded.updatedTs')
+    .run(JSON.stringify({ ...obj, paused: true }), new Date().toISOString())
+  return true
+}

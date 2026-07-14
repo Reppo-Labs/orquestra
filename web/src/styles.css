@@ -345,6 +345,10 @@ textarea { resize: vertical; font-family: var(--body); min-height: 0; }
    .losing's border. The row is focused programmatically, so its plain :focus ring is
    suppressed — the flash IS the "you are here"; keyboard focus still shows one. */
 .dn-row.flash { animation: net-flash 1.6s ease-out; }
+@keyframes net-flash {
+  0% { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  100% { border-color: var(--border); box-shadow: none; }
+}
 .dn-row:focus { outline: none; }
 .dn-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Less motion, not less information: the same highlight, held static instead of animated. */
@@ -838,6 +842,10 @@ td.detail-cell{max-width:480px}
 .alert-badge.warning .ab-dot{background:var(--warn)}
 .alert-badge.critical{border-color:var(--accent-line);background:var(--accent-soft);color:var(--accent-hi)}
 .alert-badge.critical .ab-dot{background:var(--accent);animation:ab-pulse 2s var(--ease) infinite}
+@keyframes ab-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
 @media (prefers-reduced-motion: reduce){.alert-badge.critical .ab-dot{animation:none}}
 .mint-est{background:var(--panel-2);border:1px solid var(--border-2);border-radius:var(--r-md);padding:12px 14px;margin:10px 0}
 .me-head{font-family:var(--display);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
