@@ -92,6 +92,7 @@ function fakeReader(over: Partial<ReppoReader> = {}): ReppoReader {
     subnetEmissionInfo: async () => ({ primaryToken: '0x0', primaryEmissionsPerEpoch: 0n, reppoEmissionsPerEpoch: 0n }),
     tokenBalance: async () => 0n,
     epochVoteVolume: async () => ({ epoch: 0, totalRaw: 0n }),
+    votePowerBudget: async () => ({ votingPowerWei: 0n, votesCastedWei: 0n, remainingWei: 0n, epoch: 0, epochEndsAtSec: 0 }),
     claimableOnchain: async () => [],
     voterClaimableOnchain: async () => [],
     ...over,

@@ -95,11 +95,11 @@ export class WalletExecutor {
     const res = this.ledger.reserveVote(VOTE_GAS_EST_ETH)
     if (!res) return { ok: false, status: 'refused-budget', detail: 'vote budget/rate exhausted' }
     try {
-      // Scale conviction (1-10) to 18-decimal veREPPO-power units. The on-chain vote() weights
-      // curation in 18-decimal units; an unscaled conviction (e.g. 8 wei) is dust → ~0 share of
-      // the pod's pool → 0 voter emissions. conviction × 1e18 spends 1-10 veREPPO-power per pod,
-      // well within the wallet's locked power and giving real curation weight.
-      const voteWeight = (BigInt(Math.max(1, Math.round(intent.conviction))) * 10n ** 18n).toString()
+      // Prefer the cycle's budget-sized weight (src/voter/weight.ts — a share of the wallet's
+      // REAL per-epoch voting power). Fallback: scale conviction (1-10) to 18-decimal
+      // veREPPO-power units — 1-10 power per pod is dust next to a locked stake, but it is
+      // the only safe sizing without an RPC read of the epoch's remaining budget.
+      const voteWeight = intent.voteWeightWei ?? (BigInt(Math.max(1, Math.round(intent.conviction))) * 10n ** 18n).toString()
       const r = await this.cli.vote({ podId: intent.podId, direction: intent.direction, votes: voteWeight, idempotencyKey: `vote-${intent.podId}-${intent.direction}` })
       if (!r.txHash) {
         this.ledger.releaseVote(res)

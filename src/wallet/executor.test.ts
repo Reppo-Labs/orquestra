@@ -37,6 +37,15 @@ describe('WalletExecutor', () => {
     expect(ledger.state.votesCastThisCycle).toBe(1)
   })
 
+  it('prefers the budget-sized voteWeightWei over conviction scaling', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const r = await ex.executeVote({ ...voteIntent('p1'), voteWeightWei: '250000000000000000000' })
+    expect(r.status).toBe('executed')
+    // the cycle's budget-sized weight (250 power) wins over conviction 9 → 9e18
+    expect((cli.vote as ReturnType<typeof vi.fn>).mock.calls[0][0].votes).toBe('250000000000000000000')
+  })
+
   it('refuses a vote over the per-cycle cap WITHOUT calling the CLI', async () => {
     const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
     const ex = new WalletExecutor(cli, ledger)
