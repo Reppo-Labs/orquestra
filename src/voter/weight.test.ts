@@ -19,6 +19,32 @@ describe('createVoteWeigher', () => {
     expect(weigh(1)).toBe(25n * REPPO)
   })
 
+  it('spendHorizonSeconds front-loads: paces over the horizon, not the whole epoch', () => {
+    // 40h left in the epoch but a 4h horizon at 1h cadence → 4 cycles planned, not 40.
+    // Same wallet/cap as the full-epoch case would give perVote = 150 REPPO; the
+    // horizon concentrates it to 1,500 REPPO per vote (10x front-load).
+    const weigh = createVoteWeigher({
+      remainingWei: 60_000n * REPPO,
+      secondsRemainingInEpoch: 40 * 3600,
+      cadenceHours: 1,
+      voteRateMaxPerCycle: 10,
+      spendHorizonSeconds: 4 * 3600,
+    })
+    expect(weigh(10)).toBe(1_500n * REPPO)
+  })
+
+  it('a horizon longer than the remaining epoch falls back to the epoch remainder', () => {
+    // 2h left, 4h horizon → pace over the 2h that actually remain (2 cycles).
+    const weigh = createVoteWeigher({
+      remainingWei: 1_000n * REPPO,
+      secondsRemainingInEpoch: 2 * 3600,
+      cadenceHours: 1,
+      voteRateMaxPerCycle: 10,
+      spendHorizonSeconds: 4 * 3600,
+    })
+    expect(weigh(10)).toBe(50n * REPPO) // 1000 / (10 × 2)
+  })
+
   it('treats a nearly-over epoch as one final cycle (spend, do not stall)', () => {
     // 10 seconds left → cyclesLeft floors at 1 → perVote = remaining / cap.
     const weigh = createVoteWeigher({

@@ -22,6 +22,12 @@ export interface VoteWeigherInput {
   cadenceHours: number
   /** per-cycle vote cap (config.budget.voteRateMaxPerCycle). */
   voteRateMaxPerCycle: number
+  /** Optional spend horizon (config.budget.voteSpendHorizonHours × 3600): pace the
+   *  remaining power over at most this many seconds instead of the whole remaining
+   *  epoch. Vote weight resolves with a linear intra-epoch decay, so a short horizon
+   *  FRONT-LOADS weight where it resolves highest; later pods still get the clamped
+   *  remainder (never a reverting overspend). Absent ⇒ full-epoch pacing. */
+  spendHorizonSeconds?: number
 }
 
 /** Returns the raw 18-dec weight to spend on one vote, or 0n when the epoch budget is
@@ -35,7 +41,12 @@ export const MIN_VOTE_WEIGHT_WEI = 10n ** 18n
 export function createVoteWeigher(input: VoteWeigherInput): VoteWeigher {
   let remaining = input.remainingWei > 0n ? input.remainingWei : 0n
   const cadenceSec = Math.max(1, input.cadenceHours * 3600)
-  const cyclesLeft = Math.max(1, Math.ceil(Math.max(0, input.secondsRemainingInEpoch) / cadenceSec))
+  // A spend horizon shrinks the pacing window: plan the budget over min(remaining epoch,
+  // horizon) so the full power is committed within the horizon (front-loading).
+  const paceSeconds = input.spendHorizonSeconds !== undefined
+    ? Math.min(Math.max(0, input.secondsRemainingInEpoch), Math.max(1, input.spendHorizonSeconds))
+    : Math.max(0, input.secondsRemainingInEpoch)
+  const cyclesLeft = Math.max(1, Math.ceil(paceSeconds / cadenceSec))
   const votesPlanned = BigInt(Math.max(1, input.voteRateMaxPerCycle) * cyclesLeft)
   const perVoteWei = remaining / votesPlanned
 

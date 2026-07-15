@@ -165,6 +165,27 @@ describe('runCycle vote-weight budget', () => {
     }
   })
 
+  it('threads budget.voteSpendHorizonHours into the weigher (front-loaded sizing)', async () => {
+    // Same 59,400-power budget as the sizing test, but epoch end 24h away and a 6h
+    // horizon: 6h/6h-cadence → 1 cycle planned (not 4) → perVote quadruples.
+    const getVotePowerBudget = vi.fn(async () => ({
+      votingPowerWei: 59_400n * REPPO, votesCastedWei: 0n, remainingWei: 59_400n * REPPO,
+      epoch: 117, epochEndsAtSec: Math.floor(Date.now() / 1000) + 24 * 3600,
+    }))
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1, voteSpendHorizonHours: 6 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    const d = deps({ onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget }) }) })
+    await runCycle(cfg, 'cyc-horizon', d)
+    const intents = (d.executor.executeVote as any).mock.calls.map((c: any[]) => c[0])
+    expect(intents.length).toBe(1)
+    // 1 cycle × cap 99 → perVote = 600 REPPO; conviction 9 → 540 (vs 135 unhorizoned).
+    expect(BigInt(intents[0].voteWeightWei)).toBe(540n * REPPO)
+  })
+
   it('refuses instead of signing once the epoch budget is exhausted', async () => {
     // Tiny budget: perVote floors at 1 power → the first vote drains it, the second
     // must be refused WITHOUT reaching the executor (a signed tx would revert).
