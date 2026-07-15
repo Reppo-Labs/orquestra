@@ -58,6 +58,13 @@ export const StrategyConfigSchema = z
     }),
     budget: z.object({
       voteRateMaxPerCycle: z.number().int().nonnegative().max(1_000),
+      // Vote-power spend horizon: pace the epoch's voting power over at most this many
+      // hours instead of the whole remaining epoch. Reppo resolves vote weight with a
+      // linear intra-epoch decay, so an operator who wants to FRONT-LOAD weight (spend
+      // most power early, when it resolves highest) sets a short horizon (e.g. 4);
+      // absent ⇒ pace evenly across the full remaining epoch (the conservative default —
+      // never runs dry before late pods appear). Floor matches cadenceHours' 0.1h.
+      voteSpendHorizonHours: z.number().min(0.1).max(1_000).optional(),
       mintRateMaxPerCycle: z.number().int().nonnegative().max(1_000).optional(),
       mintReppoMax: z.number().nonnegative().max(1_000_000),
       // Gas caps are no longer operator-configured — gas on Base is negligible. They

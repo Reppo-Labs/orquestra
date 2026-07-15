@@ -18,6 +18,7 @@ There are two layers to a strategy:
 |---|---|
 | `cadenceHours` | How often a cycle runs (min 0.1 = 6 min). Every cycle costs LLM calls — see the dashboard's *LLM cost / cycle* card before shortening it. |
 | `budget.voteRateMaxPerCycle` | Max votes per cycle, across all datanets. |
+| `budget.voteSpendHorizonHours` | Optional. Pace the epoch's voting power over at most this many hours instead of the whole epoch. Vote weight decays linearly within the epoch, so a short horizon (e.g. `4`) **front-loads** your weight where it resolves highest; omit to spread evenly across the full epoch (default — never runs dry before late pods appear). |
 | `budget.mintReppoMax` | Max REPPO spent on mint fees per `horizonDays` window. The ledger refuses **before** signing. |
 | `budget.mintRateMaxPerCycle` | Optional cap on mints per cycle. |
 | `horizonDays` | The rolling window the budget caps apply to. |

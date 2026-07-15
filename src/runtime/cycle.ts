@@ -427,6 +427,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           secondsRemainingInEpoch: Math.max(0, budget.epochEndsAtSec - Math.floor(Date.now() / 1000)),
           cadenceHours: config.cadenceHours,
           voteRateMaxPerCycle: config.budget.voteRateMaxPerCycle,
+          // Operator pacing strategy: a short horizon front-loads weight before the
+          // intra-epoch decay erodes it (see schema.ts voteSpendHorizonHours).
+          ...(config.budget.voteSpendHorizonHours !== undefined
+            ? { spendHorizonSeconds: config.budget.voteSpendHorizonHours * 3600 }
+            : {}),
         })
       } catch (e) {
         console.error(redactSecrets(`orquestra: vote-power budget read failed — votes fall back to legacy conviction sizing this cycle: ${(e as Error).message}`))
