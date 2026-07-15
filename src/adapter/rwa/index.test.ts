@@ -110,4 +110,26 @@ describe('createRwaAdapter.discover', () => {
     expect(pods).toHaveLength(0)
     expect(deps.log.mock.calls.flat().join(' ')).toContain('insufficient')
   })
+
+  it('paces with exactly one sleep between two fetched pairs, none before the first', async () => {
+    const deps = happyDeps()
+    const sleepFn = vi.fn(async () => {})
+    deps.sleepFn = sleepFn
+    const pods = await createRwaAdapter(deps).discover(baseCtx({ strategy: { focus: 'gold' } }))
+    expect(pods).toHaveLength(2)   // paxg-gold + xaut-gold both fetched
+    expect(sleepFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not sleep when the second pair is pre-skipped by existingPodNames', async () => {
+    const deps = happyDeps()
+    const sleepFn = vi.fn(async () => {})
+    deps.sleepFn = sleepFn
+    const pods = await createRwaAdapter(deps).discover(baseCtx({
+      strategy: { focus: 'gold' },
+      existingPodNames: ['XAUT vs GOLD tracking 2026-07-15'],
+    }))
+    expect(pods).toHaveLength(1)   // only paxg-gold fetched
+    expect(deps.fetchToken).toHaveBeenCalledTimes(1)
+    expect(sleepFn).not.toHaveBeenCalled()
+  })
 })

@@ -17,6 +17,9 @@ export function parseMarketChart(raw: unknown): TokenDailyPoint[] {
     for (const row of volumes) if (isPairRow(row) && row[1] > 0) volByDate.set(toUtcDate(row[0]), row[1])
   }
   const byDate = new Map<string, TokenDailyPoint>()
+  // Map#set on an existing key keeps insertion order but replaces the value, so
+  // iterating rows in order and always overwriting keeps the LAST point per UTC
+  // date — assumes CoinGecko returns rows in ascending timestamp order.
   for (const row of prices) {
     if (!isPairRow(row)) continue
     const date = toUtcDate(row[0])

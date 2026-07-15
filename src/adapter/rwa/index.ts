@@ -49,6 +49,20 @@ const DAY_MS = 86_400_000
 const utcDate = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
 const inWindow = (p: { date: string }, start: string, end: string): boolean => p.date >= start && p.date <= end
 
+const METHOD_BASE = 'daily closes aligned on shared trading days; gap = |token - reference| / reference'
+const METHOD_EQUITY_SUFFIX = '; closed-market drift = largest token move across a reference-market closure'
+const METHOD_METAL_SUFFIX = '; reference is COMEX front-month gold futures (GC=F) — futures-spot basis is included in the gap and is not by itself a peg deviation'
+
+/** Class-aware method disclosure: equities get the closed-market-drift note
+ *  (drift is always null for metal); metal pairs get the gold futures-basis
+ *  caveat instead (COMEX GC=F is a futures curve, not spot — a persistent
+ *  contango/backwardation shows up in the gap but is not itself a peg failure). */
+function methodText(assetClass: RwaPair['class']): string {
+  if (assetClass === 'equity') return METHOD_BASE + METHOD_EQUITY_SUFFIX
+  if (assetClass === 'metal') return METHOD_BASE + METHOD_METAL_SUFFIX
+  return METHOD_BASE
+}
+
 function buildDataset(pair: RwaPair, start: string, end: string, stats: CompareStats, token: TokenDailyPoint[], reference: DailyPoint[]) {
   return {
     pair: { token: pair.tokenSymbol, reference: pair.referenceName },
@@ -62,7 +76,7 @@ function buildDataset(pair: RwaPair, start: string, end: string, stats: CompareS
       tradingDaysCompared: stats.tradingDaysCompared,
     },
     series: { token, reference },
-    method: 'daily closes aligned on shared trading days; gap = |token - reference| / reference; closed-market drift = largest token move across a reference-market closure',
+    method: methodText(pair.class),
     sources: [
       `https://www.coingecko.com/en/coins/${pair.tokenId}`,
       `https://finance.yahoo.com/quote/${encodeURIComponent(pair.referenceTicker)}`,

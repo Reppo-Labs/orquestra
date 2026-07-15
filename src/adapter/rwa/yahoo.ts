@@ -14,6 +14,8 @@ export function parseYahooChart(raw: unknown): DailyPoint[] {
   const closes = r?.indicators?.quote?.[0]?.close
   if (!Array.isArray(ts) || !Array.isArray(closes)) return []
   const byDate = new Map<string, DailyPoint>()
+  // Overwriting on each iteration keeps the LAST close per UTC date — assumes
+  // Yahoo returns timestamps in ascending order.
   for (let i = 0; i < ts.length; i++) {
     const t = ts[i]
     const c = closes[i]

@@ -31,7 +31,7 @@ const CLASS_ALIASES: Record<string, AssetClass> = {
 }
 
 /** Case-insensitive filter over the registry. Focus terms (comma/space separated)
- *  match a class alias, pair id, token symbol, or a word of the reference name.
+ *  match a class alias, pair id, token symbol, or a substring of the reference name.
  *  Undefined/empty focus → all pairs. Unmatched terms are simply ignored;
  *  a focus that matches nothing returns [] (caller logs the reason). */
 export function filterPairs(pairs: RwaPair[], focus: string | undefined): RwaPair[] {
