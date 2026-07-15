@@ -33,3 +33,10 @@ The operator's configured intent — which datanets to vote/mint, budget caps,
 cadence, deliberation, and the freeform brief. The thing onboarding produces and
 the dashboard edits. Held in the node's data directory, hot-reloaded each cycle.
 _Avoid_: config (when ambiguous with bootstrap secrets), settings, preferences.
+
+**Vote pass**:
+The per-cycle voting stage: split the vote cap across datanets by voteShare
+(Pass 1), size each vote from the epoch's voting-power budget, then redistribute
+whatever budget went unused to datanets with leftover scored pods (Pass 2).
+Owned by the VotePlanner (`src/voter/plan.ts`); the cycle only decides when it
+runs. _Avoid_: voting loop, vote phase.
