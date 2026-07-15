@@ -169,3 +169,24 @@ export async function syncAgentName(deps: SyncAgentNameDeps): Promise<SyncAgentN
   deps.writeStored({ ...stored, name: deps.desiredName })
   return 'updated'
 }
+
+export interface MarkOrquestraDeps {
+  readStored(): AgentCreds | null
+  /** PATCH { isOrquestra: true } on the platform profile (platformApi.updateAgentOnPlatform). */
+  patch(agentId: string, apiKey: string): Promise<void>
+}
+
+export type MarkOrquestraResult = 'no-creds' | 'no-apikey' | 'marked'
+
+/** Mark this agent as an Orquestra node on the platform (isOrquestra: true) so its
+ *  votes/mints are attributed to orquestra traffic. Runs EVERY start: nodes registered
+ *  before the platform accepted the flag (2026-07) self-mark on their next restart, and
+ *  the store gains no schema column for a done-latch — the PATCH is idempotent
+ *  server-side and one request per boot. Callers treat failures as non-fatal. */
+export async function markAgentAsOrquestra(deps: MarkOrquestraDeps): Promise<MarkOrquestraResult> {
+  const stored = deps.readStored()
+  if (!stored) return 'no-creds'
+  if (!stored.apiKey) return 'no-apikey' // env-provided id or legacy row — cannot authenticate the PATCH
+  await deps.patch(stored.agentId, stored.apiKey)
+  return 'marked'
+}

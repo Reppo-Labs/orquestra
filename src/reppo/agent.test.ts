@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, syncAgentName, registerAgentJson, type EnsureAgentDeps, type SyncAgentNameDeps } from './agent.js'
+import { parseAgentRegistration, parseRegisterAgentOutput, readAgentStore, writeAgentStore, ensureAgentId, agentDisplayName, syncAgentName, markAgentAsOrquestra, registerAgentJson, type EnsureAgentDeps, type SyncAgentNameDeps, type MarkOrquestraDeps } from './agent.js'
 import { runReppoStdout } from './exec.js'
 
 vi.mock('./exec.js', () => ({ runReppoStdout: vi.fn() }))
@@ -177,5 +177,36 @@ describe('syncAgentName (operator-changeable display name)', () => {
     const d = deps({ update: vi.fn(async () => { throw new Error('platform updateAgent 500') }) })
     await expect(syncAgentName(d)).rejects.toThrow(/500/)
     expect(d.writeStored).not.toHaveBeenCalled()
+  })
+})
+
+describe('markAgentAsOrquestra (platform isOrquestra attribution)', () => {
+  const deps = (over: Partial<MarkOrquestraDeps> = {}): MarkOrquestraDeps => ({
+    readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: 'sk_1', name: 'n' })),
+    patch: vi.fn(async () => {}),
+    ...over,
+  })
+
+  it('PATCHes the stored agent with its api key every start', async () => {
+    const d = deps()
+    expect(await markAgentAsOrquestra(d)).toBe('marked')
+    expect(d.patch).toHaveBeenCalledWith('ag_1', 'sk_1')
+  })
+
+  it('no-creds when nothing is stored (env-only id) — never PATCHes blind', async () => {
+    const d = deps({ readStored: vi.fn(() => null) })
+    expect(await markAgentAsOrquestra(d)).toBe('no-creds')
+    expect(d.patch).not.toHaveBeenCalled()
+  })
+
+  it('no-apikey on a legacy row — cannot authenticate the PATCH', async () => {
+    const d = deps({ readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: '' })) })
+    expect(await markAgentAsOrquestra(d)).toBe('no-apikey')
+    expect(d.patch).not.toHaveBeenCalled()
+  })
+
+  it('propagates a platform failure (caller logs it as non-fatal)', async () => {
+    const d = deps({ patch: vi.fn(async () => { throw new Error('platform updateAgent 500') }) })
+    await expect(markAgentAsOrquestra(d)).rejects.toThrow(/500/)
   })
 })
