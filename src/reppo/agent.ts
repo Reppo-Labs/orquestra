@@ -10,7 +10,14 @@ const LEGACY_AGENT = 'agent.json'
  *  registration also yields an apiKey, persisted for completeness.
  *  `name` = the display name last synced to the platform (absent on pre-migration rows);
  *  lets a changed REPPO_AGENT_NAME be detected and PATCHed on restart. */
-export interface AgentCreds { agentId: string; apiKey: string; name?: string }
+export interface AgentCreds {
+  agentId: string
+  apiKey: string
+  name?: string
+  /** ISO timestamp of the once-only isOrquestra PATCH (markAgentAsOrquestra). Absent ⇒
+   *  never marked — the next start marks and latches it. */
+  orquestraMarkedAt?: string
+}
 
 /** Pure: extract creds from `reppo register-agent --json`. */
 export function parseAgentRegistration(raw: unknown): AgentCreds {
@@ -47,20 +54,21 @@ function importLegacyAgent(d: SqliteDb, dataDir: string): void {
 
 /** Read persisted agent creds from the data dir; null if absent/empty/corrupt. */
 export function readAgentStore(dataDir: string): AgentCreds | null {
-  const row = conn(dataDir).prepare('SELECT agentId, apiKey, name FROM agent WHERE id = 1').get() as
-    | { agentId: string; apiKey: string; name: string | null }
+  const row = conn(dataDir).prepare('SELECT agentId, apiKey, name, orquestraMarkedAt FROM agent WHERE id = 1').get() as
+    | { agentId: string; apiKey: string; name: string | null; orquestraMarkedAt: string | null }
     | undefined
   if (!row) return null
   const c: AgentCreds = { agentId: String(row.agentId ?? ''), apiKey: String(row.apiKey ?? '') }
   if (row.name != null && row.name !== '') c.name = String(row.name)
+  if (row.orquestraMarkedAt != null && row.orquestraMarkedAt !== '') c.orquestraMarkedAt = String(row.orquestraMarkedAt)
   return c.agentId ? c : null
 }
 
 /** Persist agent creds to the single `agent` row (one atomic UPSERT). */
 export function writeAgentStore(dataDir: string, creds: AgentCreds): void {
   conn(dataDir)
-    .prepare('INSERT INTO agent (id, agentId, apiKey, name) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET agentId = excluded.agentId, apiKey = excluded.apiKey, name = excluded.name')
-    .run(creds.agentId, creds.apiKey, creds.name ?? null)
+    .prepare('INSERT INTO agent (id, agentId, apiKey, name, orquestraMarkedAt) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET agentId = excluded.agentId, apiKey = excluded.apiKey, name = excluded.name, orquestraMarkedAt = excluded.orquestraMarkedAt')
+    .run(creds.agentId, creds.apiKey, creds.name ?? null, creds.orquestraMarkedAt ?? null)
 }
 
 /** Parse register-agent output. The CLI prints a human-readable block even with
@@ -174,19 +182,24 @@ export interface MarkOrquestraDeps {
   readStored(): AgentCreds | null
   /** PATCH { isOrquestra: true } on the platform profile (platformApi.updateAgentOnPlatform). */
   patch(agentId: string, apiKey: string): Promise<void>
+  /** Persist the latch (orquestraMarkedAt) after a confirmed PATCH. */
+  writeStored(creds: AgentCreds): void
 }
 
-export type MarkOrquestraResult = 'no-creds' | 'no-apikey' | 'marked'
+export type MarkOrquestraResult = 'no-creds' | 'no-apikey' | 'already-marked' | 'marked'
 
 /** Mark this agent as an Orquestra node on the platform (isOrquestra: true) so its
- *  votes/mints are attributed to orquestra traffic. Runs EVERY start: nodes registered
- *  before the platform accepted the flag (2026-07) self-mark on their next restart, and
- *  the store gains no schema column for a done-latch — the PATCH is idempotent
- *  server-side and one request per boot. Callers treat failures as non-fatal. */
+ *  votes/mints are attributed to orquestra traffic — ONCE. The latch is persisted
+ *  (agent.orquestraMarkedAt): nodes registered before the platform accepted the flag
+ *  (2026-07) self-mark on their next restart, then every later start no-ops. The latch
+ *  is written only after a confirmed PATCH, so a platform failure stays retryable on
+ *  the next boot. Callers treat failures as non-fatal. */
 export async function markAgentAsOrquestra(deps: MarkOrquestraDeps): Promise<MarkOrquestraResult> {
   const stored = deps.readStored()
   if (!stored) return 'no-creds'
   if (!stored.apiKey) return 'no-apikey' // env-provided id or legacy row — cannot authenticate the PATCH
+  if (stored.orquestraMarkedAt) return 'already-marked'
   await deps.patch(stored.agentId, stored.apiKey)
+  deps.writeStored({ ...stored, orquestraMarkedAt: new Date().toISOString() })
   return 'marked'
 }

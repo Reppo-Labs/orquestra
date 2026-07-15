@@ -73,6 +73,10 @@ describe('agent store', () => {
     writeAgentStore(dir, { agentId: 'ag_1', apiKey: 'sk_1', name: 'my-node' })
     expect(readAgentStore(dir)).toEqual({ agentId: 'ag_1', apiKey: 'sk_1', name: 'my-node' })
   })
+  it('round-trips the isOrquestra latch (orquestraMarkedAt)', () => {
+    writeAgentStore(dir, { agentId: 'ag_1', apiKey: 'sk_1', orquestraMarkedAt: '2026-07-15T12:00:00.000Z' })
+    expect(readAgentStore(dir)).toEqual({ agentId: 'ag_1', apiKey: 'sk_1', orquestraMarkedAt: '2026-07-15T12:00:00.000Z' })
+  })
   it('returns null when absent', () => {
     expect(readAgentStore(dir)).toBeNull()
   })
@@ -184,13 +188,23 @@ describe('markAgentAsOrquestra (platform isOrquestra attribution)', () => {
   const deps = (over: Partial<MarkOrquestraDeps> = {}): MarkOrquestraDeps => ({
     readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: 'sk_1', name: 'n' })),
     patch: vi.fn(async () => {}),
+    writeStored: vi.fn(),
     ...over,
   })
 
-  it('PATCHes the stored agent with its api key every start', async () => {
+  it('PATCHes the stored agent once and persists the latch', async () => {
     const d = deps()
     expect(await markAgentAsOrquestra(d)).toBe('marked')
     expect(d.patch).toHaveBeenCalledWith('ag_1', 'sk_1')
+    expect(d.writeStored).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'ag_1', orquestraMarkedAt: expect.any(String) }))
+  })
+
+  it('no-ops on every later start once the latch is set', async () => {
+    const d = deps({ readStored: vi.fn(() => ({ agentId: 'ag_1', apiKey: 'sk_1', orquestraMarkedAt: '2026-07-15T12:00:00.000Z' })) })
+    expect(await markAgentAsOrquestra(d)).toBe('already-marked')
+    expect(d.patch).not.toHaveBeenCalled()
+    expect(d.writeStored).not.toHaveBeenCalled()
   })
 
   it('no-creds when nothing is stored (env-only id) — never PATCHes blind', async () => {
@@ -205,8 +219,9 @@ describe('markAgentAsOrquestra (platform isOrquestra attribution)', () => {
     expect(d.patch).not.toHaveBeenCalled()
   })
 
-  it('propagates a platform failure (caller logs it as non-fatal)', async () => {
+  it('a failed PATCH does NOT latch — retries next start', async () => {
     const d = deps({ patch: vi.fn(async () => { throw new Error('platform updateAgent 500') }) })
     await expect(markAgentAsOrquestra(d)).rejects.toThrow(/500/)
+    expect(d.writeStored).not.toHaveBeenCalled()
   })
 })

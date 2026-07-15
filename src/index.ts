@@ -155,14 +155,15 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
       if (sync === 'updated') console.error(`orquestra: agent display name synced to "${agentName}" on the Reppo platform`)
     }
     // Mark the agent as an Orquestra node (isOrquestra: true) so the platform attributes
-    // its votes/mints to orquestra traffic. Every start, every source (stored AND freshly
-    // registered — the register call predates the flag): idempotent server-side, one
-    // request per boot, and nodes registered before the platform accepted the flag
-    // self-mark on their next restart. Cosmetic/non-fatal like the name sync.
+    // its votes/mints to orquestra traffic — ONCE. The persisted latch (orquestraMarkedAt)
+    // makes every later start a no-op; nodes registered before the platform accepted the
+    // flag self-mark on their next restart. A failed PATCH doesn't latch, so it retries
+    // next boot. Cosmetic/non-fatal like the name sync.
     const marked = await markAgentAsOrquestra({
       readStored: () => readAgentStore(DATA_DIR),
       patch: (id, key) => updateAgentOnPlatform(id, { isOrquestra: true }, key),
-    }).catch((e) => { console.error(`orquestra: isOrquestra mark failed (non-fatal): ${(e as Error).message}`); return 'no-creds' as const })
+      writeStored: (c) => writeAgentStore(DATA_DIR, c),
+    }).catch((e) => { console.error(`orquestra: isOrquestra mark failed (non-fatal, retries next start): ${(e as Error).message}`); return 'no-creds' as const })
     if (marked === 'marked') console.error('orquestra: agent marked as Orquestra node on the Reppo platform (isOrquestra)')
   } catch (e) {
     console.error(`orquestra: agent registration failed — mints will error until REPPO_AGENT_ID is set (run \`reppo register-agent\`): ${(e as Error).message}`)
