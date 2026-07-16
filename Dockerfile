@@ -13,8 +13,11 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.12.3
-# @reppo/cli@0.12.3: register-agent --is-orquestra — platform resolves on-chain pod ids
+ && npm i -g @reppo/cli@0.12.4
+# @reppo/cli@0.12.4: mint-pod auto-approves the PodManager publishing fee (ensureAllowance,
+# like lock/grant-access) — before this, every fresh wallet's FIRST mint reverted
+# InsufficientAllowance() until a manual `reppo approve --spender pod-manager`.
+# 0.12.3: register-agent --is-orquestra — platform resolves on-chain pod ids
 # on /votes for Orquestra agents (0.12.1: post-approve allowance-visibility poll)
 # where a fresh wallet's first lock/grant-access reverted InsufficientAllowance (0x13be252b)
 # right after a successful auto-approve. 0.12.0: `list pods --all` surfaces the pod's full description + media url —
