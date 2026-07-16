@@ -381,7 +381,9 @@ export function StrategyTab({ strategy, netNames, economics, focusDatanet, onFoc
 
       <div className="sec-head"><h2>Budget &amp; cadence</h2><div className="rule" /></div>
       <div className="settings">
-        <Num label="cadence (hours, e.g. 0.5 = 30m)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })}
+        {/* Keep labels to ONE line (the 0.5 = 30m example lives in the hint):
+            a wrapped label pushes its input out of row alignment in the grid. */}
+        <Num label="cadence (hours)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })}
           hint="How often the node runs a full cycle (vote → mint → claim). 0.5 = every 30 min, 6 = every 6h. Lower is more responsive but spends more on LLM calls and gas." />
         <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => n !== undefined && edit((c) => { c.horizonDays = n })}
           hint="Budget window, in days. The spend caps below (mint REPPO, gas) apply PER this window — the counters reset to 0 when it elapses, then a fresh window starts. e.g. 30 = a monthly budget." />

@@ -3,6 +3,7 @@ import type { DashData } from '../api'
 import { fmt, epochLabel, sign } from '../lib/format'
 import { Tip } from './Tip'
 import { RunNowButton } from './RunNowButton'
+import reppoLogo from '../assets/reppo-logo.png'
 
 export type TabId = 'overview' | 'strategy' | 'chat' | 'activity' | 'health' | 'learning'
 
@@ -56,7 +57,7 @@ export function Nav({ data, asof, tab, onTab, activityCount, onRefresh }: {
       <div className="nav">
         <div className="nav-inner">
           <div className="brand">
-            <div className="brand-mark">◆</div>
+            <img className="brand-logo" src={reppoLogo} alt="Reppo" />
             <span className="brand-name">orquestra <span className="dim">/ node</span></span>
           </div>
           <div className="nav-spacer" />

@@ -14,6 +14,8 @@ orquestra-data.bak-*/
 # Local dashboard screenshots / browser-automation artifacts
 .playwright-mcp/
 *.png
+# …but shipped image assets are real source
+!web/src/assets/*.png
 # Local agent tooling state — machine-specific, never ship
 .claude/
 .agents/

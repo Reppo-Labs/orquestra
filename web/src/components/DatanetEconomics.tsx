@@ -31,14 +31,17 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
   const unavailable = all.filter((y) => y.epochVoteVolume === null).length
   if (!all.length) return null
   return (
-    <div>
+    // Fragment, not a wrapper div: .sec-head:first-child would otherwise see this
+    // header as the top of the page and collapse its 32px section margin to 6px,
+    // breaking the even rhythm between Overview sections.
+    <>
       <div className="sec-head">
         <h2>Best places to vote</h2>
         <span className="muted" style={{ fontSize: 12 }}>among your configured datanets</span>
         <div className="rule" />
         <button className="link-btn" onClick={() => onGoToStrategy()}>adjust vote shares →</button>
       </div>
-      <div className="panel-box">
+      <div>
         {top.length ? (
           <div className="yield-board">
             {top.map((y, i) => (
@@ -74,6 +77,6 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
           </div>
         )}
       </div>
-    </div>
+    </>
   )
 }
