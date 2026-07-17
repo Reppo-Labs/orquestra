@@ -391,6 +391,10 @@ export function StrategyTab({ strategy, netNames, economics, focusDatanet, onFoc
           hint="How long the veREPPO lock holds before REPPO can be withdrawn. Longer locks generally grant more voting power." />
         <Num label="votes / cycle" int value={budget.voteRateMaxPerCycle} onChange={(n) => n !== undefined && setB('voteRateMaxPerCycle', n)}
           hint="Max votes the node casts in one cycle. Once hit, remaining candidates are deferred to the next cycle. Caps vote volume and gas." />
+        {/* Optional — clearing the field removes it from the config (falls back to
+            full-epoch pacing), so no `n !== undefined` guard like its siblings. */}
+        <Num label="vote spend horizon (hours)" value={budget.voteSpendHorizonHours} onChange={(n) => setB('voteSpendHorizonHours', n)}
+          hint="Pace your epoch voting power over at most this many hours instead of the whole epoch. Vote weight DECAYS linearly within the epoch, so a short horizon (e.g. 4) front-loads weight where it resolves highest. Leave empty to spread evenly across the full epoch (default)." />
         <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)}
           hint="Max REPPO spent on mint fees per horizon window. At the cap, further mints are refused before signing. (Mint fees run ~100–200 REPPO each.)" />
       </div>
