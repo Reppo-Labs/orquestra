@@ -53,7 +53,9 @@ export async function registerVoteOnPlatform(
  *  decide whether the failure is fatal (it never is for the node — name sync is cosmetic). */
 export async function updateAgentOnPlatform(
   agentId: string,
-  patch: { name?: string; description?: string; thumbnailURL?: string },
+  // isOrquestra: platform-side attribution of orquestra traffic (accepted on the edit
+  // endpoint since 2026-07). PATCHed true on every node start — see markAgentAsOrquestra.
+  patch: { name?: string; description?: string; thumbnailURL?: string; isOrquestra?: boolean },
   apiKey: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
