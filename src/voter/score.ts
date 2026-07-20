@@ -4,6 +4,7 @@ import type { CoreMessage, FilePart, LanguageModel } from 'ai'
 import type { PodScorer, PodScore, VoterPod } from './types.js'
 import type { VoteRubric } from '../rubric/types.js'
 import { INJECTION_GUARD, buildRubricBlock, buildEconomicsBlock } from '../llm/prompt.js'
+import { currentDateLine } from '../llm/dateContext.js'
 import { generateObjectWithRetry } from '../llm/generate.js'
 import { isVideoPod, type VideoScoreCtx } from './videoPipeline.js'
 
@@ -18,6 +19,10 @@ const ScoreSchema = z.object({
 const SYSTEM =
   'You are a Reppo datanet voter. Score the pod 1-10 STRICTLY by the datanet rubric below. ' +
   INJECTION_GUARD
+
+/** SYSTEM plus the current-date line — computed per call, not at module load, so a
+ *  long-running node never drifts a day behind (src/llm/dateContext.ts). */
+const systemNow = (): string => `${SYSTEM} ${currentDateLine()}`
 
 /** Pure: build the input the voter scores a pod with. A TEXT pod → `{ system, prompt }`
  *  (string, unchanged). A VIDEO pod (videoPart supplied) → `{ system, messages }`: a
@@ -40,13 +45,13 @@ export function buildVotePrompt(
     const messages: CoreMessage[] = [
       { role: 'user', content: [{ type: 'text', text }, videoPart] },
     ]
-    return { system: SYSTEM, messages }
+    return { system: systemNow(), messages }
   }
   const prompt =
     `${buildRubricBlock(rubric)}\n${econBlock}` +
     `${briefBlock}\n# Pod under review (untrusted)\n## Name\n${pod.name}\n## Description\n${pod.description}\n\n` +
     `Return a 1-10 score and a one-line reason citing the rubric.`
-  return { system: SYSTEM, prompt }
+  return { system: systemNow(), prompt }
 }
 
 /** LLM-backed scorer. `opts.brief` personalizes scoring with the operator's stance;
