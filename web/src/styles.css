@@ -177,8 +177,11 @@ td { font-size: 13px; }
 .pill { padding: 2px 9px; border-radius: 999px; font-size: 10px; font-weight: 500; letter-spacing: 0.02em; }
 .pill.up { background: rgba(34, 197, 94, 0.12); color: var(--pos); }
 .pill.down { background: rgba(239, 68, 68, 0.12); color: var(--neg); }
+/* Per-type color so the Activity table is scannable by kind without reading:
+   mint/grant = accent (an action we took), claim = green (REPPO in), skip = amber,
+   vote/stake/info = neutral. */
 .pill.mint { background: var(--accent-soft); color: var(--accent-hi); }
-.pill.claim { background: var(--accent-soft); color: var(--accent-hi); }
+.pill.claim { background: rgba(34, 197, 94, 0.14); color: var(--pos); }
 .pill.vote { background: var(--panel-hi); color: var(--muted); }
 .pill.skip { background: var(--panel-hi); color: var(--warn); }
 .pill.grant { background: var(--accent-soft); color: var(--accent-hi); }
@@ -229,9 +232,11 @@ td { font-size: 13px; }
 }
 .btn:hover { background: var(--panel-hi); }
 .btn:disabled { opacity: 0.4; cursor: default; }
-/* Brand orange is reserved for primary CTAs (save strategy, confirm onboarding). */
+/* Brand orange is reserved for primary CTAs (save strategy, confirm onboarding).
+   Near-black text, not white: the reserved brand orange can't be darkened, and
+   white-on-#f63d20 is ~3.6:1 (fails WCAG AA for 13px); #0a0a0a clears ~5.3:1. */
 .btn.primary {
-  background: var(--cta); color: #fff; border-color: transparent;
+  background: var(--cta); color: var(--bg); border-color: transparent;
 }
 .btn.primary:hover { background: rgba(246, 61, 32, 0.8); }
 .btn.ghost { background: none; border-color: transparent; color: var(--muted); }
@@ -270,6 +275,9 @@ textarea { resize: vertical; font-family: var(--body); min-height: 0; }
 /* :first-child — only the label span. A field's OTHER spans (e.g. the add-datanet
    empty-state message) are content and must not inherit uppercase label styling. */
 .field > span:first-child, .field-label { font-size: 10px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+/* Inline field notice — a state worth flagging (e.g. add-datanet catalog exhausted)
+   reads as a warn, not muted body text. */
+.warn-note { color: var(--warn); font-size: 13px; }
 
 /* toggle switch */
 .switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
@@ -410,11 +418,14 @@ textarea { resize: vertical; font-family: var(--body); min-height: 0; }
   display: grid; place-items: center;
   font-size: 11px; font-weight: 600;
 }
-.msg-row.user .avatar { background: var(--accent); color: #fff; }
+/* White-text-on-blue fills use --accent-dim (#2563eb), not --accent (#3b82f6):
+   white on the brighter accent is ~3.7:1 (fails WCAG AA); the dim clears ~5.2:1
+   and keeps the familiar white-on-blue chat/avatar look. */
+.msg-row.user .avatar { background: var(--accent-dim); color: #fff; }
 .msg-row.assistant .avatar { background: var(--panel-hi); color: var(--accent); border: 1px solid var(--border-2); }
 .msg { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
 /* Solid accent for the user side — attributable at a glance without reading labels. */
-.msg.user { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.msg.user { background: var(--accent-dim); color: #fff; border-bottom-right-radius: 4px; }
 .msg.assistant { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .msg .warn { color: var(--neg); font-size: 12px; }
 .msg.user .warn { color: #fecaca; }
@@ -571,7 +582,7 @@ textarea { resize: vertical; font-family: var(--body); min-height: 0; }
   background: var(--panel-hi); font-size: 10px;
 }
 .ob-step.active { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
-.ob-step.active .n { background: var(--accent); color: #fff; }
+.ob-step.active .n { background: var(--accent-dim); color: #fff; }
 .ob-step.done { color: var(--muted); }
 .ob-step.done .n { background: var(--pos); color: #052e16; }
 
