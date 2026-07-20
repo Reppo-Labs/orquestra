@@ -34,7 +34,7 @@ export function RunNowButton({ onRefresh }: { onRefresh: () => void }) {
   return (
     <span className="run-now">
       {msg && <span className="run-now-msg">{msg}</span>}
-      <button className="btn primary sm" onClick={() => void click()} disabled={busy}
+      <button className="btn sm" onClick={() => void click()} disabled={busy}
         title="Trigger a cycle now instead of waiting for the next scheduled run">
         {busy ? 'running…' : 'Run now'}
       </button>
