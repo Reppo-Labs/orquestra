@@ -50,7 +50,13 @@ export async function selectMints(
       continue
     }
     const { score, reason, panel } = result
-    if (score < opts.minScore) continue
+    if (score < opts.minScore) {
+      // Surface WHY a candidate was rejected — without this the operator sees only the
+      // aggregate "none passed scoring" skip and cannot tell a marginal miss from a
+      // fundamental content mismatch (same no-silent-zeros law as adapter discovery).
+      console.error(redactSecrets(`orquestra: mint candidate ${c.canonicalKey} (datanet ${datanetId}) scored ${score} < min ${opts.minScore}, skipped — ${reason ?? 'no reason given'}`))
+      continue
+    }
 
     // url-only: register the source URL as the pod, no dataset pinned (no Pinata).
     // A candidate with no sourceUrl can't be minted this way — skip it.
