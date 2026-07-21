@@ -68,21 +68,24 @@ export function AddDatanetModal({ existing, netNames, providers, onAdd, onClose 
         <h3>Add a datanet</h3>
         <div className="sub">Point the node at another Reppo datanet. It activates on the next cycle once you save.</div>
         <div className="fields">
-          <label className="field">
-            <span>datanet</span>
-            {available.length > 0 ? (
-              <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} autoFocus>
-                <option value="" disabled>choose a datanet…</option>
-                {available.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
-              </select>
-            ) : (
-              <span className="muted" style={{ fontSize: 13 }}>
-                {Object.keys(netNames).length === 0
-                  ? 'datanet catalog still loading — try again in a moment'
-                  : 'every active datanet is already configured'}
-              </span>
-            )}
-          </label>
+          {/* WHAT is being picked (the datanet) sits in an inset group, one level
+              deeper than the modal; actions + tuning fields flow below it. An
+              exhausted catalog is a NOTICE (warn), not muted body text. */}
+          <div className="inset-group">
+            <label className="field">
+              <span>datanet</span>
+              {available.length > 0 ? (
+                <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} autoFocus>
+                  <option value="" disabled>choose a datanet…</option>
+                  {available.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+              ) : Object.keys(netNames).length === 0 ? (
+                <span className="muted" style={{ fontSize: 13 }}>datanet catalog still loading — try again in a moment</span>
+              ) : (
+                <span className="warn-note">every active datanet is already configured</span>
+              )}
+            </label>
+          </div>
 
           <div className="field">
             <span>actions</span>

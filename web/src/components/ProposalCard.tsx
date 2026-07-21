@@ -11,7 +11,9 @@ export function ProposalCard({ p, label, busy, onDecide }: {
 }) {
   return (
     <div className="panel-box" style={{ padding: '12px 14px', marginBottom: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+      {/* wrap: on narrow screens the Accept/Dismiss buttons drop to the next line
+          instead of forcing sideways scroll inside the card */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
         <span className="pill mint">{p.field}</span>
         <span className="dim">{label}</span>
         <span className="mono">{p.fromValue} → <span className="pos">{p.toValue}</span></span>
