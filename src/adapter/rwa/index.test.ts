@@ -133,3 +133,13 @@ describe('createRwaAdapter.discover', () => {
     expect(sleepFn).not.toHaveBeenCalled()
   })
 })
+
+describe('reference memoization', () => {
+  it('pairs sharing a reference (both gold pairs -> GC=F) fetch it once per cycle', async () => {
+    const deps = happyDeps()
+    const pods = await createRwaAdapter(deps).discover(baseCtx({ strategy: { focus: 'gold' } }))
+    expect(pods).toHaveLength(2)
+    expect(deps.fetchToken).toHaveBeenCalledTimes(2)      // one CoinGecko call per pair
+    expect(deps.fetchReference).toHaveBeenCalledTimes(1)  // shared GC=F fetched once
+  })
+})

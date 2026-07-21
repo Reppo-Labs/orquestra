@@ -116,6 +116,17 @@ export function createRwaAdapter(deps: RwaDeps = {}): DatanetAdapter {
       const periodStart = utcDate(now() - periodDays * DAY_MS)
       const existing = new Set(ctx.existingPodNames ?? [])
       const skips: string[] = []
+      // Per-discover memo: pairs sharing a reference (both gold pairs → GC=F) fetch it
+      // once per cycle instead of once per pair (review finding, PR #137). Scoped to
+      // this call so a failure never poisons later cycles; a shared rejection surfaces
+      // in each dependent pair's own per-pair isolation.
+      const referenceMemo = new Map<string, Promise<DailyPoint[]>>()
+      const fetchReferenceOnce = (ticker: string, days: number): Promise<DailyPoint[]> => {
+        const key = `${ticker}:${days}`
+        let p = referenceMemo.get(key)
+        if (!p) { p = fetchReference(ticker, days); referenceMemo.set(key, p) }
+        return p
+      }
       const out: CandidatePod[] = []
 
       const pairs = filterPairs(PAIR_REGISTRY, p.focus)
@@ -136,13 +147,15 @@ export function createRwaAdapter(deps: RwaDeps = {}): DatanetAdapter {
           fetchedBefore = true
           const [tokenRaw, refRaw] = await Promise.all([
             fetchToken(pair.tokenId, periodDays + FETCH_MARGIN_DAYS),
-            fetchReference(pair.referenceTicker, periodDays + FETCH_MARGIN_DAYS),
+            fetchReferenceOnce(pair.referenceTicker, periodDays + FETCH_MARGIN_DAYS),
           ])
           const token = tokenRaw.filter((x) => inWindow(x, periodStart, periodEnd))
           const reference = refRaw.filter((x) => inWindow(x, periodStart, periodEnd))
           const stats = compareSeries(token, reference, pair.class)
           if (stats === null) { skips.push(`${pair.id}: insufficient shared trading days in ${periodStart}..${periodEnd}`); continue }
-          const selfScore = Math.max(5, 8 - (stats.tradingDaysCompared < 5 ? 1 : 0) - (stats.avgDailyTokenVolumeUsd === null ? 1 : 0))
+          // 8 base, −1 per completeness gap; both penalties → 6, so no floor is needed
+          // (a Math.max(5, …) floor here was dead code — review finding, PR #137).
+          const selfScore = 8 - (stats.tradingDaysCompared < 5 ? 1 : 0) - (stats.avgDailyTokenVolumeUsd === null ? 1 : 0)
           out.push({
             canonicalKey: createHash('sha256').update(`rwa:${ctx.datanetId}:${pair.id}:${periodEnd}`).digest('hex').slice(0, 16),
             podName,

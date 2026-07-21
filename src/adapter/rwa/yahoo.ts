@@ -29,9 +29,17 @@ export function parseYahooChart(raw: unknown): DailyPoint[] {
 /** Free, keyless endpoint serving both gold futures (GC=F) and US equities
  *  (AAPL) — one integration covers both v1 asset classes (spec; Stooq was the
  *  original choice but now serves an anti-bot JS wall — Task 0). */
+/** Chart URL via explicit period1/period2 unix timestamps — Yahoo's `range=` only
+ *  officially accepts preset values (1d, 5d, 1mo, …); an arbitrary `range=14d` worked
+ *  by undocumented coercion (review finding, PR #137). Exported pure for tests. */
+export function yahooChartUrl(ticker: string, rangeDays: number, nowMs: number = Date.now()): string {
+  const period2 = Math.ceil(nowMs / 1000)
+  const period1 = period2 - rangeDays * 86_400
+  return `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${period1}&period2=${period2}&interval=1d`
+}
+
 export async function fetchReferenceDaily(ticker: string, rangeDays: number): Promise<DailyPoint[]> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${rangeDays}d&interval=1d`
-  const res = await fetch(url, { signal: AbortSignal.timeout(10_000), headers: { 'User-Agent': USER_AGENT } })
+  const res = await fetch(yahooChartUrl(ticker, rangeDays), { signal: AbortSignal.timeout(10_000), headers: { 'User-Agent': USER_AGENT } })
   if (!res.ok) throw new Error(`yahoo ${ticker}: HTTP ${res.status}`)
   return parseYahooChart(await res.json())
 }
