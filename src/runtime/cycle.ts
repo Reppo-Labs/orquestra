@@ -98,6 +98,11 @@ export interface OnchainReads {
    *  A throw ⇒ yield is reported as unavailable — never treated as zero volume, never
    *  aborts the datanet. */
   getEpochVoteVolume(podIds: string[]): Promise<{ epoch: number; totalRaw: bigint }>
+  /** Remaining seeded rewards pool for a datanet (REPPO + primary, raw). A throw ⇒
+   *  pool unknown — reported null on the yield, NEVER treated as empty (fail-open:
+   *  an RPC blip must not stop voting on a healthy datanet). Optional: RPC-less
+   *  wirings and older tests omit it. */
+  getSubnetPools?(subnetId: string): Promise<{ reppoWei: bigint; primaryWei: bigint }>
   /** Wallet-scoped tier — absent when the wallet address could not be derived. */
   wallet?: OnchainWalletReads
 }
@@ -561,15 +566,20 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           volumeReadError = redactSecrets(e instanceof Error ? e.message : String(e))
           console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
-        const yld = computeYield(datanetId, rubric.economics, epochVotes)
+        // Rewards-pool read — same fail-open discipline as the volume read: a
+        // failure means UNKNOWN (null), never a dry pool.
+        let pools: { reppoWei: bigint; primaryWei: bigint } | null = null
+        try {
+          pools = (await deps.onchain?.getSubnetPools?.(datanetId)) ?? null
+        } catch (e) {
+          console.error(`orquestra: datanet ${datanetId} — rewards-pool read failed, runway omitted: ${redactSecrets(e instanceof Error ? e.message : String(e))}`)
+        }
+        const yld = computeYield(datanetId, rubric.economics, epochVotes, pools)
         // Discriminate the two "unavailable" causes for the dashboard: an RPC failure
         // carries its (redacted) error, an RPC-less node shows plain "unavailable" —
         // the operator on the SSH-tunneled dashboard can't read stderr.
         if (volumeReadError) yld.unavailableReason = volumeReadError
         datanetEconomics.push(yld)
-        // Yield is a VOTE-ONLY prompt signal — the VoteRubric/MintRubric split
-        // (rubric/types.ts) makes yield-on-a-mint-prompt a compile error.
-        const voteRubric = toVoteRubric(rubric, yld)
         // Stderr breadcrumb only. Yield is STATE, not an event — it reaches the
         // dashboard via the snapshot (Strategy-tab chips + Overview leaderboard), NOT
         // as activity rows: one info row per datanet per cycle drowned the real
@@ -577,16 +587,26 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // 'info' activity kind remains in the schema for historical rows only.
         console.error(`orquestra: datanet ${datanetId} — ${formatYieldLine(yld)}${volumeReadError ? ` — read failed: ${volumeReadError}` : ''}`)
 
-        // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
-        // dashboard activity here so an idle datanet explains why a pod produced no vote —
-        // before this they were swallowed with only a stderr line. The reason is already
-        // redacted by selectVotes.
-        const intents = await selectVotes(datanetId, pods, voteRubric, policy.strictness, filter, scorerResult.scorer,
-          (podId, reason) => recordSkipActivity(deps, cycleId, datanetId, `pod scoring skipped — ${reason}`, podId))
-        // Pass 1: the planner casts up to this datanet's vote-share slot and stashes the
-        // rest for its post-loop redistribution (finish()). The returned array is the
-        // datanet's live results — Pass 2 appends to the same reference.
-        votes = await planner.castPass1(datanetId, intents)
+        // Dry pool = every vote earns nothing (claims draw from this balance).
+        // Skip the scoring entirely — same shape as the budget-exhausted gate.
+        if (yld.poolDry) {
+          recordSkip(`rewards pool dry — skipping vote scoring until the datanet is re-seeded (${formatYieldLine(yld)})`, { activity: votes.length === 0 })
+        } else {
+          // Yield is a VOTE-ONLY prompt signal — the VoteRubric/MintRubric split
+          // (rubric/types.ts) makes yield-on-a-mint-prompt a compile error.
+          const voteRubric = toVoteRubric(rubric, yld)
+
+          // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
+          // dashboard activity here so an idle datanet explains why a pod produced no vote —
+          // before this they were swallowed with only a stderr line. The reason is already
+          // redacted by selectVotes.
+          const intents = await selectVotes(datanetId, pods, voteRubric, policy.strictness, filter, scorerResult.scorer,
+            (podId, reason) => recordSkipActivity(deps, cycleId, datanetId, `pod scoring skipped — ${reason}`, podId))
+          // Pass 1: the planner casts up to this datanet's vote-share slot and stashes the
+          // rest for its post-loop redistribution (finish()). The returned array is the
+          // datanet's live results — Pass 2 appends to the same reference.
+          votes = await planner.castPass1(datanetId, intents)
+        }
         }
       }
 

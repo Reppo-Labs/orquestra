@@ -100,4 +100,10 @@ describe('computeYield — rewards pool runway', () => {
     const y = computeYield('23', dead, votes, { reppoWei: 0n, primaryWei: 0n })
     expect(y.poolDry).toBe(false)
   })
+
+  it('pool exactly == rate is NOT dry (strict less-than boundary)', () => {
+    const y = computeYield('9', econ, votes, { reppoWei: 1000n * REPPO, primaryWei: 0n })
+    expect(y.poolDry).toBe(false)
+    expect(y.runwayEpochs).toBeCloseTo(1.0, 5)
+  })
 })

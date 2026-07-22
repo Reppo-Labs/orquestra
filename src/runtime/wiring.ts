@@ -243,6 +243,8 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     ? {
         // Per-datanet emission-yield volume — read-only, needs RPC alone.
         getEpochVoteVolume: (podIds) => reader.epochVoteVolume(rpcUrl, podIds),
+        // Per-datanet rewards-pool read — runway/dry input for the yield.
+        getSubnetPools: (subnetId: string) => reader.subnetPools(rpcUrl, subnetId),
         ...(walletAddress
           ? {
               wallet: {

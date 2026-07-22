@@ -37,7 +37,10 @@ export interface DatanetYield {
   runwayEpochs: number | null
   /** true only on a SUCCESSFUL pool read proving the paying pool can't cover an
    *  epoch: REPPO-rate datanets → pool < rate; native-token datanets → primary
-   *  pool exactly 0. Fail-open: unread pools are never dry. */
+   *  pool exactly 0. Fail-open: unread pools are never dry. When a datanet
+   *  violates the catalog invariant and reports BOTH a REPPO rate and a native
+   *  token, the dry rule evaluates the REPPO branch only (native pool ignored)
+   *  — matching the display precedence documented on nativeTokenSymbol. */
   poolDry: boolean
   /** set when the datanet emits a non-REPPO token: rate is 0 but it still pays.
    *  (Assumed data invariant from the catalog — src/reppo/listDatanets.ts documents
