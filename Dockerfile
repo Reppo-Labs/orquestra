@@ -13,8 +13,11 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.12.4
-# @reppo/cli@0.12.4: mint-pod auto-approves the PodManager publishing fee (ensureAllowance,
+ && npm i -g @reppo/cli@0.12.5
+# @reppo/cli@0.12.5: query datanet surfaces the remaining rewards pool
+# (getSubnetReppoSeedings/getSubnetPrimaryTokenSeedings) — operator-side runway visibility;
+# the node reads the same getters directly over RPC, so this pin is not load-bearing for it.
+# 0.12.4: mint-pod auto-approves the PodManager publishing fee (ensureAllowance,
 # like lock/grant-access) — before this, every fresh wallet's FIRST mint reverted
 # InsufficientAllowance() until a manual `reppo approve --spender pod-manager`.
 # 0.12.3: register-agent --is-orquestra — platform resolves on-chain pod ids
