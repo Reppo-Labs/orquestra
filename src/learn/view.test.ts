@@ -29,7 +29,10 @@ describe('buildLearnView — econ', () => {
   it('carries econ for a datanet with econ_epochs coverage + a snapshot yield', () => {
     addEconDeltas(dir, [econRow()])
     writeSnapshot(dir, snapshot({
-      datanetEconomics: [{ datanetId: '9', emissionsPerEpochReppo: 10, epoch: 100, epochVoteVolume: 5, yieldPerVote: 2, uncontested: false }],
+      datanetEconomics: [{
+        datanetId: '9', emissionsPerEpochReppo: 10, epoch: 100, epochVoteVolume: 5, yieldPerVote: 2, uncontested: false,
+        poolReppo: null, poolPrimaryToken: null, runwayEpochs: null, poolDry: false,
+      }],
     }))
     const view = buildLearnView(dir, ['9'])
     expect(view.datanets['9'].econ).toBeDefined()

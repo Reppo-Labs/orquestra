@@ -13,7 +13,8 @@ export function LessonsPanel({ id, label, view, busy, onToggle, onVeto }: {
   const s = view.stats
   return (
     <div className="panel-box" style={{ padding: '12px 14px', marginBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      {/* wrap: the learning controls drop below the datanet name on narrow screens */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
         <strong>{label}</strong>
         <span className="dim mono" style={{ fontSize: 11 }}>datanet {id}</span>
         <span style={{ flex: 1 }} />

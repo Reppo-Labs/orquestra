@@ -15,6 +15,7 @@ const loaded = (): DatanetRubric => ({
 const yld: DatanetYield = {
   datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
   epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false,
+  poolReppo: null, poolPrimaryToken: null, runwayEpochs: null, poolDry: false,
 }
 
 describe('toVoteRubric', () => {

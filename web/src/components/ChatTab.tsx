@@ -91,7 +91,10 @@ export function ChatTab({ strategy, onGoToStrategy }: {
         <textarea
           ref={composeRef}
           rows={1}
-          placeholder={busy ? 'waiting for the assistant…' : 'set a goal or ask about your strategy… (Enter to send, Shift+Enter for a new line)'}
+          // Placeholder prompts, nothing more — the keyboard hint wrapped + clipped on
+          // mobile, and Enter-to-send is discoverable (the Send button is right there).
+          placeholder={busy ? 'waiting for the assistant…' : 'set a goal or ask about your strategy…'}
+          title="Enter to send · Shift+Enter for a new line"
           value={input} disabled={busy}
           onChange={(e) => {
             setInput(e.target.value)

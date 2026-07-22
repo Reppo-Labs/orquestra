@@ -16,6 +16,7 @@ import { getSubnetEmissionInfo, type SubnetEmissionInfo } from './subnetManager.
 import { readTokenBalance } from './tokenBalance.js'
 import { queryEpochVoteVolume, type EpochVoteVolume } from './epochVotes.js'
 import { queryVotePowerBudget, type VotePowerBudget } from './votePower.js'
+import { querySubnetPools, type SubnetPools } from './subnetPools.js'
 import { queryClaimableOnchain, queryVoterClaimableOnchain } from './emissionsOnchain.js'
 import { makeDbPodCache, makeVoterScanCache, makeOwnerScanCache } from './podCacheStore.js'
 
@@ -29,6 +30,7 @@ export type { VotingPower } from './queryVotingPower.js'
 export type { DatanetSummary, NativeToken } from './listDatanets.js'
 export type { EpochVoteVolume } from './epochVotes.js'
 export type { VotePowerBudget } from './votePower.js'
+export type { SubnetPools } from './subnetPools.js'
 export type { SubnetEmissionInfo } from './subnetManager.js'
 // Pure helpers that ride along with the reads they interpret.
 export { deriveCurrentEpoch } from './listPods.js'
@@ -60,6 +62,8 @@ export interface ReppoReader {
   epochVoteVolume(rpcUrl: string, podIds: string[]): Promise<EpochVoteVolume>
   /** Wallet's spendable vote-power budget this epoch (power − casted) — vote sizing. */
   votePowerBudget(rpcUrl: string, wallet: string): Promise<VotePowerBudget>
+  /** Remaining seeded rewards pool for a datanet (REPPO + primary, raw) — runway input. */
+  subnetPools(rpcUrl: string, subnetId: string): Promise<SubnetPools>
   /** Claimable OWNER (pod,epoch) detected on-chain; caches are DB-backed in dataDir. */
   claimableOnchain(rpcUrl: string, wallet: string, dataDir: string, opts?: OnchainScanOpts): Promise<ClaimableEmission[]>
   /** Claimable VOTER (pod,epoch) on pods the wallet voted on (not owned). */
@@ -79,6 +83,7 @@ export const defaultReppoReader: ReppoReader = {
   tokenBalance: (rpcUrl, token, owner) => readTokenBalance(rpcUrl, token, owner),
   epochVoteVolume: (rpcUrl, podIds) => queryEpochVoteVolume(rpcUrl, podIds),
   votePowerBudget: (rpcUrl, wallet) => queryVotePowerBudget(rpcUrl, wallet),
+  subnetPools: (rpcUrl, subnetId) => querySubnetPools(rpcUrl, subnetId),
   claimableOnchain: (rpcUrl, wallet, dataDir, opts) =>
     queryClaimableOnchain(rpcUrl, wallet, makeDbPodCache(dataDir), { floorEpoch: opts?.floorEpoch }, makeOwnerScanCache(dataDir)),
   voterClaimableOnchain: (rpcUrl, wallet, votedPodIds, dataDir, opts) =>

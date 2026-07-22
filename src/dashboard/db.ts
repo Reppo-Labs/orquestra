@@ -168,7 +168,10 @@ function migrate(d: SqliteDb): void {
   // agent.name: the display name last synced to the Reppo platform, so a changed
   // REPPO_AGENT_NAME is detectable (and PATCHable) on restart. NULL on pre-migration
   // rows → treated as "unknown", synced once on the next start.
-  addColumns('agent', [['name', 'TEXT']])
+  // agent.orquestraMarkedAt: when this agent was PATCHed isOrquestra=true on the
+  // platform — the once-only latch. NULL (pre-migration / never marked) → marked on
+  // the next start, then never again.
+  addColumns('agent', [['name', 'TEXT'], ['orquestraMarkedAt', 'TEXT']])
 }
 
 /** Test helper: close and forget all cached handles. */

@@ -12,7 +12,7 @@ import type { ActivityEntry } from '../dashboard/activityLog.js'
 import { redactSecrets } from '../util/redact.js'
 import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
 import { selectVotes } from '../voter/select.js'
-import { allocateVoteSlots } from '../voter/allocate.js'
+import { createVotePlanner } from '../voter/plan.js'
 import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
@@ -98,6 +98,11 @@ export interface OnchainReads {
    *  A throw ⇒ yield is reported as unavailable — never treated as zero volume, never
    *  aborts the datanet. */
   getEpochVoteVolume(podIds: string[]): Promise<{ epoch: number; totalRaw: bigint }>
+  /** Remaining seeded rewards pool for a datanet (REPPO + primary, raw). A throw ⇒
+   *  pool unknown — reported null on the yield, NEVER treated as empty (fail-open:
+   *  an RPC blip must not stop voting on a healthy datanet). Optional: RPC-less
+   *  wirings and older tests omit it. */
+  getSubnetPools?(subnetId: string): Promise<{ reppoWei: bigint; primaryWei: bigint }>
   /** Wallet-scoped tier — absent when the wallet address could not be derived. */
   wallet?: OnchainWalletReads
 }
@@ -400,17 +405,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   const datanets: DatanetReport[] = []
   const datanetEconomics: DatanetYield[] = []
 
-  // Per-datanet vote-slot allocation: split the per-cycle vote cap across vote-enabled
-  // datanets by voteShare (largest-remainder; the '*' wildcard is excluded). Each datanet
-  // casts up to its slot count in the main loop (Pass 1); a post-loop pass redistributes the
-  // unused global budget to datanets that had more eligible pods than their share (Pass 2).
+  // Vote-enabled datanets and their voteShares — the planner's slot-allocation input
+  // ('*' wildcard excluded).
   const voteWeights = new Map<string, number>()
   for (const [id, p] of Object.entries(config.datanets)) {
     if (id !== '*' && p.vote) voteWeights.set(id, p.voteShare)
   }
-  const voteSlots = allocateVoteSlots(voteWeights, config.budget.voteRateMaxPerCycle)
-  const leftoverIntents = new Map<string, VoteIntent[]>() // scored-but-unvoted, per datanet
-  const voteSinks = new Map<string, ExecResult[]>()        // each datanet's `votes` array (same ref the report holds)
 
   // Vote-weight budget: read the wallet's REAL spendable power for this epoch ONCE per
   // cycle; every cast draws from it (src/voter/weight.ts paces the spend over the epoch's
@@ -443,22 +443,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
 
   // Cast one vote intent: execute, then record dedup / own-pod / stale-grant eviction + the
   // activity row — EXCEPT on refused-budget, where the per-pod row is suppressed and the
-  // caller emits a single deferral breadcrumb instead. Shared by Pass 1 and the Pass 2
-  // redistribution so both keep identical dedup/activity semantics.
-  const castVote = async (datanetId: string, intent: VoteIntent, sink: ExecResult[]): Promise<ExecResult> => {
-    if (voteWeigher) {
-      const weightWei = voteWeigher(intent.conviction)
-      if (weightWei === 0n) {
-        // Epoch vote-power budget exhausted — signing would revert InsufficientVotingPower
-        // and waste gas. Same deferral semantics as a ledger refusal (no per-pod row).
-        const refused: ExecResult = { ok: false, status: 'refused-budget', detail: 'vote-power budget exhausted this epoch' }
-        sink.push(refused)
-        return refused
-      }
-      intent = { ...intent, voteWeightWei: weightWei.toString() }
-    }
+  // planner emits a single deferral breadcrumb instead. Injected into the VotePlanner as
+  // its `cast`, so Pass 1 and the Pass 2 redistribution keep identical dedup/activity
+  // semantics; budget policy (slots, weigher sizing, redistribution) lives in the planner.
+  const castVote = async (datanetId: string, intent: VoteIntent): Promise<ExecResult> => {
     const r = await deps.executor.executeVote(intent)
-    sink.push(r)
     if (r.status === 'refused-budget') return r
     // Record dedup ONLY on confirmed execution (a non-executed result most often never
     // submitted, so recording it would permanently block a legitimate retry). Exception:
@@ -484,12 +473,26 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     return r
   }
 
+  // The vote pass as a module (src/voter/plan.ts): Pass-1 slot caps, weigher sizing, and
+  // the Pass-2 redistribution of unused budget all live behind it. runCycle only decides
+  // WHEN to vote; the planner decides how many and how heavy.
+  const planner = createVotePlanner({
+    voteWeights,
+    voteRateMaxPerCycle: config.budget.voteRateMaxPerCycle,
+    weigher: voteWeigher,
+    ledger: deps.ledger,
+    cast: castVote,
+    onDeferred: (id, count) => recordSkipActivity(deps, cycleId, id,
+      `vote rate/budget cap reached — ${count} vote${count === 1 ? '' : 's'} deferred to next cycle`),
+  })
+
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
     if (datanetId === '*') continue
     if (!policy.vote && !policy.mint) continue
-    const votes: ExecResult[] = []
+    // Reassigned to the planner's per-datanet results array when the vote pass runs —
+    // finish() (Pass 2) appends to that SAME reference, so the report stays accurate.
+    let votes: ExecResult[] = []
     const mints: ExecResult[] = []
-    voteSinks.set(datanetId, votes) // so the Pass 2 redistribution appends to this datanet's report
 
 
 
@@ -563,15 +566,20 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           volumeReadError = redactSecrets(e instanceof Error ? e.message : String(e))
           console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
-        const yld = computeYield(datanetId, rubric.economics, epochVotes)
+        // Rewards-pool read — same fail-open discipline as the volume read: a
+        // failure means UNKNOWN (null), never a dry pool.
+        let pools: { reppoWei: bigint; primaryWei: bigint } | null = null
+        try {
+          pools = (await deps.onchain?.getSubnetPools?.(datanetId)) ?? null
+        } catch (e) {
+          console.error(`orquestra: datanet ${datanetId} — rewards-pool read failed, runway omitted: ${redactSecrets(e instanceof Error ? e.message : String(e))}`)
+        }
+        const yld = computeYield(datanetId, rubric.economics, epochVotes, pools)
         // Discriminate the two "unavailable" causes for the dashboard: an RPC failure
         // carries its (redacted) error, an RPC-less node shows plain "unavailable" —
         // the operator on the SSH-tunneled dashboard can't read stderr.
         if (volumeReadError) yld.unavailableReason = volumeReadError
         datanetEconomics.push(yld)
-        // Yield is a VOTE-ONLY prompt signal — the VoteRubric/MintRubric split
-        // (rubric/types.ts) makes yield-on-a-mint-prompt a compile error.
-        const voteRubric = toVoteRubric(rubric, yld)
         // Stderr breadcrumb only. Yield is STATE, not an event — it reaches the
         // dashboard via the snapshot (Strategy-tab chips + Overview leaderboard), NOT
         // as activity rows: one info row per datanet per cycle drowned the real
@@ -579,28 +587,26 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // 'info' activity kind remains in the schema for historical rows only.
         console.error(`orquestra: datanet ${datanetId} — ${formatYieldLine(yld)}${volumeReadError ? ` — read failed: ${volumeReadError}` : ''}`)
 
-        // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
-        // dashboard activity here so an idle datanet explains why a pod produced no vote —
-        // before this they were swallowed with only a stderr line. The reason is already
-        // redacted by selectVotes.
-        const intents = await selectVotes(datanetId, pods, voteRubric, policy.strictness, filter, scorerResult.scorer,
-          (podId, reason) => recordSkipActivity(deps, cycleId, datanetId, `pod scoring skipped — ${reason}`, podId))
-        // Pass 1: cast up to this datanet's vote-share slot; stash the rest for the post-loop
-        // redistribution. A refused-budget result (global cap hit) leaves the intent pending
-        // too; the single deferral breadcrumb is emitted after Pass 2, not per pod.
-        const cap = voteSlots.get(datanetId) ?? 0
-        let cast = 0
-        const pending: VoteIntent[] = []
-        for (let i = 0; i < intents.length; i++) {
-          // Stop at this datanet's slot share, or once the global cap is exhausted — and on a
-          // refusal (monotonic within a cycle). Remaining intents are stashed for Pass 2; a
-          // single deferral note is emitted after Pass 2 (not one refused row per pod).
-          if (cast >= cap || !deps.ledger.canVote()) { pending.push(...intents.slice(i)); break }
-          const r = await castVote(datanetId, intents[i], votes)
-          if (r.status === 'refused-budget') { pending.push(...intents.slice(i)); break }
-          cast++
+        // Dry pool = every vote earns nothing (claims draw from this balance).
+        // Skip the scoring entirely — same shape as the budget-exhausted gate.
+        if (yld.poolDry) {
+          recordSkip(`rewards pool dry — skipping vote scoring until the datanet is re-seeded (${formatYieldLine(yld)})`, { activity: votes.length === 0 })
+        } else {
+          // Yield is a VOTE-ONLY prompt signal — the VoteRubric/MintRubric split
+          // (rubric/types.ts) makes yield-on-a-mint-prompt a compile error.
+          const voteRubric = toVoteRubric(rubric, yld)
+
+          // Per-pod scoring skips (e.g. a video ingest skip thrown from scorePod) surface as
+          // dashboard activity here so an idle datanet explains why a pod produced no vote —
+          // before this they were swallowed with only a stderr line. The reason is already
+          // redacted by selectVotes.
+          const intents = await selectVotes(datanetId, pods, voteRubric, policy.strictness, filter, scorerResult.scorer,
+            (podId, reason) => recordSkipActivity(deps, cycleId, datanetId, `pod scoring skipped — ${reason}`, podId))
+          // Pass 1: the planner casts up to this datanet's vote-share slot and stashes the
+          // rest for its post-loop redistribution (finish()). The returned array is the
+          // datanet's live results — Pass 2 appends to the same reference.
+          votes = await planner.castPass1(datanetId, intents)
         }
-        if (pending.length) leftoverIntents.set(datanetId, pending)
         }
       }
 
@@ -679,42 +685,10 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     }
   }
 
-  // Pass 2 — redistribute the unused global vote budget to datanets that still have scored,
-  // unvoted intents, weighted by voteShare. Re-splitting `votesRemaining` each round lets a
-  // datanet with fewer leftovers than its allotment hand the surplus to the rest, until the
-  // budget is spent or all stashes drain. The ledger remains the hard cap (castVote refuses
-  // past it). Votes land in each datanet's own ExecResult array via voteSinks (same ref the
-  // report holds), so reports stay accurate.
-  if ([...leftoverIntents.values()].some((arr) => arr.length > 0)) {
-    while (deps.ledger.canVote()) {
-      const pending = [...leftoverIntents].filter(([, arr]) => arr.length > 0)
-      if (pending.length === 0) break
-      const remaining = deps.ledger.votesRemaining()
-      if (remaining <= 0) break
-      // Every pending id is vote-enabled, so it is always in voteWeights (set at the top) and
-      // voteSinks (set in the loop). A missing entry would be a real bug — skip it rather than
-      // invent a weight-1 phantom or cast into a throwaway array that vanishes from the report.
-      const split = allocateVoteSlots(new Map(pending.map(([id]) => [id, voteWeights.get(id)!])), remaining)
-      let progressed = false
-      for (const [id, arr] of pending) {
-        const sink = voteSinks.get(id)
-        if (!sink) continue
-        let n = split.get(id) ?? 0
-        while (n > 0 && arr.length > 0 && deps.ledger.canVote()) {
-          const r = await castVote(id, arr[0], sink)
-          if (r.status === 'refused-budget') break
-          arr.shift(); n--; progressed = true
-        }
-      }
-      if (!progressed) break
-    }
-    // A single deferral breadcrumb per datanet whose pods couldn't all be voted this cycle
-    // (retried next cycle — dedup is recorded only on executed).
-    for (const [id, arr] of leftoverIntents) {
-      if (arr.length > 0) recordSkipActivity(deps, cycleId, id,
-        `vote rate/budget cap reached — ${arr.length} vote${arr.length === 1 ? '' : 's'} deferred to next cycle`)
-    }
-  }
+  // Pass 2 — the planner redistributes the unused global vote budget across the stashed
+  // intents by voteShare (results append to each datanet's report array) and emits one
+  // deferral breadcrumb per datanet with leftovers via onDeferred.
+  await planner.finish()
 
   // Global claim phase: emissions-due is one query across ALL our pods (not per
   // datanet). Claim every unclaimed (pod, epoch) we haven't already claimed.

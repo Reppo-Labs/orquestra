@@ -19,7 +19,10 @@ export function EmissionsSummary({ pnl, earn, snapshot, netNames }: {
   // tolerate pre-feature snapshots that carry no emissionsDue at all
   const pods = snapshot?.emissionsDue?.pods ?? []
   return (
-    <div className="panel-box">
+    // Cards ARE the containers — no outer panel-box (nested borders, and the
+    // border would enclose the empty grid area after the per-token cards).
+    // Only the expandable pod-payout TABLE gets a panel-box, like every table.
+    <div>
       <div className="cards">
         <div className="card hero">
           <div className="k">Claimed (all-time)</div>
@@ -41,7 +44,7 @@ export function EmissionsSummary({ pnl, earn, snapshot, netNames }: {
           </div>
         ))}
       </div>
-      <div className="muted" style={{ marginTop: '0.5rem' }}>
+      <div className="muted" style={{ marginTop: 10 }}>
         Earned total: {fmt(pnl.earnedReppo)} REPPO{tokens.length ? ' (+ native tokens shown separately)' : ''}. Claims run automatically each cycle.
         {pods.length > 0 && (
           <>
@@ -58,7 +61,7 @@ export function EmissionsSummary({ pnl, earn, snapshot, netNames }: {
         )}
       </div>
       {showPods && pods.length > 0 && (
-        <div id="emissions-pods" style={{ marginTop: '0.6rem' }}>
+        <div className="panel-box" id="emissions-pods" style={{ marginTop: 10 }}>
           <table>
             <thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>REPPO due</th></tr></thead>
             <tbody>

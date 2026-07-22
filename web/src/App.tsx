@@ -14,7 +14,6 @@ import { LearningTab } from './components/LearningTab'
 import { PanelDrawer } from './components/PanelDrawer'
 import { Onboarding } from './components/Onboarding'
 import { FirstRunCard } from './components/FirstRunCard'
-import { fmt } from './lib/format'
 
 function SecHead({ title }: { title: string }) {
   return <div className="sec-head"><h2>{title}</h2><div className="rule" /></div>
@@ -84,18 +83,22 @@ export function App() {
             <div className="earn-banner">
               <span className={`dot ${earn?.earning ? 'on' : earn && earn.totalUpVotes > 0 ? 'warm' : 'off'}`} />
               {earn ? (
-                // Segmented metadata strip: hairline separators, not ·-chains.
+                // Status first, then ONLY the facts with no home elsewhere on this page —
+                // claimed/claimable already own the Emissions hero cards (and the ticker),
+                // so the banner answers "am I earning?" without repeating their numbers.
                 <>
-                  <span className="bseg">{earn.earning ? 'EARNING' : earn.totalUpVotes > 0 ? 'accruing upvotes (emissions lag)' : 'no signal yet'}</span>
-                  <span className="bseg">{earn.mintedPods} pod(s)</span>
-                  <span className="bseg">{fmt(earn.claimableReppo)} claimable{(earn.claimablePairs ?? 0) > 0 ? ` (${earn.claimablePairs} pending)` : ''} + {fmt(earn.claimedReppo)} claimed</span>
-                  <span className="bseg">{earn.totalUpVotes}↑/{earn.totalDownVotes}↓</span>
+                  <span className="bseg status">{earn.earning ? 'Earning' : earn.totalUpVotes > 0 ? 'Accruing upvotes — emissions lag' : 'No earnings signal yet'}</span>
+                  <span className="bseg"><span className="k">Minted</span><span className="v">{earn.mintedPods} pod{earn.mintedPods === 1 ? '' : 's'}</span></span>
+                  <span className="bseg"><span className="k">Pod votes</span><span className="v"><span className="pos">{earn.totalUpVotes}↑</span> <span className="neg">{earn.totalDownVotes}↓</span></span></span>
                 </>
-              ) : 'earn-test pending first cycle'}
+              ) : 'awaiting first cycle'}
             </div>
             <SecHead title="Emissions" />
             <EmissionsSummary pnl={data?.pnl ?? null} earn={earn} snapshot={snap} netNames={netNames} />
-            <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
+            {/* One grid-gap of air between the two card blocks of this section. */}
+            <div style={{ marginTop: 12 }}>
+              <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />
+            </div>
             <SecHead title="Budget burn" />
             <BudgetBurn snapshot={snap} />
             <DatanetEconomics snapshot={snap} netNames={netNames}

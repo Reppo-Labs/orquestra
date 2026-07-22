@@ -381,7 +381,9 @@ export function StrategyTab({ strategy, netNames, economics, focusDatanet, onFoc
 
       <div className="sec-head"><h2>Budget &amp; cadence</h2><div className="rule" /></div>
       <div className="settings">
-        <Num label="cadence (hours, e.g. 0.5 = 30m)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })}
+        {/* Keep labels to ONE line (the 0.5 = 30m example lives in the hint):
+            a wrapped label pushes its input out of row alignment in the grid. */}
+        <Num label="cadence (hours)" value={candidate.cadenceHours} onChange={(n) => n !== undefined && edit((c) => { c.cadenceHours = n })}
           hint="How often the node runs a full cycle (vote → mint → claim). 0.5 = every 30 min, 6 = every 6h. Lower is more responsive but spends more on LLM calls and gas." />
         <Num label="horizon (days)" int value={candidate.horizonDays} onChange={(n) => n !== undefined && edit((c) => { c.horizonDays = n })}
           hint="Budget window, in days. The spend caps below (mint REPPO, gas) apply PER this window — the counters reset to 0 when it elapses, then a fresh window starts. e.g. 30 = a monthly budget." />
@@ -391,6 +393,10 @@ export function StrategyTab({ strategy, netNames, economics, focusDatanet, onFoc
           hint="How long the veREPPO lock holds before REPPO can be withdrawn. Longer locks generally grant more voting power." />
         <Num label="votes / cycle" int value={budget.voteRateMaxPerCycle} onChange={(n) => n !== undefined && setB('voteRateMaxPerCycle', n)}
           hint="Max votes the node casts in one cycle. Once hit, remaining candidates are deferred to the next cycle. Caps vote volume and gas." />
+        {/* Optional — clearing the field removes it from the config (falls back to
+            full-epoch pacing), so no `n !== undefined` guard like its siblings. */}
+        <Num label="vote spend horizon (hours)" value={budget.voteSpendHorizonHours} onChange={(n) => setB('voteSpendHorizonHours', n)}
+          hint="Pace your epoch voting power over at most this many hours instead of the whole epoch. Vote weight DECAYS linearly within the epoch, so a short horizon (e.g. 4) front-loads weight where it resolves highest. Leave empty to spread evenly across the full epoch (default)." />
         <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)}
           hint="Max REPPO spent on mint fees per horizon window. At the cap, further mints are refused before signing. (Mint fees run ~100–200 REPPO each.)" />
       </div>
