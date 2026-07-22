@@ -16,7 +16,12 @@ const word = (v: bigint): string => v.toString(16).padStart(64, '0')
 
 /** eth_call returning a uint word. Throws on transport/RPC failure — the caller
  *  must treat a throw as "pool unknown this cycle", NEVER as an empty pool (a
- *  zero would mark a healthy datanet dry off an RPC blip and stop voting on it). */
+ *  zero would mark a healthy datanet dry off an RPC blip and stop voting on it).
+ *  A 200 body with no `result` is a degraded/malformed response, NOT a zero — treat it
+ *  like a transport failure so the caller reports "pool unavailable" instead of
+ *  fabricating a dry pool. Only literal '0x' (empty returndata) is 0n. These are plain
+ *  view getters with no legitimate revert path, so no revert/transient split is needed —
+ *  every failure is a plain throw. */
 async function ethCallUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
   const res = await fetchImpl(url, {
     method: 'POST',
