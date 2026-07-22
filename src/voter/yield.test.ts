@@ -59,3 +59,45 @@ describe('formatYieldLine', () => {
     expect(formatYieldLine(computeYield('12', econ(0, 'LBM'), null))).toContain('LBM')
   })
 })
+
+describe('computeYield — rewards pool runway', () => {
+  const REPPO = 10n ** 18n
+  const econ = { emissionsPerEpochReppo: 1000, nativeTokenSymbol: 'REPPO' }
+  const votes = { epoch: 118, totalRaw: 500n * REPPO }
+
+  it('computes pool + runway for a REPPO-rate datanet', () => {
+    const y = computeYield('9', econ, votes, { reppoWei: 2_780n * REPPO, primaryWei: 0n })
+    expect(y.poolReppo).toBe(2780)
+    expect(y.runwayEpochs).toBeCloseTo(2.78, 5)
+    expect(y.poolDry).toBe(false)
+  })
+
+  it('marks dry when the pool cannot cover one epoch at the rate', () => {
+    const y = computeYield('9', econ, votes, { reppoWei: 999n * REPPO, primaryWei: 0n })
+    expect(y.poolDry).toBe(true)
+    expect(y.runwayEpochs).toBeCloseTo(0.999, 5)
+  })
+
+  it('native-token datanet: dry only when the primary pool reads exactly 0', () => {
+    const lbm = { emissionsPerEpochReppo: 0, nativeTokenSymbol: 'LBM' }
+    const wet = computeYield('22', lbm, votes, { reppoWei: 0n, primaryWei: 215_912n * REPPO })
+    expect(wet.poolDry).toBe(false)
+    expect(wet.poolPrimaryToken).toBe(215912)
+    expect(wet.runwayEpochs).toBeNull()   // no primary RATE available — pool only
+    const dry = computeYield('22', lbm, votes, { reppoWei: 0n, primaryWei: 0n })
+    expect(dry.poolDry).toBe(true)
+  })
+
+  it('null pools (read failed / RPC-less) → unknown, NEVER dry', () => {
+    const y = computeYield('9', econ, votes, null)
+    expect(y.poolReppo).toBeNull()
+    expect(y.runwayEpochs).toBeNull()
+    expect(y.poolDry).toBe(false)
+  })
+
+  it('rate-0, no-native datanet is never dry (existing pays-nothing handling owns it)', () => {
+    const dead = { emissionsPerEpochReppo: 0, nativeTokenSymbol: 'REPPO' }
+    const y = computeYield('23', dead, votes, { reppoWei: 0n, primaryWei: 0n })
+    expect(y.poolDry).toBe(false)
+  })
+})

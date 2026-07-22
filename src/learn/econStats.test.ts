@@ -54,6 +54,7 @@ describe('computeEconStats (pure)', () => {
     const yield_: DatanetYield = {
       datanetId: '9', emissionsPerEpochReppo: 10, epoch: 100, epochVoteVolume: 200,
       yieldPerVote: 0.05, uncontested: false,
+      poolReppo: null, poolPrimaryToken: null, runwayEpochs: null, poolDry: false,
     }
     const stats = computeEconStats('9', [row({ epoch: 100, mintCount: 1 })], yield_)
     expect(stats.latestYieldPerVote).toBe(0.05)
@@ -70,6 +71,7 @@ describe('computeEconStats (pure)', () => {
     const yield_: DatanetYield = {
       datanetId: '9', emissionsPerEpochReppo: 10, epoch: 100, epochVoteVolume: 0,
       yieldPerVote: null, uncontested: true,
+      poolReppo: null, poolPrimaryToken: null, runwayEpochs: null, poolDry: false,
     }
     const stats = computeEconStats('9', [row({ epoch: 100, mintCount: 1 })], yield_)
     expect(stats.latestYieldPerVote).toBeNull()
