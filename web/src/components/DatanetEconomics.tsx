@@ -64,6 +64,13 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
                   {!y.uncontested && y.epochVoteVolume !== null
                     ? ` · vol ${y.epochVoteVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
                     : ''}
+                  {y.poolDry
+                    ? <span className="neg"> · pool dry</span>
+                    : y.runwayEpochs !== null
+                      ? <span> · ~{y.runwayEpochs.toFixed(1)} epochs left</span>
+                      : y.poolPrimaryToken !== null && y.nativeTokenSymbol
+                        ? <span> · pool {Math.round(y.poolPrimaryToken).toLocaleString()} {y.nativeTokenSymbol}</span>
+                        : null}
                 </span>
               </button>
             ))}
