@@ -1,8 +1,10 @@
 // src/voter/yield.ts
 // Per-datanet emission yield: REPPO emitted per unit of CURRENT-epoch vote weight.
-// Reppo has no depletable reward pool — emissions are a per-epoch flow split by the
-// epoch's vote weight — so "which datanets still pay" is a yield question, not a
-// pool-balance one (docs/superpowers/specs/2026-07-09-datanet-emission-yield-design.md).
+// The rate is a per-epoch flow split by the epoch's vote weight, but that flow is
+// PAID FROM a depletable, per-subnet seeded pool (PodManager.getSubnetReppoSeedings,
+// decremented per claim) — so "which datanets still pay" has two parts: the yield
+// (flow ÷ vote weight) and whether the paying pool can keep it up (runway). This
+// module reports both (docs/superpowers/specs/2026-07-09-datanet-emission-yield-design.md).
 // The catalog's upVoteVolume/downVoteVolume are LIFETIME tallies and deliberately
 // unused here: rate ÷ lifetime volume decays with datanet age and is not what a vote
 // earns. Volume comes from the on-chain per-epoch views instead (src/reppo/epochVotes.ts).
@@ -25,6 +27,21 @@ export interface DatanetYield {
   yieldPerVote: number | null
   /** true when the epoch-volume read succeeded and is 0 — nobody has voted yet this epoch. */
   uncontested: boolean
+  /** remaining REPPO rewards pool (human units); null = unread (RPC failed/absent). */
+  poolReppo: number | null
+  /** remaining primary-token rewards pool (human units, 18-dec assumed); null = unread. */
+  poolPrimaryToken: number | null
+  /** poolReppo ÷ rate for REPPO-rate datanets; null when rate is 0 or pool unread.
+   *  (No primary RATE is available in economics, so native-token datanets get pool
+   *  visibility but no runway number.) */
+  runwayEpochs: number | null
+  /** true only on a SUCCESSFUL pool read proving the paying pool can't cover an
+   *  epoch: REPPO-rate datanets → pool < rate; native-token datanets → primary
+   *  pool exactly 0. Fail-open: unread pools are never dry. When a datanet
+   *  violates the catalog invariant and reports BOTH a REPPO rate and a native
+   *  token, the dry rule evaluates the REPPO branch only (native pool ignored)
+   *  — matching the display precedence documented on nativeTokenSymbol. */
+  poolDry: boolean
   /** set when the datanet emits a non-REPPO token: rate is 0 but it still pays.
    *  (Assumed data invariant from the catalog — src/reppo/listDatanets.ts documents
    *  that emissionsPerEpochREPPO is 0 whenever nativeToken is set; not enforced here,
@@ -44,12 +61,24 @@ export function computeYield(
   datanetId: string,
   economics: YieldEconomics,
   epochVotes: { epoch: number; totalRaw: bigint } | null,
+  pools: { reppoWei: bigint; primaryWei: bigint } | null = null,
 ): DatanetYield {
   const rate = economics.emissionsPerEpochReppo
   const native = economics.nativeTokenSymbol && economics.nativeTokenSymbol.toUpperCase() !== 'REPPO'
     ? economics.nativeTokenSymbol
     : undefined
-  const base = { datanetId, emissionsPerEpochReppo: rate, ...(native ? { nativeTokenSymbol: native } : {}) }
+  const poolReppo = pools === null ? null : Number(pools.reppoWei) / 1e18
+  const poolPrimaryToken = pools === null ? null : Number(pools.primaryWei) / 1e18
+  const runwayEpochs = poolReppo !== null && rate > 0 ? poolReppo / rate : null
+  const poolDry =
+    pools !== null &&
+    ((rate > 0 && poolReppo !== null && poolReppo < rate) ||
+      (rate === 0 && native !== undefined && poolPrimaryToken === 0))
+  const base = {
+    datanetId, emissionsPerEpochReppo: rate,
+    poolReppo, poolPrimaryToken, runwayEpochs, poolDry,
+    ...(native ? { nativeTokenSymbol: native } : {}),
+  }
   if (epochVotes === null) {
     return { ...base, epoch: null, epochVoteVolume: null, yieldPerVote: null, uncontested: false }
   }
@@ -73,9 +102,14 @@ export function formatYieldLine(y: DatanetYield): string {
     : y.nativeTokenSymbol
       ? `emits ${y.nativeTokenSymbol} (non-REPPO token)`
       : 'pays nothing this epoch'
-  if (y.epochVoteVolume === null) return `${rate} · yield unavailable (no RPC read)`
-  if (y.uncontested) return `${rate} · epoch ${y.epoch} vote volume 0 — uncontested`
+  const pool =
+    y.poolDry ? ' · pool DRY'
+    : y.runwayEpochs !== null ? ` · pool ${y.poolReppo!.toLocaleString('en-US', { maximumFractionDigits: 0 })} REPPO (~${y.runwayEpochs.toFixed(1)} epochs)`
+    : y.poolPrimaryToken !== null && y.nativeTokenSymbol ? ` · pool ${y.poolPrimaryToken.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${y.nativeTokenSymbol}`
+    : ''
+  if (y.epochVoteVolume === null) return `${rate} · yield unavailable (no RPC read)${pool}`
+  if (y.uncontested) return `${rate} · epoch ${y.epoch} vote volume 0 — uncontested${pool}`
   const vol = y.epochVoteVolume.toLocaleString('en-US', { maximumFractionDigits: 0 })
   const yld = y.yieldPerVote !== null ? ` · yield ${y.yieldPerVote.toExponential(2)}/vote` : ''
-  return `${rate} · epoch ${y.epoch} vote volume ${vol}${yld}`
+  return `${rate} · epoch ${y.epoch} vote volume ${vol}${yld}${pool}`
 }

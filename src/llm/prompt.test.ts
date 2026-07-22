@@ -34,7 +34,9 @@ describe('buildRubricBlock prompt-injection guard', () => {
 describe('buildEconomicsBlock', () => {
   const y = (over: Partial<DatanetYield> = {}): DatanetYield => ({
     datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
-    epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false, ...over,
+    epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false,
+    poolReppo: null, poolPrimaryToken: null, runwayEpochs: null, poolDry: false,
+    ...over,
   })
 
   it('renders rate, epoch volume, and yield', () => {

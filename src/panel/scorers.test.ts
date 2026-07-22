@@ -98,6 +98,7 @@ describe('createPanelPodScorer (votes, all-or-none)', () => {
     const rub = toVoteRubric({ ...rubric, datanetId: '9' }, {
       datanetId: '9', emissionsPerEpochReppo: 500, epoch: 42,
       epochVoteVolume: 2_000_000, yieldPerVote: 500 / 2_000_000, uncontested: false,
+      poolReppo: null, poolPrimaryToken: null, runwayEpochs: null, poolDry: false,
     })
     const o: PanelScorerOpts = { model, getDeliberation: () => ({ enabled: true, votePanel: true }), generate: capGen }
     await createPanelPodScorer(basePod(8), o).scorePod(pod, rub, { like: 7, dislike: 3 })

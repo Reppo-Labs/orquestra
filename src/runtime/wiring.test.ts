@@ -95,6 +95,9 @@ function fakeReader(over: Partial<ReppoReader> = {}): ReppoReader {
     // Generous default: a ZERO budget would flip votes to refused-budget and silently
     // change vote behavior in unrelated tests — quiet-chain here means "never the constraint".
     votePowerBudget: async () => ({ votingPowerWei: 10_000n * 10n ** 18n, votesCastedWei: 0n, remainingWei: 10_000n * 10n ** 18n, epoch: 0, epochEndsAtSec: Math.floor(Date.now() / 1000) + 3600 }),
+    // Generous default: a ZERO pool would flip datanets to dry-skip in unrelated tests once
+    // Task 5 (runway wiring) lands — quiet-chain here means "never the constraint".
+    subnetPools: async () => ({ reppoWei: 10_000n * 10n ** 18n, primaryWei: 0n }),
     claimableOnchain: async () => [],
     voterClaimableOnchain: async () => [],
     ...over,

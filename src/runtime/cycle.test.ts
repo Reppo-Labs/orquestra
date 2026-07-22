@@ -1075,3 +1075,40 @@ describe('datanet yield', () => {
     expect(executeVoterClaim).not.toHaveBeenCalled()           // wallet tier off → no voter-claim scan
   })
 })
+
+describe('runCycle rewards-pool runway', () => {
+  it('skips vote scoring on a dry pool with a recorded reason (no LLM spend, no votes)', async () => {
+    const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod } }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+      onchain: onchainReads({ getSubnetPools: vi.fn(async () => ({ reppoWei: 0n, primaryWei: 0n })) }),
+    })
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    const report = await runCycle(cfg, 'cyc-dry', d)
+    expect(scorePod).not.toHaveBeenCalled()               // no LLM spend on a dry datanet
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
+    const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
+      .find((e: any) => e.kind === 'skip' && /pool/.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+    expect(report.datanetEconomics[0]?.poolDry).toBe(true)
+  })
+
+  it('a FAILED pool read never marks dry — voting proceeds', async () => {
+    const d = deps({
+      onchain: onchainReads({ getSubnetPools: vi.fn(async () => { throw new Error('rpc down') }) }),
+    })
+    await runCycle(config, 'cyc-poolfail', d)
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(2)  // both datanets voted
+  })
+})
