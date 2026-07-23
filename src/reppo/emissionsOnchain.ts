@@ -37,9 +37,24 @@ const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '')
 const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
 // eth_getLogs block-range cap. Most public RPCs (incl. mainnet.base.org) reject ranges
 // wider than ~10k blocks with HTTP 400; the old 40k chunk failed the whole emissions scan
-// on the default RPC. 9_000 (→ 9_001-block spans) stays under the common cap. Discovery is
-// incremental + cached, so the extra requests only hit the one-time first-run backfill.
+// on the default RPC. 9_000 (→ 9_001-block spans) stays under the common cap — but some
+// free tiers cap tighter (1k-5k), which failed EVERY cycle's owner-claim scan with HTTP
+// 400 (live incident: an operator on such a provider had owner emissions stuck unclaimed
+// for a week). The scan now ADAPTS: a range-cap rejection halves the chunk (floor 500)
+// and retries the same window; the reduced size sticks for the rest of that scan.
+// Non-range failures (5xx, rate limits, timeouts) still fail fast — the caller retries
+// next cycle, and mistaking an outage for a cap would shrink-and-hammer a downed node.
 const LOG_CHUNK = 9_000n
+const MIN_LOG_CHUNK = 500n
+
+/** Does this error look like the provider rejecting the REQUEST SHAPE (block range too
+ *  wide) rather than being down? Providers signal a range cap as HTTP 400/413/414 or a
+ *  JSON-RPC error naming the range/limit. Deliberately narrow: 5xx and rate limits must
+ *  NOT match (see LOG_CHUNK note). */
+const isRangeCapError = (e: unknown): boolean => {
+  const msg = e instanceof Error ? e.message : String(e)
+  return /HTTP 4(00|13|14)\b/.test(msg) || /\brange\b|limit exceeded|too (large|many|wide)|exceeds/i.test(msg)
+}
 
 const word = (v: bigint): string => v.toString(16).padStart(64, '0')
 const hexBlock = (b: bigint): string => '0x' + b.toString(16)
@@ -106,19 +121,32 @@ async function ethCall(fetchImpl: typeof fetch, url: string, to: string, data: s
 const isTrue = (hex: string): boolean => /[1-9a-f]/i.test((hex || '').replace(/^0x/, '')) // any nonzero word
 
 /** Enumerate pod tokenIds ever transferred TO `wallet`, scanning [fromBlock, toBlock]
- *  in chunks. All IO via rpcCall. */
+ *  in chunks. All IO via rpcCall. Chunk size adapts downward when the provider rejects
+ *  the range (see LOG_CHUNK note); the reduced size persists for the rest of the scan. */
 export async function discoverOwnedPods(
   fetchImpl: typeof fetch, url: string, podManager: string, wallet: string, fromBlock: bigint, toBlock: bigint,
 ): Promise<bigint[]> {
   const ids = new Set<bigint>()
-  for (let b = fromBlock; b <= toBlock; b += LOG_CHUNK + 1n) {
-    const to = b + LOG_CHUNK < toBlock ? b + LOG_CHUNK : toBlock
-    const logs = (await rpcCall(fetchImpl, url, 'eth_getLogs', [{
-      address: podManager,
-      topics: [TRANSFER_TOPIC, null, topicForAddress(wallet)],
-      fromBlock: hexBlock(b), toBlock: hexBlock(to),
-    }])) as Log[]
+  let chunk = LOG_CHUNK
+  let b = fromBlock
+  while (b <= toBlock) {
+    const to = b + chunk < toBlock ? b + chunk : toBlock
+    let logs: Log[]
+    try {
+      logs = (await rpcCall(fetchImpl, url, 'eth_getLogs', [{
+        address: podManager,
+        topics: [TRANSFER_TOPIC, null, topicForAddress(wallet)],
+        fromBlock: hexBlock(b), toBlock: hexBlock(to),
+      }])) as Log[]
+    } catch (e) {
+      if (isRangeCapError(e) && chunk > MIN_LOG_CHUNK) {
+        chunk = chunk / 2n < MIN_LOG_CHUNK ? MIN_LOG_CHUNK : chunk / 2n
+        continue // retry the SAME window at the smaller span
+      }
+      throw e // at the floor, or a transient failure — the caller retries next cycle
+    }
     for (const l of logs) ids.add(tokenIdFromLog(l))
+    b = to + 1n
   }
   return [...ids]
 }
