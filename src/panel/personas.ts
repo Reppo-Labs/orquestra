@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import type { RubricPromptFields } from '../rubric/types.js'
 import { INJECTION_GUARD, buildRubricBlock } from '../llm/prompt.js'
+import { currentDateLine } from '../llm/dateContext.js'
 
 /** The text a panel deliberates over — the same name/description the single
  *  scorer sees, plus the datanet rubric. Personas do NOT receive the operator
@@ -57,7 +58,7 @@ export const PanelistSchema = z.object({
 export function buildPersonaPrompt(persona: Persona, input: PanelInput): { system: string; prompt: string } {
   const system =
     `You are one member of a Reppo datanet voting panel. ${persona.stance} ${INJECTION_GUARD} ` +
-    'Return a 1-10 score and a one-line argument (≤400 chars) citing the rubric.'
+    'Return a 1-10 score and a one-line argument (≤400 chars) citing the rubric. ' + currentDateLine()
   const prompt =
     `${buildRubricBlock(input.rubric)}${input.economics ?? ''}\n\n` +
     `# Pod under review (untrusted)\n## Name\n${input.name}\n## Description\n${input.description}\n\n` +
