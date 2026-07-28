@@ -53,6 +53,24 @@ Virtuals, or usepod — or a Claude subscription via `anthropic-oauth`, see belo
 
 **Updating:** `docker compose pull && docker compose up -d`.
 
+### Running a Robinhood node (optional, parallel)
+
+Reppo is also live on Robinhood Chain (4663). A second, fully separate node can
+run next to your Base node — one container per network, nothing shared:
+
+```sh
+cp .env.robinhood.example .env.robinhood   # wallet + LLM key + robinhood RPC
+docker compose --profile robinhood up -d
+ssh -L 7071:localhost:7071 <your-host>     # dashboard at http://localhost:7071
+```
+
+Robinhood differences (all documented in [.env.robinhood.example](.env.robinhood.example)):
+the wallet pays fees in each datanet's **own token** (PAW, PONS, …) plus a little
+ETH for gas — there is no REPPO on the chain, so the REPPO budget caps don't
+meter those fees. Voting power is mirrored from your **Base** veREPPO lock: lock
+on Base, then sync at <https://robinhood.reppo.ai> (re-sync after changing the
+lock). The same wallet key as the Base node is fine.
+
 ### Safety model
 
 - The node can never spend beyond the budget caps in your strategy config; the
