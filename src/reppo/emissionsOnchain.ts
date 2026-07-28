@@ -11,6 +11,7 @@
 // wallet), cached in the DB and extended incrementally. Raw JSON-RPC (no extra dep),
 // mirroring src/reppo/mintFee.ts.
 import type { ClaimableEmission } from './queryEmissionsDue.js'
+import { networkAddresses } from './network.js'
 
 export const POD_MANAGER_MAINNET = '0x5C563f853eb4db33005A5C1aD9290e8560254A80'
 export const VE_REPPO_MAINNET = '0x0EFBE19Cb7B07D934D01990a8989E9CaA98b9009'
@@ -188,8 +189,8 @@ export async function queryClaimableOnchain(
   rpcUrl: string, wallet: string, cache: PodCache, deps: RpcDeps = {}, scanCache?: EpochScanCache,
 ): Promise<ClaimableEmission[]> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const pm = deps.podManager ?? POD_MANAGER_MAINNET
-  const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const pm = deps.podManager ?? networkAddresses().podManager
+  const ve = deps.veReppo ?? networkAddresses().veReppo
   const lookback = BigInt(deps.lookbackEpochs ?? 3)
   const floor = BigInt(deps.floorEpoch ?? 1)
 
@@ -261,8 +262,8 @@ export async function queryVoterClaimableOnchain(
   rpcUrl: string, wallet: string, votedPodIds: string[], cache?: VoterScanCache, deps: RpcDeps = {},
 ): Promise<ClaimableEmission[]> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const pm = deps.podManager ?? POD_MANAGER_MAINNET
-  const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const pm = deps.podManager ?? networkAddresses().podManager
+  const ve = deps.veReppo ?? networkAddresses().veReppo
   const floor = BigInt(deps.floorEpoch ?? 1)
   if (votedPodIds.length === 0) return []
 

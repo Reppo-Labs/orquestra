@@ -1,5 +1,5 @@
 // src/reppo/subnetPools.test.ts
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { querySubnetPools } from './subnetPools.js'
 
 const SEL_REPPO = '0x8b473a17'
@@ -74,5 +74,27 @@ describe('querySubnetPools', () => {
     })
     const out = await querySubnetPools('http://rpc', '22', { fetchImpl: f, podManager: '0xpm' })
     expect(out).toEqual({ reppoWei: 2_780n * REPPO, primaryWei: 0n })
+  })
+})
+
+describe('querySubnetPools — robinhood (RBV1)', () => {
+  const SEL_RB = '0xe71a6530' // getSubnetSeedings(uint256)
+
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('reads the single RBV1 pool as primaryWei and reports reppoWei as 0', async () => {
+    vi.stubEnv('REPPO_NETWORK', 'robinhood')
+    const calls: { data: string; to: string }[] = []
+    const f = fakeFetch((data, to) => {
+      calls.push({ data, to })
+      if (data.startsWith(SEL_RB)) return 7_500n * REPPO
+      throw new Error(`unexpected selector on robinhood: ${data.slice(0, 10)}`)
+    })
+    const out = await querySubnetPools('http://rpc', '1', { fetchImpl: f })
+    expect(out).toEqual({ reppoWei: 0n, primaryWei: 7_500n * REPPO })
+    // targets the RBV1 PodManager by default, with the subnetId word
+    expect(calls).toHaveLength(1)
+    expect(calls[0].to).toBe('0xeAd1A577B02829b7F634aD7eE30Fbbc2CDF7e478')
+    expect(calls[0].data).toBe(SEL_RB + word(1n))
   })
 })

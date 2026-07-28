@@ -4,12 +4,15 @@
 // decremented on every owner/voter claim — verified on impl 0x474d4f03…), so a
 // datanet with a rate but an empty pool pays NOTHING (datanet 11 died this way,
 // silently). Raw JSON-RPC, no extra dep — mirrors src/reppo/epochVotes.ts.
-import { POD_MANAGER_MAINNET } from './emissionsOnchain.js'
+import { networkAddresses, isRobinhood } from './network.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
   reppoSeedings: '0x8b473a17',   // getSubnetReppoSeedings(uint256)
   primarySeedings: '0xb4025408', // getSubnetPrimaryTokenSeedings(uint256)
+  // PodManagerRBV1 (robinhood): ONE seeded pool per subnet, denominated in the
+  // subnet token. Verified live against robinhood subnet 1, 2026-07-27.
+  rbSeedings: '0xe71a6530',      // getSubnetSeedings(uint256)
 }
 
 const word = (v: bigint): string => v.toString(16).padStart(64, '0')
@@ -52,8 +55,16 @@ export async function querySubnetPools(
   deps: SubnetPoolsDeps = {},
 ): Promise<SubnetPools> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const pm = deps.podManager ?? POD_MANAGER_MAINNET
+  const pm = deps.podManager ?? networkAddresses().podManager
   const id = word(BigInt(subnetId))
+
+  // RBV1 (robinhood): single pool in the subnet token — surfaces as primaryWei
+  // (matching getSubnetEmissionInfo's mapping); the REPPO pool doesn't exist.
+  if (isRobinhood()) {
+    const primaryWei = await ethCallUint(fetchImpl, rpcUrl, pm, SEL.rbSeedings + id)
+    return { reppoWei: 0n, primaryWei }
+  }
+
   const [reppoWei, primaryWei] = await Promise.all([
     ethCallUint(fetchImpl, rpcUrl, pm, SEL.reppoSeedings + id),
     ethCallUint(fetchImpl, rpcUrl, pm, SEL.primarySeedings + id),
