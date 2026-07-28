@@ -4,7 +4,7 @@
 // mirrors src/reppo/emissionsOnchain.ts / mintFee.ts. Used by the cycle to compute a
 // datanet's real per-epoch emission yield (emission rate ÷ this epoch's vote weight);
 // the catalog's lifetime upVoteVolume/downVoteVolume can't answer that (cumulative).
-import { POD_MANAGER_MAINNET, VE_REPPO_MAINNET } from './emissionsOnchain.js'
+import { networkAddresses } from './network.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
@@ -49,8 +49,8 @@ export async function queryEpochVoteVolume(
   deps: EpochVotesDeps = {},
 ): Promise<EpochVoteVolume> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const pm = deps.podManager ?? POD_MANAGER_MAINNET
-  const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const pm = deps.podManager ?? networkAddresses().podManager
+  const ve = deps.veReppo ?? networkAddresses().veReppo
   const epoch = await ethCallUint(fetchImpl, rpcUrl, ve, SEL.currentEpoch)
   let total = 0n
   for (const podStr of [...new Set(podIds)]) {

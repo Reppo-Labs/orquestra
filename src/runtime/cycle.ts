@@ -16,6 +16,7 @@ import { createVotePlanner } from '../voter/plan.js'
 import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
+import { isRobinhood } from '../reppo/network.js'
 
 /** Top up the wallet's veREPPO toward config.stake.lockReppo at the START of a cycle, on the
  *  HOT-RELOADED config — no restart needed. Locks the difference (an additional lockup) when
@@ -26,6 +27,10 @@ import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTarget
  *  failure is logged + recorded but NEVER aborts the cycle — the node keeps voting/minting on its
  *  existing veREPPO. */
 async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: CycleDeps): Promise<void> {
+  // Robinhood (RBV1) has no on-chain staking — voting power is mirrored from
+  // the wallet's Base veREPPO position by robinhood.reppo.ai. A lock attempt
+  // would only burn a CLI call and fail UNSUPPORTED_ON_NETWORK every cycle.
+  if (isRobinhood()) return
   try {
     const current = await deps.reads.getVeReppo()
     if (current === null) {

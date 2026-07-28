@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { getSubnetEmissionInfo, formatTokenAmount } from './subnetManager.js'
 
 const SEL = { primaryToken: '0x0d1b89d8', primaryEmissions: '0x9f9a490b', reppoEmissions: '0xd323657d' }
@@ -43,6 +43,33 @@ describe('getSubnetEmissionInfo', () => {
     const fetchImpl = (async () =>
       new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message: 'boom' } }))) as unknown as typeof fetch
     await expect(getSubnetEmissionInfo('http://rpc', 1, { fetchImpl })).rejects.toThrow(/boom/)
+  })
+})
+
+describe('getSubnetEmissionInfo — robinhood (RBV1)', () => {
+  const SEL_RB = { subnetToken: '0xf8d7097c', emissionsPerEpoch: '0x8a24efae' }
+
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('maps the subnet token + single emission stream onto the primary shape, REPPO leg 0', async () => {
+    vi.stubEnv('REPPO_NETWORK', 'robinhood')
+    const seen: string[] = []
+    const reply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))
+    const fetchImpl = (async (_url: string, init: { body: string }) => {
+      const { params } = JSON.parse(init.body)
+      const sel: string = params[0].data.slice(0, 10)
+      seen.push(sel)
+      if (sel === SEL_RB.subnetToken) return reply('0x' + addrWord('0x2629A8083065938B533b117704935D727270eE7A'))
+      if (sel === SEL_RB.emissionsPerEpoch) return reply('0x' + w(500n * 10n ** 18n))
+      throw new Error(`unexpected selector on robinhood: ${sel}`)
+    }) as unknown as typeof fetch
+    const info = await getSubnetEmissionInfo('http://rpc', 1, { fetchImpl })
+    expect(info.primaryToken).toBe('0x2629a8083065938b533b117704935d727270ee7a')
+    expect(info.primaryEmissionsPerEpoch).toBe(500n * 10n ** 18n)
+    expect(info.reppoEmissionsPerEpoch).toBe(0n)
+    // never issues the V2 selectors (they don't exist on RBV1)
+    expect(seen).not.toContain(SEL.primaryToken)
+    expect(seen).not.toContain(SEL.reppoEmissions)
   })
 })
 

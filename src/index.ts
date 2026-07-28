@@ -12,6 +12,7 @@ import { checkReppoVersion, getReppoVersionString } from './reppo/version.js'
 import { supportsNonReppoGrants } from './reppo/capabilities.js'
 import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName, syncAgentName, markAgentAsOrquestra } from './reppo/agent.js'
+import { isRobinhood, reppoNetwork } from './reppo/network.js'
 import { updateAgentOnPlatform } from './reppo/platformApi.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler, type SchedulerHandle } from './runtime/scheduler.js'
@@ -83,7 +84,16 @@ async function onboard(): Promise<void> {
 
 /** One-time idempotent setup: veREPPO lock + Reppo agent identity for minting. */
 async function setupNode(config: StrategyConfig, executor: WalletExecutor, agentName: string): Promise<void> {
-  if (config.stake.lockReppo > 0) {
+  if (config.stake.lockReppo > 0 && isRobinhood()) {
+    // RBV1 (robinhood) has no on-chain staking — voting power is mirrored from
+    // the wallet's Base veREPPO position. The lock stays in the config so the
+    // same strategy works on Base, but attempting it here would fail
+    // UNSUPPORTED_ON_NETWORK on every start.
+    console.error(
+      'orquestra: robinhood network — skipping veREPPO lock setup (no staking on RBV1). ' +
+        'Lock on Base and sync voting power at https://robinhood.reppo.ai.',
+    )
+  } else if (config.stake.lockReppo > 0) {
     // The lock is a TARGET, not one-time: top up to config.stake.lockReppo by locking
     // the difference as an additional lockup. Skip when already at/above target. A lock
     // error is non-fatal — the node still runs/votes on existing veREPPO.
@@ -287,6 +297,7 @@ async function start(): Promise<void> {
   // The reppo CLI omits the mint REPPO fee; read it from the tx receipt so the
   // ledger reconciles to real spend and mintReppoMax is a live cap. Same RPC the
   // CLI uses; no RPC configured => reader omitted (mint spend keeps the reserved est).
+  console.error(`orquestra: reppo network — ${reppoNetwork()}`)
   const rpcUrl = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
   const reppoFeeReader = rpcUrl ? (txHash: string) => readMintReppoFee(rpcUrl, txHash) : undefined
   const claimReppoReader = rpcUrl ? (txHash: string) => readClaimedReppo(rpcUrl, txHash) : undefined
