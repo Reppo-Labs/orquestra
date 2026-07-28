@@ -5,6 +5,7 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.robinhood.example
 data/
 # Live node state: ledger, vote-state, snapshots, and the activity log whose
 # error lines echo CLI command output. Never commit operational data.
