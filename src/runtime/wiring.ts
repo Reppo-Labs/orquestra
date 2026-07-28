@@ -36,6 +36,18 @@ import { runReflection } from '../learn/reflect.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
 import { registerVoteOnPlatform } from '../reppo/platformApi.js'
+import { isRobinhood } from '../reppo/network.js'
+
+// One notice per process, not one per vote: robinhood votes are durable on-chain
+// but invisible to the reppo.ai vote index until robinhood gets its own API.
+let warnedRobinhoodVotesNotIndexed = false
+function warnRobinhoodVotesNotIndexed(): void {
+  if (warnedRobinhoodVotesNotIndexed) return
+  warnedRobinhoodVotesNotIndexed = true
+  console.error(
+    'orquestra: robinhood network — votes are NOT indexed on the reppo.ai platform (no robinhood vote API yet); on-chain votes are unaffected.',
+  )
+}
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
@@ -290,6 +302,13 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // Cred check deferred to call time so late-arriving or rotated creds take effect
       // without restarting the node (env vars set from SQLite at startup but re-read here).
       registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+        // The vote-indexing API is the reppo.ai (Base) platform — it doesn't know
+        // robinhood pods, so every registration would fail-log. Skip with a
+        // one-time notice instead of a per-vote error line.
+        if (isRobinhood()) {
+          warnRobinhoodVotesNotIndexed()
+          return Promise.resolve()
+        }
         const agentId = process.env.REPPO_AGENT_ID
         const apiKey = process.env.REPPO_API_KEY
         if (!agentId || !apiKey) return Promise.resolve()

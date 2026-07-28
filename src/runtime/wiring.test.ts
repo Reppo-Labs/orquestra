@@ -269,6 +269,30 @@ describe('buildCycleDeps', () => {
     }
   })
 
+  it('registerVoteOnPlatform skips the reppo.ai call on robinhood (platform does not know robinhood pods)', async () => {
+    const savedNet = process.env.REPPO_NETWORK
+    const savedId = process.env.REPPO_AGENT_ID
+    const savedKey = process.env.REPPO_API_KEY
+    process.env.REPPO_NETWORK = 'robinhood'
+    process.env.REPPO_AGENT_ID = 'agent-1'
+    process.env.REPPO_API_KEY = 'key-1'
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const deps = buildCycleDeps(wiring())
+      await expect(deps.activity.registerVoteOnPlatform!('pod-1', '0xtx')).resolves.toBeUndefined()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+      if (savedNet !== undefined) process.env.REPPO_NETWORK = savedNet
+      else delete process.env.REPPO_NETWORK
+      if (savedId !== undefined) process.env.REPPO_AGENT_ID = savedId
+      else delete process.env.REPPO_AGENT_ID
+      if (savedKey !== undefined) process.env.REPPO_API_KEY = savedKey
+      else delete process.env.REPPO_API_KEY
+    }
+  })
+
   it('getExistingPodNames tolerates a failing list (returns [])', async () => {
     const deps = buildCycleDeps(wiring({
       reader: fakeReader({ listPods: async () => { throw new Error('boom') } }),
