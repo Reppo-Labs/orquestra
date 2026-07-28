@@ -25,6 +25,7 @@ import { getDatanetRubric } from './rubric/load.js'
 import { createHyperliquidAdapter } from './adapter/hyperliquid/index.js'
 import { createGdeltAdapter } from './adapter/gdelt/index.js'
 import { createSportsAdapter } from './adapter/sports/index.js'
+import { createSherwoodAdapter } from './adapter/sherwood/index.js'
 import { resolveModel, DEFAULT_MODEL, type LlmProvider } from './llm/model.js'
 import { effectiveDefault } from './llm/effectiveDefault.js'
 import { buildProviderKeyRegistry, resolveLlmBaseUrl } from './llm/registry.js'
@@ -383,6 +384,7 @@ async function start(): Promise<void> {
       createHyperliquidAdapter(),
       createGdeltAdapter({ getModel: liveDefaultModel }),
       createSportsAdapter({ getModel: liveDefaultModel }),
+      createSherwoodAdapter({ getModel: liveDefaultModel }),
     ],
   }
 
