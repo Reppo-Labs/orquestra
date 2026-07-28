@@ -15,7 +15,11 @@ const rubric = { name: 'Sherwood Trading Strategies', goal: 'g', publisherSpec: 
 
 const pools: PoolInfo[] = [
   { name: 'WOOD / WETH 0.3%', address: '0xpool1', dex: 'sushiswap-robinhood', reserveUsd: 500_000, volumeUsd24h: 1_000_000 },
-  { name: 'USDG / WETH 0.01%', address: '0xpool2', dex: 'uniswap-robinhood', reserveUsd: 2_000_000, volumeUsd24h: 3_000_000 },
+  {
+    name: 'nvda / USDG 0.05%', address: '0xpool2', dex: 'uniswap-v3-robinhood', reserveUsd: 2_000_000, volumeUsd24h: 3_000_000,
+    base: { symbol: 'nvda', name: 'NVIDIA (Robinhood Tokenized Stock)', address: '0xnvda', isTokenizedStock: true },
+    quote: { symbol: 'USDG', name: 'Global Dollar', address: '0xusdg', isTokenizedStock: false },
+  },
 ]
 
 const good: Proposal = {
@@ -133,5 +137,18 @@ describe('buildProposalPrompt', () => {
     expect(prompt).toContain('WOOD / WETH 0.3%')
     expect(prompt).toContain('sushiswap-robinhood')
     expect(prompt).toContain('Focus: f')
+  })
+
+  it('tags RWA pools and lists tokenized equities with an anti-invention rule', () => {
+    const { prompt } = buildProposalPrompt(pools, rubric, strategy)
+    expect(prompt).toContain('nvda / USDG 0.05% on uniswap-v3-robinhood [RWA]')
+    expect(prompt).toContain('Tokenized equities live on Robinhood Chain')
+    expect(prompt).toContain('nvda — NVIDIA (Robinhood Tokenized Stock)')
+    expect(prompt).toMatch(/never invent a lending market/i)
+  })
+
+  it('omits the RWA section when no tokenized equities are present', () => {
+    const { prompt } = buildProposalPrompt([pools[0]], rubric, strategy)
+    expect(prompt).not.toContain('Tokenized equities')
   })
 })

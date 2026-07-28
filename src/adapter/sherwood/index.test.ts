@@ -29,6 +29,7 @@ const proposal: Proposal = {
 }
 
 const gen = async () => ({ strategies: [proposal] })
+const lend = async () => []
 
 describe('parseSherwoodParams', () => {
   it('accepts well-typed fields and drops wrong-typed ones', () => {
@@ -40,12 +41,12 @@ describe('parseSherwoodParams', () => {
 
 describe('createSherwoodAdapter', () => {
   it('has id "sherwood"', () => {
-    expect(createSherwoodAdapter({ fetchPools: async () => pools, generate: gen }).id).toBe('sherwood')
+    expect(createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools: async () => pools, generate: gen }).id).toBe('sherwood')
   })
 
   it('discover() fetches pools, synthesizes proposals, returns candidates', async () => {
     const fetchPools = vi.fn(async () => pools)
-    const a = createSherwoodAdapter({ fetchPools, generate: gen })
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools, generate: gen })
     const cands = await a.discover({ datanetId: '3', rubric, topN: 3 })
     expect(cands).toHaveLength(1)
     expect(cands[0].podName).toBe('WOOD/WETH CL LP ±5%')
@@ -54,7 +55,7 @@ describe('createSherwoodAdapter', () => {
 
   it('filters dust pools below minPoolLiquidityUsd out of the prompt', async () => {
     const seen: string[] = []
-    const a = createSherwoodAdapter({
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend,
       fetchPools: async () => pools,
       generate: async ({ prompt }) => { seen.push(prompt); return { strategies: [proposal] } },
     })
@@ -65,7 +66,7 @@ describe('createSherwoodAdapter', () => {
 
   it('all pools below the liquidity floor → [] without calling the model', async () => {
     let called = false
-    const a = createSherwoodAdapter({
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend,
       fetchPools: async () => [pools[1]],
       generate: async () => { called = true; return { strategies: [proposal] } },
     })
@@ -74,20 +75,20 @@ describe('createSherwoodAdapter', () => {
   })
 
   it('applies the novelty backstop against existingPodNames', async () => {
-    const a = createSherwoodAdapter({ fetchPools: async () => pools, generate: gen })
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools: async () => pools, generate: gen })
     const cands = await a.discover({ datanetId: '3', rubric, topN: 3, existingPodNames: ['WOOD/WETH CL LP ±5%'] })
     expect(cands).toEqual([])
   })
 
   it('pool fetch failure → [] this cycle, no throw into the cycle', async () => {
-    const a = createSherwoodAdapter({ fetchPools: async () => { throw new Error('429') }, generate: gen })
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools: async () => { throw new Error('429') }, generate: gen })
     await expect(a.discover({ datanetId: '3', rubric, topN: 3 })).resolves.toEqual([])
   })
 
   it('reuses the last successful pool snapshot within minFetchIntervalMs (still mints)', async () => {
     let clock = 1_000_000
     const fetchPools = vi.fn(async () => pools)
-    const a = createSherwoodAdapter({ fetchPools, generate: gen, minFetchIntervalMs: 30 * 60_000, now: () => clock })
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools, generate: gen, minFetchIntervalMs: 30 * 60_000, now: () => clock })
     await a.discover({ datanetId: '3', rubric, topN: 3 })
     expect(fetchPools).toHaveBeenCalledTimes(1)
     clock += 5 * 60_000 // within the guard — cached snapshot, no refetch
@@ -107,7 +108,7 @@ describe('createSherwoodAdapter', () => {
       if (calls === 1) throw new Error('429')
       return pools
     })
-    const a = createSherwoodAdapter({ fetchPools, generate: gen, minFetchIntervalMs: 30 * 60_000, now: () => clock })
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools, generate: gen, minFetchIntervalMs: 30 * 60_000, now: () => clock })
     expect(await a.discover({ datanetId: '3', rubric, topN: 3 })).toEqual([])
     clock += 60_000 // 1 min later — a throttled adapter would skip; a retried one fetches
     const cands = await a.discover({ datanetId: '3', rubric, topN: 3 })
@@ -116,8 +117,49 @@ describe('createSherwoodAdapter', () => {
   })
 
   it('operator adapterParams tighten the quality gate', async () => {
-    const a = createSherwoodAdapter({ fetchPools: async () => pools, generate: gen })
+    const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools: async () => pools, generate: gen })
     const cands = await a.discover({ datanetId: '3', rubric, topN: 3, strategy: { minSelfScore: 9 } })
     expect(cands).toEqual([]) // self_score 8 < gate 9
+  })
+
+  const usdgMarket = {
+    collateralSymbol: 'TSLA', collateralName: 'Tesla (Robinhood Tokenized Stock)', loanSymbol: 'USDG',
+    lltv: 0.77, borrowApy: 0.016, liquidityUsd: 50_000, borrowedUsd: 12,
+  }
+
+  it('rejects pairs whose borrowed asset is not borrowable per live lending data', async () => {
+    // Live data says only USDG is borrowable — the fixture borrows WETH.
+    const a = createSherwoodAdapter({
+      fetchLendingMarkets: async () => [usdgMarket],
+      fetchPools: async () => pools,
+      generate: gen,
+    })
+    expect(await a.discover({ datanetId: '3', rubric, topN: 3 })).toEqual([])
+  })
+
+  it('accepts pairs borrowing a live loan asset and surfaces the Morpho section in the prompt', async () => {
+    const seen: string[] = []
+    const a = createSherwoodAdapter({
+      fetchLendingMarkets: async () => [usdgMarket],
+      fetchPools: async () => pools,
+      generate: async ({ prompt }) => {
+        seen.push(prompt)
+        return { strategies: [{ ...proposal, pair: { borrowed_asset: 'USDG', borrow_venue: 'Morpho' } }] }
+      },
+    })
+    const cands = await a.discover({ datanetId: '3', rubric, topN: 3 })
+    expect(cands).toHaveLength(1)
+    expect(seen[0]).toContain('Live Morpho Blue lending markets')
+    expect(seen[0]).toContain('collateral TSLA → borrow USDG — LLTV 77.0%')
+  })
+
+  it('lending fetch failure degrades gracefully — proposals still flow, gate off', async () => {
+    const a = createSherwoodAdapter({
+      fetchLendingMarkets: async () => { throw new Error('morpho down') },
+      fetchPools: async () => pools,
+      generate: gen,
+    })
+    const cands = await a.discover({ datanetId: '3', rubric, topN: 3 })
+    expect(cands).toHaveLength(1) // WETH borrow passes: no data, no gate
   })
 })
