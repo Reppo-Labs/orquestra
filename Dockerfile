@@ -13,8 +13,11 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.12.6
-# @reppo/cli@0.12.6: --network robinhood (chain 4663, RBV1 contracts) — REQUIRED for
+ && npm i -g @reppo/cli@0.12.7
+# @reppo/cli@0.12.7: robinhood mint-pod Phase-2 publishing + register-agent target the
+# robinhood.reppo.ai agents API (per-platform agent credentials) — needed for robinhood
+# mints to surface on the platform and be voteable.
+# 0.12.6: --network robinhood (chain 4663, RBV1 contracts) — REQUIRED for
 # REPPO_NETWORK=robinhood nodes: every vote/mint/query the node shells out goes through
 # the CLI, and earlier versions reject the network with INVALID_NETWORK.
 # 0.12.5: query datanet surfaces the remaining rewards pool
