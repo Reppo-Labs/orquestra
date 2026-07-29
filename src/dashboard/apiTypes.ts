@@ -117,5 +117,14 @@ export interface OnboardingChatView {
   error?: string
 }
 
+/** Resume view for a half-finished interview (GET /api/onboarding/session):
+ *  the displayable transcript + working draft, so a page refresh or node
+ *  restart picks up where the operator left off. */
+export interface OnboardingSessionView {
+  log: { role: 'user' | 'assistant'; text: string }[]
+  draft: OnboardingDraft | null
+  finalized: OnboardingAnswers | null
+}
+
 /** Every non-2xx JSON body carries this. */
 export interface ApiError { error: string }

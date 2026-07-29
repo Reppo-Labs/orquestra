@@ -16,6 +16,7 @@ import type {
   OnboardingAnswers,
   OnboardingChatRequest,
   OnboardingChatView,
+  OnboardingSessionView,
   OnboardingStatusView,
   Pnl,
   PnlResponse,
@@ -167,6 +168,12 @@ export async function loadModels(): Promise<ModelsResponse> {
 // ── Onboarding ──
 export async function onboardingStatus(): Promise<OnboardingStatusView | null> {
   try { return await fetch('/api/onboarding/status').then((r) => r.json()) } catch { return null }
+}
+
+/** Persisted interview state, for resuming after a refresh/restart. Degrades
+ *  to null (fresh start) on any error. */
+export async function onboardingSession(): Promise<OnboardingSessionView | null> {
+  try { return await fetch('/api/onboarding/session').then((r) => (r.ok ? r.json() : null)) } catch { return null }
 }
 
 export async function onboardingChat(body: OnboardingChatRequest): Promise<{ ok: boolean; out: OnboardingChatView }> {
