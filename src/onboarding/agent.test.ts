@@ -168,6 +168,21 @@ describe('onboarding prompt-injection guard (mirrors llm/prompt.ts RUBRIC_GUARD)
     expect(sys.role).toBe('system')
     expect(String(sys.content)).toContain('UNTRUSTED DATANET METADATA')
   })
+
+  it('robinhood seed swaps in the network addendum (sherwood adapter, no lock, token fees)', () => {
+    const [sys] = seedOnboardingMessages('robinhood')
+    const content = String(sys.content)
+    expect(content).toContain('"sherwood" adapter')
+    expect(content).toContain('never ask about locking REPPO')
+    expect(content).toContain('robinhood.reppo.ai')
+    // guard still present — the addendum appends, never replaces
+    expect(content).toContain('UNTRUSTED DATANET METADATA')
+  })
+
+  it('mainnet seed carries no robinhood addendum', () => {
+    const [sys] = seedOnboardingMessages('mainnet')
+    expect(String(sys.content)).not.toContain('NETWORK OVERRIDE')
+  })
 })
 
 describe('non-REPPO access fee surfacing in onboarding', () => {

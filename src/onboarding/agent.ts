@@ -5,6 +5,7 @@ import type { Prompter, OnboardingAnswers } from './types.js'
 import type { DatanetSummary } from '../reppo/listDatanets.js'
 import type { WalletBalance } from '../reppo/queryBalance.js'
 import type { DatanetRubric } from '../rubric/types.js'
+import { reppoNetwork, type ReppoNetwork } from '../reppo/network.js'
 import { OnboardingAnswersSchema, validateAnswers } from './schema.js'
 
 /** What one onboarding turn needs — no prompter, so HTTP and CLI both fit. */
@@ -123,10 +124,23 @@ export function buildOnboardingTools(
   }
 }
 
-/** The opening transcript every onboarding conversation starts from. */
-export function seedOnboardingMessages(): CoreMessage[] {
+/** Appended to SYSTEM on robinhood nodes: the Base-centric defaults above
+ *  (hyperliquid/gdelt adapters, veREPPO locking, REPPO-denominated fees) are
+ *  wrong there, and following them would leave every robinhood datanet
+ *  vote-only and confuse operators with lock questions the node skips anyway. */
+export const ROBINHOOD_SYSTEM_ADDENDUM = `
+NETWORK OVERRIDE — this node runs on Robinhood Chain (REPPO_NETWORK=robinhood). The following replaces the Base-specific guidance above:
+- ADAPTERS: datanet 3 (Sherwood Trading Strategies) uses the "sherwood" adapter — it proposes executable trading strategies from live Robinhood Chain pool + lending data. Its adapterParams are { focus, brief, topN, minSelfScore }: focus = venues/assets/strategy types to favor (e.g. "WOOD CL LP", "tokenized-stock pairs"), brief = freeform strategy brief, topN = proposals per cycle, minSelfScore = 1-10 quality gate (default 7). The hyperliquid/gdelt/sports adapters do NOT exist on this network; robinhood datanets without an adapter are vote-only (mint=false).
+- NO REPPO TOKEN ON THIS CHAIN: never ask about locking REPPO — set lockReppo 0. Voting power is MIRRORED from the operator's Base veREPPO position: tell them to lock on Base and sync at https://robinhood.reppo.ai (and re-sync after changing the Base lock).
+- FEES: each datanet charges its OWN token (e.g. WOOD on datanet 3) for access/publishing, plus gas ETH on Robinhood Chain. The REPPO budget caps do NOT meter these token fees — tell the operator to fund the wallet with the datanet's token and watch that balance; relay each datanet's fee token from get_datanet_details.`
+
+/** The opening transcript every onboarding conversation starts from.
+ *  Network-aware: robinhood nodes get the addendum that swaps out the
+ *  Base-specific adapter/lock/fee guidance. */
+export function seedOnboardingMessages(network: ReppoNetwork = reppoNetwork()): CoreMessage[] {
+  const system = network === 'robinhood' ? SYSTEM + ROBINHOOD_SYSTEM_ADDENDUM : SYSTEM
   return [
-    { role: 'system', content: SYSTEM },
+    { role: 'system', content: system },
     { role: 'user', content: 'Begin onboarding. Greet me briefly and ask what I want my node to do.' },
   ]
 }
