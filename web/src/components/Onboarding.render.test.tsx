@@ -33,6 +33,9 @@ const { chatMock, confirmMock } = vi.hoisted(() => ({
 vi.mock('../api', () => ({
   onboardingChat: chatMock,
   onboardingConfirm: confirmMock,
+  // Fresh node: nothing persisted to resume — the mount rehydration no-ops
+  // and the classic Start flow under test stays byte-identical.
+  onboardingSession: async () => null,
 }))
 
 // Import after the mock is registered so the component binds the mocked fns.
