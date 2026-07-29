@@ -54,7 +54,12 @@ export const StrategyConfigSchema = z
     // never hit them; an attacker who can write config once cannot unbound the wallet.
     stake: z.object({
       lockReppo: z.number().nonnegative().max(10_000_000),
-      lockDurationDays: z.number().int().positive(),
+      // 0 is legal ONLY for no-lock configs (robinhood nodes: no staking on
+      // that chain, lockReppo is always 0 there) — enforced by the refine below.
+      lockDurationDays: z.number().int().nonnegative(),
+    }).refine((s) => s.lockReppo === 0 || s.lockDurationDays > 0, {
+      message: 'lockDurationDays must be positive when lockReppo > 0',
+      path: ['lockDurationDays'],
     }),
     budget: z.object({
       voteRateMaxPerCycle: z.number().int().nonnegative().max(1_000),

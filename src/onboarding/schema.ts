@@ -30,7 +30,9 @@ export const OnboardingAnswersSchema = z.object({
     adapterParams: jsonLenient(z.record(z.string(), z.unknown())).optional(),
   }))),
   lockReppo: z.number().nonnegative(),
-  lockDurationDays: z.number().int().positive(),
+  // 0 allowed for no-lock (robinhood) answers; the assembled StrategyConfig
+  // still enforces duration > 0 whenever lockReppo > 0 (config/schema.ts).
+  lockDurationDays: z.number().int().nonnegative(),
   voteRateMaxPerCycle: z.number().int().nonnegative(),
   mintReppoMax: z.number().nonnegative(),
   horizonDays: z.number().int().positive(),
