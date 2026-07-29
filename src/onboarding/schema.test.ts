@@ -30,6 +30,15 @@ describe('OnboardingAnswersSchema LLM stringification tolerance', () => {
   it('an unparseable datanets string still fails with the array error', () => {
     expect(OnboardingAnswersSchema.safeParse({ ...good, datanets: 'not json' }).success).toBe(false)
   })
+  it('accepts a no-lock answer set (robinhood: lockReppo 0 + lockDurationDays 0)', () => {
+    const res = validateAnswers({ ...good, lockReppo: 0, lockDurationDays: 0 })
+    expect(res.ok).toBe(true)
+  })
+  it('still rejects a zero duration when actually locking', () => {
+    const res = validateAnswers({ ...good, lockReppo: 500, lockDurationDays: 0 })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toMatch(/lockDurationDays/)
+  })
   it('preserves sherwood adapterParams keys (brief/minSelfScore) instead of stripping them', () => {
     const answers = {
       ...good,
