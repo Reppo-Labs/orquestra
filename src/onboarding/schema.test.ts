@@ -20,6 +20,30 @@ describe('OnboardingAnswersSchema / validateAnswers', () => {
   })
 })
 
+describe('OnboardingAnswersSchema LLM stringification tolerance', () => {
+  it('accepts datanets as a JSON STRING (observed live: models stringify nested arrays in tool calls)', () => {
+    const stringified = { ...good, datanets: JSON.stringify(good.datanets) }
+    const parsed = OnboardingAnswersSchema.parse(stringified)
+    expect(parsed.datanets[0].id).toBe('9')
+    expect(validateAnswers(stringified).ok).toBe(true)
+  })
+  it('an unparseable datanets string still fails with the array error', () => {
+    expect(OnboardingAnswersSchema.safeParse({ ...good, datanets: 'not json' }).success).toBe(false)
+  })
+  it('preserves sherwood adapterParams keys (brief/minSelfScore) instead of stripping them', () => {
+    const answers = {
+      ...good,
+      datanets: [{
+        id: '3', vote: true, mint: true, strictness: 'balanced',
+        adapter: 'sherwood',
+        adapterParams: { focus: 'WOOD CL LP', brief: 'tight reranges', topN: 1, minSelfScore: 7 },
+      }],
+    }
+    const parsed = OnboardingAnswersSchema.parse(answers)
+    expect(parsed.datanets[0].adapterParams).toMatchObject({ brief: 'tight reranges', minSelfScore: 7 })
+  })
+})
+
 describe('OnboardingAnswersSchema adapterParams', () => {
   const base = {
     datanets: [{ id: '2', vote: true, mint: true, strictness: 'balanced' as const, adapter: 'gdelt',
