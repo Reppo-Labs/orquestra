@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  onboardingChat, onboardingConfirm,
+  onboardingChat, onboardingConfirm, onboardingSession,
   type OnboardingAnswers, type OnboardingDraft, type OnboardingStatus,
 } from '../api'
 import { fmt } from '../lib/format'
@@ -107,6 +107,22 @@ export function Onboarding({ status, netNames, onDone, onCancel }: {
 
   // Stepper state: 1 Connect (pre-start) → 2 Interview → 3 Review → 4 Start.
   const step = onboardingStep(started, finalized, confirmMsg)
+
+  // Resume a half-finished interview: the server persists the transcript
+  // (GET /api/onboarding/session), so a page refresh or node restart picks up
+  // where the operator left off instead of showing Start (whose reset would
+  // wipe the session). Empty log → fresh node, normal Start flow.
+  useEffect(() => {
+    let cancelled = false
+    void onboardingSession().then((s) => {
+      if (cancelled || !s || s.log.length === 0) return
+      setLog(s.log.map((m) => ({ role: m.role, text: m.text })))
+      if (s.draft) setDraft(s.draft)
+      if (s.finalized) { setFinalized(s.finalized); setDraft(s.finalized) }
+      setStarted(true)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   const turn = async (message?: string) => {
     setBusy(true)

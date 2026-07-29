@@ -21,6 +21,7 @@ import { runStrategyChat, type ChatMessage } from './strategyChat.js'
 import { queryLockConstraints, type LockConstraints } from '../reppo/queryLockConstraints.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
+import { clearOnboardingSession, saveOnboardingSession, sessionView } from './onboardingSession.js'
 import { buildStrategyConfig } from '../onboarding/build.js'
 import { validateAnswers } from '../onboarding/schema.js'
 import { runOnboardingTurn, seedOnboardingMessages, type OnboardingTurnResult } from '../onboarding/agent.js'
@@ -261,6 +262,11 @@ const onboardingStatus: RouteHandler = ({ dataDir, opts }) => json(200, {
   chatAvailable: Boolean(opts.onboardingTurn ?? opts.resolveChatModel?.()),
 } satisfies OnboardingStatusView)
 
+/** Resume view: the persisted transcript + draft, so a page refresh (or a
+ *  container restart mid-interview) picks up where the operator left off
+ *  instead of restarting the interview. */
+const onboardingSession: RouteHandler = ({ session }) => json(200, sessionView(session))
+
 const activity: RouteHandler = ({ dataDir }) => json(200, readActivity(dataDir, { limit: 500 }))
 
 const config: RouteHandler = ({ dataDir }) => json(200, safeConfig(dataDir))
@@ -312,13 +318,14 @@ const pnl: RouteHandler = ({ dataDir }) => {
 
 // ── write handlers ──────────────────────────────────────────────────────────────
 
-const onboardingChat: RouteHandler = async ({ opts, session }, req) => {
+const onboardingChat: RouteHandler = async ({ dataDir, opts, session }, req) => {
   const chatModel = opts.resolveChatModel?.() ?? null
   const turn = opts.onboardingTurn ?? (chatModel ? defaultOnboardingTurn(chatModel) : null)
   if (!turn) return json(503, { error: 'onboarding chat unavailable — node started without an LLM model' })
   const b = req.body as { message?: string; reset?: boolean }
   if (b?.reset) {
     session.messages = []; session.draft = null; session.finalized = null
+    clearOnboardingSession(dataDir)
     return json(200, { reset: true })
   }
   if (session.messages.length === 0) session.messages = seedOnboardingMessages()
@@ -335,6 +342,8 @@ const onboardingChat: RouteHandler = async ({ opts, session }, req) => {
   }
   if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
   if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
+  // Persist after every turn so refresh/restart resumes the interview.
+  saveOnboardingSession(dataDir, session)
   return json(200, { reply: r.text, draft: session.draft, finalized: session.finalized } satisfies OnboardingChatView)
 }
 
@@ -345,6 +354,7 @@ const onboardingConfirm: RouteHandler = ({ dataDir, session }, req) => {
   if (!v.ok) return json(400, { error: v.error })
   persistOnboarding(dataDir, buildStrategyConfig(v.answers))
   session.messages = []; session.draft = null; session.finalized = null
+  clearOnboardingSession(dataDir) // interview done — nothing to resume
   return json(200, { saved: true })
 }
 
@@ -437,6 +447,7 @@ const strategySave: RouteHandler = ({ dataDir }, req) => {
 
 export const routes: Route[] = [
   { method: 'GET', path: '/api/onboarding/status', handler: onboardingStatus },
+  { method: 'GET', path: '/api/onboarding/session', handler: onboardingSession },
   { method: 'GET', path: '/api/activity', handler: activity },
   { method: 'GET', path: '/api/config', handler: config },
   { method: 'GET', path: '/api/agent', handler: agent },
