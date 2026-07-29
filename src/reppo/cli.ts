@@ -95,7 +95,10 @@ export function parseChainResult(stdout: string, warn: (m: string) => void = (m)
     warnedNoGas = true
     warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
   }
-  const fee = j.reppoFee !== undefined ? Number(j.reppoFee) : undefined
+  // != null: robinhood mint results carry reppoFee: null (no REPPO on that
+  // chain) — Number(null) is 0, which would read as "mint was free" and stop
+  // the budget cap from ever decrementing. Treat null as absent instead.
+  const fee = j.reppoFee != null ? Number(j.reppoFee) : undefined
   const podId = j.podId !== undefined ? String(j.podId) : undefined
   return {
     txHash: j.txHash ?? j.tx ?? '',

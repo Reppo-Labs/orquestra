@@ -89,6 +89,13 @@ describe('parseChainResult reppoFee', () => {
   it('reppoFee absent → undefined (older CLI)', () => {
     expect(parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {}).reppoFee).toBeUndefined()
   })
+  it('reppoFee null (robinhood mint — no REPPO on chain) → undefined, NOT 0', () => {
+    // Number(null) is 0; parsing null as a 0 fee would tell the budget ledger the
+    // mint was free and the cap would never decrement. feePaid carries the real cost.
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.001,"reppoFee":null,"feePaid":"150"}', () => {})
+    expect(r.reppoFee).toBeUndefined()
+    expect(r.feePaid).toBe('150')
+  })
 })
 
 describe('parseChainResult grant-access fee (reppo >=0.8.5)', () => {

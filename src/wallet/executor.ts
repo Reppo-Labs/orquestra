@@ -1,5 +1,6 @@
 // src/wallet/executor.ts
 import { BudgetLedger } from './ledger.js'
+import { isRobinhood } from '../reppo/network.js'
 import type { ReppoCli, LockArgs } from '../reppo/cli.js'
 import type { VoteIntent, MintIntent, ClaimIntent, ExecResult } from './intents.js'
 
@@ -133,6 +134,23 @@ export class WalletExecutor {
       if (!r.txHash) {
         this.ledger.releaseMint(res)
         return { ok: false, status: 'error', detail: 'no txHash' }
+      }
+      // Fee-token network (robinhood): the mint fee is paid in the datanet's OWN
+      // token and reported by the CLI as feePaid (human token units). The ledger
+      // meters those units through the same pipeline — on robinhood,
+      // budget.mintReppoMax and MINT_REPPO_FALLBACK denominate the datanet fee
+      // token (e.g. WOOD), not REPPO. Single-cap caveat: nodes minting on
+      // datanets with DIFFERENT fee tokens share one numeric cap (conservative
+      // but unit-mixed) — fine for today's single mint datanet, revisit with a
+      // per-token ledger if that changes.
+      if (isRobinhood()) {
+        let feeUnits = r.feePaid !== undefined ? Number(r.feePaid) : NaN
+        if (!Number.isFinite(feeUnits)) {
+          console.warn(`orquestra: mint fee-token amount unknown for ${r.txHash}; recording conservative ${MINT_REPPO_FALLBACK} units so the mint cap stays enforced`)
+          feeUnits = MINT_REPPO_FALLBACK
+        }
+        this.ledger.reconcileMint(res, r.gasEth, feeUnits)
+        return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: feeUnits, ...(r.podId ? { podId: r.podId } : {}) }
       }
       // Reconcile mintReppoSpent to the actual fee. Prefer the CLI value (>=0.8.4);
       // else read it from the tx receipt (requires RPC_URL); else KEEP the conservative
