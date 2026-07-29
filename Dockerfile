@@ -13,8 +13,11 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* \
- && npm i -g @reppo/cli@0.12.7
-# @reppo/cli@0.12.7: robinhood mint-pod Phase-2 publishing + register-agent target the
+ && npm i -g @reppo/cli@0.12.8
+# @reppo/cli@0.12.8: robinhood grant-access/mint-pod accept --token primary as an alias
+# for the subnet token — orquestra passes it for non-REPPO access fees; 0.12.7 rejected
+# it with INVALID_TOKEN, failing every robinhood grant (hit live on datanet 3).
+# 0.12.7: robinhood mint-pod Phase-2 publishing + register-agent target the
 # robinhood.reppo.ai agents API (per-platform agent credentials) — needed for robinhood
 # mints to surface on the platform and be voteable.
 # 0.12.6: --network robinhood (chain 4663, RBV1 contracts) — REQUIRED for
