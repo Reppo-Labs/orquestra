@@ -49,6 +49,17 @@ function warnRobinhoodVotesNotIndexed(): void {
   )
 }
 
+// Same one-notice discipline for the own-pod vote guard (needs the wallet-auth
+// platform API, absent on robinhood; the chain's CanNotVoteForOwnPod backstops).
+let warnedRobinhoodOwnPodGuard = false
+function warnRobinhoodOwnPodGuard(): void {
+  if (warnedRobinhoodOwnPodGuard) return
+  warnedRobinhoodOwnPodGuard = true
+  console.error(
+    'orquestra: robinhood network — own-pod vote guard runs without the platform own-pods list (no wallet-auth API); the on-chain CanNotVoteForOwnPod check backstops it.',
+  )
+}
+
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -319,12 +330,18 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       getRubric: (id) => io.getRubric(id),
       getPodsAndFilter: async (id) => {
         const pods = await reader.listPods(id, { all: true })
-        const own = await reader.listPods(id, { all: false })
-          .then((p) => p.map((x) => x.podId))
-          .catch((e) => {
-            console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
-            return [] as string[]
-          })
+        // The own-pods read needs the wallet-auth platform API, which robinhood
+        // doesn't have — attempting it fail-logged EVERY cycle. Skip with a
+        // one-time notice instead; the on-chain CanNotVoteForOwnPod revert is
+        // the backstop, so the guard's absence costs at most one reverted tx.
+        const own = isRobinhood()
+          ? (warnRobinhoodOwnPodGuard(), [] as string[])
+          : await reader.listPods(id, { all: false })
+              .then((p) => p.map((x) => x.podId))
+              .catch((e) => {
+                console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
+                return [] as string[]
+              })
         const currentEpoch = deriveCurrentEpoch(pods)
         const voted = w.dedup.getVotedPodIds(id)
         const ownSet = new Set(own), votedSet = new Set(voted)
