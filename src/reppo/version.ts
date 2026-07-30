@@ -21,13 +21,27 @@ const defaultGetVersion = async (): Promise<string> => {
 
 /** Read the reppo CLI `--version` banner (first line), or '' if it can't be run.
  *  Exported so startup can derive per-feature capability flags (capabilities.ts) once,
- *  without a second `reppo --version` shell-out. Never throws. */
-export async function getReppoVersionString(): Promise<string> {
-  try {
-    return await defaultGetVersion()
-  } catch {
-    return ''
+ *  without a second `reppo --version` shell-out. Never throws.
+ *
+ *  Retries transient failures (3 attempts, short backoff): this string is read ONCE at
+ *  boot and the capability gates derived from it hold for the whole process lifetime —
+ *  a single spawn blip returning '' would silently disable non-REPPO-fee grants (the
+ *  cycle would skip those datanets until the next restart). Observed live 2026-07-30:
+ *  one empty read on container boot with a working 0.12.8 CLI on PATH. */
+export async function getReppoVersionString(
+  deps: { getVersion?: () => Promise<string>; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<string> {
+  const getVersion = deps.getVersion ?? defaultGetVersion
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const ATTEMPTS = 3
+  for (let i = 1; i <= ATTEMPTS; i++) {
+    try {
+      return await getVersion()
+    } catch {
+      if (i < ATTEMPTS) await sleep(250 * i)
+    }
   }
+  return ''
 }
 
 /** Extract the reppo CLI version from a `--version` banner. Prefers a `v`-tagged
