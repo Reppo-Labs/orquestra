@@ -106,4 +106,16 @@ describe('updateAgentOnPlatform', () => {
       updateAgentOnPlatform('ag_1', { name: 'n' }, 'bad-key', makeFetch(401, { error: 'unauthorized' })),
     ).rejects.toThrow('platform updateAgent 401')
   })
+
+  it('targets robinhood.reppo.ai on a robinhood node (agent ids are per-platform)', async () => {
+    vi.stubEnv('REPPO_NETWORK', 'robinhood')
+    try {
+      const fetchImpl = vi.fn(makeFetch(200, {}))
+      await updateAgentOnPlatform('ag_1', { isOrquestra: true }, 'k', fetchImpl)
+      const [url] = fetchImpl.mock.calls[0] as [string]
+      expect(url).toBe('https://robinhood.reppo.ai/api/v1/agents/ag_1')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
