@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendActivity, readActivity, readActivitySince, sumClaimedReppo, backfillClaimDatanets, type ActivityEntry } from './activityLog.js'
+import { appendActivity, readActivity, readActivitySince, sumClaimedReppo, sumClaimedTokens, sumMintSpentByDatanet, backfillClaimDatanets, type ActivityEntry } from './activityLog.js'
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'orq-act-')) })
@@ -90,6 +90,25 @@ describe('activityLog (sqlite)', () => {
   it('sumClaimedReppo returns 0 when there are no claims', () => {
     appendActivity(dir, entry())
     expect(sumClaimedReppo(dir)).toBe(0)
+  })
+
+  it('sumClaimedTokens groups executed non-REPPO claims by symbol', () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '3', claimedTokenSymbol: 'WOOD', claimedTokenAmount: 40, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '3', claimedTokenSymbol: 'WOOD', claimedTokenAmount: 2, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '22', claimedTokenSymbol: 'LBM', claimedTokenAmount: 7, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '3', claimedTokenSymbol: 'WOOD', claimedTokenAmount: 99, status: 'error' }) // excluded
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'claim', datanetId: '9', reppoClaimed: 5, status: 'executed' }) // plain REPPO claim — not a token row
+    expect(sumClaimedTokens(dir).sort((a, b) => a.symbol.localeCompare(b.symbol)))
+      .toEqual([{ symbol: 'LBM', amount: 7 }, { symbol: 'WOOD', amount: 42 }])
+  })
+
+  it('sumMintSpentByDatanet groups executed mint spend by datanet', () => {
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'mint', datanetId: '3', reppoSpent: 100, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'mint', datanetId: '3', reppoSpent: 50, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'mint', datanetId: '9', reppoSpent: 25, status: 'executed' })
+    appendActivity(dir, { ts: 't', cycleId: 'c', kind: 'mint', datanetId: '3', reppoSpent: 999, status: 'refused-budget' }) // excluded
+    expect(sumMintSpentByDatanet(dir).sort((a, b) => a.datanetId.localeCompare(b.datanetId)))
+      .toEqual([{ datanetId: '3', amount: 150 }, { datanetId: '9', amount: 25 }])
   })
 
   it('imports a pre-existing activity-log.jsonl once, preserving history, then renames it', () => {
