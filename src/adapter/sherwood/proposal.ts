@@ -102,10 +102,12 @@ export function proposalKey(datanetId: string, p: Proposal): string {
   return createHash('sha256').update(`sherwood:${datanetId}:${id}`).digest('hex').slice(0, 16)
 }
 
-/** Render the machine-readable dataset body (the template, field for field). */
-export function proposalDataset(p: Proposal): Record<string, unknown> {
+/** Render the machine-readable dataset body (the template, field for field).
+ *  `poolUrl` (the cited pool's GeckoTerminal page) rides as a reference. */
+export function proposalDataset(p: Proposal, poolUrl?: string): Record<string, unknown> {
   return {
     kind: 'sherwood-trading-strategy', schema_version: 1,
+    ...(poolUrl ? { references: { pool_url: poolUrl } } : {}),
     strategy_type: p.strategy_type,
     vault_asset: p.vault_asset,
     venue: p.venue,
@@ -151,10 +153,14 @@ export async function synthesizeProposals(
       console.error(`orquestra: sherwood proposal "${p.title}" dropped — ${reject}`)
       continue
     }
-    // Best-effort pool link: a pool whose name carries the vault asset becomes
-    // the pod's clickable source. A proposal that matches no fetched pool still
-    // passes (e.g. lending strategies have no spot pool).
+    // The STRATEGY is this datanet's content, so the pod's primary link must be
+    // the pinned strategy JSON — no sourceUrl here, which makes the CLI's
+    // Phase 2 fall back to the dataset URI as the clickable url. The matched
+    // pool page rides INSIDE the dataset as a reference (evidence, not the
+    // content; linking it as the pod url sent voters to a GeckoTerminal chart
+    // instead of the strategy — operator-reported on the first live mint).
     const pool = pools.find((x) => x.name.toLowerCase().includes(p.vault_asset.toLowerCase()))
+    const poolUrl = pool ? `https://www.geckoterminal.com/robinhood/pools/${pool.address}` : undefined
     cands.push({
       canonicalKey: proposalKey(datanetId, p),
       podName: clampPodName(p.title),
@@ -162,9 +168,8 @@ export async function synthesizeProposals(
         `${p.strategy_type} on ${p.venue} (${p.vault_asset}). ROE ${p.expected_roe_bps}bps vs DD ${p.max_drawdown_bps}bps. ${p.thesis}`,
         POD_DESC_MAX,
       ),
-      dataset: proposalDataset(p),
+      dataset: proposalDataset(p, poolUrl),
       selfScore: p.self_score,
-      ...(pool ? { sourceUrl: `https://www.geckoterminal.com/robinhood/pools/${pool.address}` } : {}),
     })
   }
   return cands
