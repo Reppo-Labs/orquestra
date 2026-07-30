@@ -91,7 +91,7 @@ describe('proposalDataset', () => {
 })
 
 describe('synthesizeProposals', () => {
-  it('produces candidates with stable keys, template dataset, and pool source link', async () => {
+  it('produces candidates whose primary link is the STRATEGY (no sourceUrl → dataset URI), pool as reference', async () => {
     const cands = await synthesizeProposals(pools, rubric, '3', strategy, {
       generate: async () => ({ strategies: [good] }),
     })
@@ -99,7 +99,11 @@ describe('synthesizeProposals', () => {
     expect(cands[0].podName).toBe('WOOD/WETH CL LP ±5%')
     expect(cands[0].selfScore).toBe(8)
     expect((cands[0].dataset as { strategy_type: string }).strategy_type).toBe('cl_lp')
-    expect(cands[0].sourceUrl).toBe('https://www.geckoterminal.com/robinhood/pools/0xpool1')
+    // No sourceUrl: the CLI's Phase 2 then uses the pinned dataset URI as the
+    // pod's clickable url (the strategy IS the content on this datanet).
+    expect(cands[0].sourceUrl).toBeUndefined()
+    expect((cands[0].dataset as { references?: { pool_url?: string } }).references?.pool_url)
+      .toBe('https://www.geckoterminal.com/robinhood/pools/0xpool1')
   })
   it('drops proposals below minSelfScore', async () => {
     const cands = await synthesizeProposals(pools, rubric, '3', strategy, {
