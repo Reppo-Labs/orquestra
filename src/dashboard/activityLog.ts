@@ -181,6 +181,30 @@ export function sumMintReppoSpent(dataDir: string): number {
   return row.total
 }
 
+/** Lifetime non-REPPO emissions claimed, grouped by token symbol (e.g. LBM, WOOD).
+ *  Same lifetime-unbounded contract as sumClaimedReppo. Missing DB → []. */
+export function sumClaimedTokens(dataDir: string): { symbol: string; amount: number }[] {
+  const rows = conn(dataDir)
+    .prepare(
+      "SELECT claimedTokenSymbol AS symbol, COALESCE(SUM(claimedTokenAmount), 0) AS amount FROM activity WHERE kind = 'claim' AND status = 'executed' AND claimedTokenSymbol IS NOT NULL AND claimedTokenSymbol != '' GROUP BY claimedTokenSymbol"
+    )
+    .all() as { symbol: string; amount: number }[]
+  return rows.filter((r) => r.amount > 0)
+}
+
+/** Lifetime mint spend grouped by datanet (unbounded, executed mints only). The fee
+ *  UNIT depends on the datanet's network: REPPO on mainnet, the datanet's own token
+ *  on robinhood — attribution to a symbol happens in deriveTokenFlows via the
+ *  snapshot's datanet economics. Missing DB → []. */
+export function sumMintSpentByDatanet(dataDir: string): { datanetId: string; amount: number }[] {
+  const rows = conn(dataDir)
+    .prepare(
+      "SELECT datanetId, COALESCE(SUM(reppoSpent), 0) AS amount FROM activity WHERE kind = 'mint' AND status = 'executed' GROUP BY datanetId"
+    )
+    .all() as { datanetId: string; amount: number }[]
+  return rows.filter((r) => r.amount > 0)
+}
+
 /** Entries at or after `sinceMs` (epoch millis), newest-first. Indexed on ts, so
  *  the dashboard health window doesn't re-read the whole history each poll. */
 export function readActivitySince(dataDir: string, sinceMs: number): ActivityEntry[] {

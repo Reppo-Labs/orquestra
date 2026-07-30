@@ -10,6 +10,7 @@
 // the wire type is DERIVED from the domain type (Omit/Pick/Partial), so a rename or
 // a new field still surfaces as a compile error on both sides instead of drifting.
 import type { Pnl } from './pnl.js'
+import type { TokenPnlView } from './prices.js'
 import type { Snapshot, SnapshotBudget } from './snapshot.js'
 import type { PersistedEarn } from './earnStatus.js'
 import type { BudgetCaps } from '../wallet/ledger.js'
@@ -18,7 +19,8 @@ import type { LlmProvider } from '../llm/model.js'
 import type { OnboardingAnswers } from '../onboarding/types.js'
 
 // ── domain re-exports (wire shape == domain shape) ────────────────────────────────
-export type { Pnl } from './pnl.js'
+export type { Pnl, TokenFlow } from './pnl.js'
+export type { TokenPnlView, TokenPnlSummary } from './prices.js'
 export type { Snapshot, SnapshotBudget } from './snapshot.js'
 export type { ActivityEntry } from './activityLog.js'
 export type { PanelTranscript, PanelistVerdict } from '../panel/types.js'
@@ -52,8 +54,15 @@ export type SnapshotBudgetView = Omit<SnapshotBudget, 'caps'> & { caps: BudgetCa
 export type SnapshotView = Omit<Snapshot, 'votingPower' | 'budget'> &
   Partial<Pick<Snapshot, 'votingPower'>> & { budget?: SnapshotBudgetView }
 
-/** GET /api/pnl. */
-export interface PnlResponse { pnl: Pnl | null; snapshot: SnapshotView | null }
+/** GET /api/pnl. tokens/netUsd are the per-token lifetime flows with USD spots
+ *  (prices.ts) — absent when the node has no snapshot yet. */
+export interface PnlResponse {
+  pnl: Pnl | null
+  snapshot: SnapshotView | null
+  tokens?: TokenPnlView[]
+  /** Σ net×spot across every token leg; null when any nonzero leg is unpriced. */
+  netUsd?: number | null
+}
 
 /** GET /api/earn: rows persisted by older nodes may predate claimedTokens. */
 export type EarnStatus = Omit<PersistedEarn, 'claimedTokens'> &

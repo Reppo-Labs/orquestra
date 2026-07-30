@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { derivePnl } from './pnl.js'
+import { derivePnl, deriveTokenFlows } from './pnl.js'
 import type { Snapshot } from './snapshot.js'
 
 const snapshot: Snapshot = {
@@ -35,5 +35,42 @@ describe('derivePnl', () => {
     const big: Snapshot = { ...snapshot, budget: { ...snapshot.budget, mintReppoSpent: 30 }, emissionsDue: { totalReppo: 0, pods: [] } }
     const p = derivePnl(big, 6080, 4935) // 6080 claimed, 4935 lifetime mint spend
     expect(p.netReppo).toBeCloseTo(1145)  // 6080 - 4935, not 6080 - 30
+  })
+})
+
+describe('deriveTokenFlows', () => {
+  it('attributes fee-token mint spend to the datanet native symbol (robinhood)', () => {
+    const flows = deriveTokenFlows(
+      0,
+      [{ symbol: 'WOOD', amount: 42 }],
+      [{ datanetId: '3', amount: 100 }],
+      [{ datanetId: '3', nativeTokenSymbol: 'WOOD' }],
+    )
+    expect(flows).toEqual([
+      { symbol: 'REPPO', earned: 0, spent: 0, net: 0 },
+      { symbol: 'WOOD', earned: 42, spent: 100, net: -58 },
+    ])
+  })
+
+  it('keeps REPPO-datanet spend on the REPPO leg (mainnet, no native token)', () => {
+    const flows = deriveTokenFlows(
+      168,
+      [{ symbol: 'LBM', amount: 7 }],
+      [{ datanetId: '9', amount: 100 }, { datanetId: '22', amount: 5 }],
+      [{ datanetId: '9' }, { datanetId: '22', nativeTokenSymbol: 'LBM' }],
+    )
+    expect(flows).toEqual([
+      { symbol: 'REPPO', earned: 168, spent: 100, net: 68 },
+      { symbol: 'LBM', earned: 7, spent: 5, net: 2 },
+    ])
+  })
+
+  it('a datanet missing from economics falls back to the REPPO leg (status quo)', () => {
+    const flows = deriveTokenFlows(0, [], [{ datanetId: '3', amount: 100 }], [])
+    expect(flows).toEqual([{ symbol: 'REPPO', earned: 0, spent: 100, net: -100 }])
+  })
+
+  it('always reports the REPPO leg, even with zero flows everywhere', () => {
+    expect(deriveTokenFlows(0, [], [], [])).toEqual([{ symbol: 'REPPO', earned: 0, spent: 0, net: 0 }])
   })
 })

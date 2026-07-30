@@ -8,6 +8,7 @@
 import type {
   ActivityEntry,
   AgentInfo,
+  TokenPnlView,
   DatanetNames,
   EarnStatus,
   HealthReport,
@@ -32,6 +33,7 @@ import type {
 // definitions live in src/dashboard/apiTypes.ts and the domain modules behind it).
 export type {
   Pnl,
+  TokenPnlView as TokenPnl,
   EpochInfo,
   DatanetYield,
   PanelTranscript,
@@ -69,6 +71,10 @@ export type {
 export interface DashData {
   pnl: Pnl | null
   snapshot: SnapshotView | null
+  /** per-token lifetime earned/spent with USD spots (undefined on old servers). */
+  tokens?: TokenPnlView[]
+  /** Σ net×spot across token legs; null = a nonzero leg is unpriced. */
+  netUsd?: number | null
   activity: ActivityEntry[]
   config: SafeStrategyConfig
   earn: EarnStatus | null
@@ -109,6 +115,8 @@ export async function loadAll(): Promise<DashData> {
   return {
     pnl: pnlRes.pnl ?? null,
     snapshot: pnlRes.snapshot ?? null,
+    tokens: pnlRes.tokens,
+    netUsd: pnlRes.netUsd,
     // Array.isArray guard: even a 200 must never hand a non-array to consumers that .filter/.map it.
     activity: Array.isArray(activity) ? activity : [],
     config: config ?? {},
