@@ -119,7 +119,7 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
       const cands = await synthesizeProposals(liquid, ctx.rubric, ctx.datanetId, strategy, {
         model,
         generate: deps.generate,
-      }, lending)
+      }, lending, ctx.existingPodNames ?? [])
       // Exact-name pre-filter: strategy titles are short (2 significant words),
       // below filterNovel's shared-word floor — an identical title would slip
       // through the overlap backstop and re-mint. Names are the visible dedup
@@ -127,7 +127,13 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
       const existingNames = new Set((ctx.existingPodNames ?? []).map((n) => n.trim().toLowerCase()))
       const fresh = cands.filter((c) => !existingNames.has(c.podName.trim().toLowerCase()))
       const novel = filterNovel(fresh, ctx.existingPodNames ?? [])
-      return filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model })
+      const final = await filterNovelSemantic(novel, ctx.existingPodNames ?? [], { model })
+      // Zero-mint cycles must explain themselves: candidates that die HERE (not
+      // in scoring) were invisible — the cycle just logged "0 mints".
+      if (cands.length > 0 && final.length === 0) {
+        console.error(`orquestra: sherwood — ${cands.length} proposal(s) dropped as duplicates of existing pods (novelty filters); nothing new to mint this cycle`)
+      }
+      return final
     },
   }
 }

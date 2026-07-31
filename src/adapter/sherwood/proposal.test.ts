@@ -155,4 +155,15 @@ describe('buildProposalPrompt', () => {
     const { prompt } = buildProposalPrompt([pools[0]], rubric, strategy)
     expect(prompt).not.toContain('Tokenized equities')
   })
+
+  it('lists already-minted pods so the model steers AWAY instead of regenerating them', () => {
+    const { prompt } = buildProposalPrompt(pools, rubric, strategy, [], ['NVDA/USDG CL Rerange w/ Morpho USDG Borrow'])
+    expect(prompt).toContain('Already minted on this datanet')
+    expect(prompt).toContain('- NVDA/USDG CL Rerange w/ Morpho USDG Borrow')
+  })
+
+  it('omits the already-minted section on an empty datanet', () => {
+    const { prompt } = buildProposalPrompt(pools, rubric, strategy, [], [])
+    expect(prompt).not.toContain('Already minted')
+  })
 })
