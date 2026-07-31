@@ -40,6 +40,8 @@ import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js
 import { startDashboard } from './dashboard/server.js'
 import { backfillMintReppoSpent, backfillClaimDatanets } from './dashboard/activityLog.js'
 import { defaultReppoReader } from './reppo/reader.js'
+import { makeCachedReader, type CacheTag } from './reppo/readCache.js'
+import type { WalletWriteKind } from './wallet/executor.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -256,10 +258,17 @@ async function start(): Promise<void> {
   // Lazily resolved so the dashboard (started here, before the scheduler exists) can still
   // wire the "run now" button — the closure reads schedulerHandle at click time, not now.
   let schedulerHandle: SchedulerHandle | null = null
+  // Read cache over the reader seam: within-cycle dedup + TTL/epoch policies, so free
+  // public RPCs aren't stormed (openspec change reduce-rpc-calls). Constructed before the
+  // dashboard (which starts first, ahead of the scheduler/executor) so /api/datanets shares
+  // the same TTL-cached datanet list instead of keeping its own separate cache. Write-triggered
+  // invalidation is wired below, once `executor` exists.
+  const cachedReader = makeCachedReader(defaultReppoReader)
   const dash = dashEnabled ? await startDashboard(DATA_DIR, dashPort, {
     resolveChatModel,
     availableProviders: [...providerKeyRegistry.keys()],
     triggerCycle: () => schedulerHandle?.runNow() ?? { started: false, reason: 'node still starting' },
+    listDatanets: () => cachedReader.reader.listDatanets(),
   }) : null
   if (dash) console.error(`orquestra: dashboard on http://localhost:${dash.port}`)
 
@@ -360,8 +369,19 @@ async function start(): Promise<void> {
     })
     return eff.key ? resolve(eff.provider, eff.key, eff.model) : model
   }
+  // Write-triggered invalidation: evict the reads a landed write stales (design D3).
+  // beginCycle() clears the tick-scoped memos (wired into buildTick below).
+  const invalidationTags: Record<WalletWriteKind, readonly CacheTag[]> = {
+    vote: ['votes', 'balance'],
+    mint: ['pods', 'balance'],
+    claim: ['emissions', 'balance'],
+    grant: ['balance'],
+    lock: ['balance'],
+  }
+  executor.onWriteExecuted = (kind) => cachedReader.invalidateTags(invalidationTags[kind])
   const wiring: CycleWiring = {
     dataDir: DATA_DIR, config,
+    reader: cachedReader.reader,
     providerKeyRegistry,
     resolveModel: resolve,
     defaultProvider: envProvider,
@@ -399,7 +419,10 @@ async function start(): Promise<void> {
   const nDatanets = Object.keys(config.datanets).filter((k) => k !== '*').length
   console.error(`orquestra: starting — cadence ${config.cadenceHours}h, ${nDatanets} datanet(s)`)
   // reloadConfig: dashboard saves apply at the next cycle (validated; last-good on failure)
-  const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), { reloadConfig: () => loadConfig(DATA_DIR) }))
+  const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), {
+    reloadConfig: () => loadConfig(DATA_DIR),
+    onTickStart: () => cachedReader.beginCycle(),
+  }))
   schedulerHandle = handle // now the dashboard "run now" button can trigger an off-schedule cycle
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —

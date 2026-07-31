@@ -5,6 +5,7 @@
 // datanet's real per-epoch emission yield (emission rate ÷ this epoch's vote weight);
 // the catalog's lifetime upVoteVolume/downVoteVolume can't answer that (cumulative).
 import { networkAddresses } from './network.js'
+import { tryAggregate, isMulticallAvailable } from './multicall.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
@@ -52,8 +53,27 @@ export async function queryEpochVoteVolume(
   const pm = deps.podManager ?? networkAddresses().podManager
   const ve = deps.veReppo ?? networkAddresses().veReppo
   const epoch = await ethCallUint(fetchImpl, rpcUrl, ve, SEL.currentEpoch)
+  const pods = [...new Set(podIds)]
   let total = 0n
-  for (const podStr of [...new Set(podIds)]) {
+  // The epoch read cannot join the batch (it is an argument of every vote getter), so the
+  // batched shape is 1 epoch call + ⌈2N/batch⌉ aggregate calls instead of 1 + 2N.
+  if (pods.length > 0 && (await isMulticallAvailable(rpcUrl, { fetchImpl }))) {
+    const calls = pods.flatMap((podStr) => {
+      const podId = BigInt(podStr)
+      return [
+        { target: pm, callData: SEL.podUp + word(epoch) + word(podId) },
+        { target: pm, callData: SEL.podDown + word(epoch) + word(podId) },
+      ]
+    })
+    for (const r of await tryAggregate(rpcUrl, calls, { fetchImpl })) {
+      // Plain view getters have no legitimate revert path — an inner revert is as
+      // malformed as a missing result and must never read as zero volume.
+      if (!r.success) throw new Error('RPC eth_call error: vote-volume getter reverted in multicall')
+      total += r.returnData === '0x' ? 0n : BigInt(r.returnData)
+    }
+    return { epoch: Number(epoch), totalRaw: total }
+  }
+  for (const podStr of pods) {
     const podId = BigInt(podStr)
     total += await ethCallUint(fetchImpl, rpcUrl, pm, SEL.podUp + word(epoch) + word(podId))
     total += await ethCallUint(fetchImpl, rpcUrl, pm, SEL.podDown + word(epoch) + word(podId))

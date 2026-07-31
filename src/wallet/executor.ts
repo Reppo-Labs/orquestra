@@ -21,10 +21,24 @@ export type ReppoFeeReader = (txHash: string) => Promise<number | undefined>
  *  signer, scaled to human units by `decimals`, or undefined if it can't be read. */
 export type ClaimTokenReader = (txHash: string, token: string, decimals: number) => Promise<number | undefined>
 
+/** Kind of on-chain write that landed — consumed by the read cache to evict the
+ *  reads that write stales (openspec change reduce-rpc-calls, design D3). */
+export type WalletWriteKind = 'vote' | 'mint' | 'claim' | 'grant' | 'lock'
+
 /** The only component that signs. Each public method reserves budget BEFORE
  *  signing (fail-closed), then reconciles to actual gas on success or
  *  releases the reservation on failure. */
 export class WalletExecutor {
+  /** Fired after a write actually lands on-chain (executed WITH a txHash — never on
+   *  refused-budget, errors, or already-granted no-ops). The executor stays ignorant
+   *  of what listens; index.ts wires this to read-cache invalidation. */
+  onWriteExecuted?: (kind: WalletWriteKind) => void
+
+  /** Listener errors must never poison a landed write's result. */
+  private notify(kind: WalletWriteKind): void {
+    try { this.onWriteExecuted?.(kind) } catch { /* cache eviction is best-effort */ }
+  }
+
   constructor(
     private readonly cli: ReppoCli,
     private readonly ledger: BudgetLedger,
@@ -50,6 +64,7 @@ export class WalletExecutor {
   async lock(args: LockArgs): Promise<ExecResult> {
     try {
       const r = await this.cli.lock(args)
+      this.notify('lock')
       return { ok: true, status: 'executed', txHash: r.txHash }
     } catch (e) {
       return { ok: false, status: 'error', detail: (e as Error).message }
@@ -72,6 +87,7 @@ export class WalletExecutor {
       // Surface the actual fee paid (reppo >=0.8.5 reports feeAmount/feeToken on a
       // non-REPPO grant) so the cycle can show "paid 50 EXY" in the activity log. The
       // fee is consent-bounded (not budget-gated); this is informational only.
+      this.notify('grant')
       return {
         ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth,
         ...(r.feeAmount !== undefined ? { feeAmount: r.feeAmount } : {}),
@@ -107,6 +123,7 @@ export class WalletExecutor {
         return { ok: false, status: 'error', detail: 'no txHash' }
       }
       this.ledger.reconcileVote(res, r.gasEth)
+      this.notify('vote')
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseVote(res)
@@ -150,6 +167,7 @@ export class WalletExecutor {
           feeUnits = MINT_REPPO_FALLBACK
         }
         this.ledger.reconcileMint(res, r.gasEth, feeUnits)
+        this.notify('mint')
         return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: feeUnits, ...(r.podId ? { podId: r.podId } : {}) }
       }
       // Reconcile mintReppoSpent to the actual fee. Prefer the CLI value (>=0.8.4);
@@ -168,6 +186,7 @@ export class WalletExecutor {
         reppoFee = MINT_REPPO_FALLBACK
       }
       this.ledger.reconcileMint(res, r.gasEth, reppoFee)
+      this.notify('mint')
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: reppoFee, ...(r.podId ? { podId: r.podId } : {}) }
     } catch (e) {
       this.ledger.releaseMint(res)
@@ -195,6 +214,7 @@ export class WalletExecutor {
       // activity log + dashboard show real amounts. Best-effort — undefined on read failure.
       const reppoClaimed = this.claimReppoReader ? await this.claimReppoReader(r.txHash) : undefined
       const tokenClaimed = await this.readTokenClaimed(intent, r.txHash)
+      this.notify('claim')
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed, tokenClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)
@@ -217,6 +237,7 @@ export class WalletExecutor {
       this.ledger.reconcileClaim(res, r.gasEth)
       const reppoClaimed = this.claimReppoReader ? await this.claimReppoReader(r.txHash) : undefined
       const tokenClaimed = await this.readTokenClaimed(intent, r.txHash)
+      this.notify('claim')
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed, tokenClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)

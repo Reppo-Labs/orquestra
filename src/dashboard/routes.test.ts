@@ -124,10 +124,22 @@ describe('read handlers', () => {
     expect(r.body).toMatchObject({ needed: false, chatAvailable: false })
   })
 
-  it('/api/datanets serves an id→name object ({} without a CLI)', async () => {
-    const r = await call('GET', '/api/datanets')
+  // Order matters: datanetNames() keeps a module-level last-good fallback, so the
+  // no-prior-success case must run before anything in this file records a success.
+  it('/api/datanets serves {} on a read failure with no prior success', async () => {
+    const r = await call('GET', '/api/datanets', {
+      ctx: ctx({ listDatanets: async () => { throw new Error('rpc down') } }),
+    })
     expect(r.status).toBe(200)
-    expect(typeof r.body).toBe('object')
+    expect(r.body).toEqual({})
+  })
+
+  it('/api/datanets serves an id→name object from the injected reader', async () => {
+    const r = await call('GET', '/api/datanets', {
+      ctx: ctx({ listDatanets: async () => [{ id: '3', name: 'sherwood' } as never] }),
+    })
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ '3': 'sherwood' })
   })
 })
 
