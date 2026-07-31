@@ -80,6 +80,18 @@ describe('createSherwoodAdapter', () => {
     expect(cands).toEqual([])
   })
 
+  it('feeds existingPodNames into the synthesis prompt (steer, not just filter)', async () => {
+    const seen: string[] = []
+    const a = createSherwoodAdapter({
+      fetchLendingMarkets: lend,
+      fetchPools: async () => pools,
+      generate: async ({ prompt }) => { seen.push(prompt); return { strategies: [proposal] } },
+    })
+    await a.discover({ datanetId: '3', rubric, topN: 3, existingPodNames: ['Old Strategy Pod'] })
+    expect(seen[0]).toContain('Already minted on this datanet')
+    expect(seen[0]).toContain('- Old Strategy Pod')
+  })
+
   it('pool fetch failure → [] this cycle, no throw into the cycle', async () => {
     const a = createSherwoodAdapter({ fetchLendingMarkets: lend, fetchPools: async () => { throw new Error('429') }, generate: gen })
     await expect(a.discover({ datanetId: '3', rubric, topN: 3 })).resolves.toEqual([])

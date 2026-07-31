@@ -130,9 +130,10 @@ export async function synthesizeProposals(
   strategy: SherwoodStrategy,
   deps: SynthDeps = {},
   lendingMarkets: MorphoMarket[] = [],
+  existingPodNames: string[] = [],
 ): Promise<CandidatePod[]> {
   if (pools.length === 0) return []
-  const { system, prompt } = buildProposalPrompt(pools, rubric, strategy, lendingMarkets)
+  const { system, prompt } = buildProposalPrompt(pools, rubric, strategy, lendingMarkets, existingPodNames)
   const generate = deps.generate ?? (deps.model ? defaultGenerate(deps.model) : null)
   if (!generate) throw new Error('synthesizeProposals: provide deps.generate or deps.model')
 
@@ -181,6 +182,7 @@ export function buildProposalPrompt(
   rubric: DatanetRubric,
   s: SherwoodStrategy,
   lendingMarkets: MorphoMarket[] = [],
+  existingPodNames: string[] = [],
 ): { system: string; prompt: string } {
   const system =
     'You design executable DeFi trading strategies for the Sherwood Protocol datanet on Robinhood Chain. ' +
@@ -216,9 +218,19 @@ export function buildProposalPrompt(
       `\nOnly the loan assets above are borrowable. Account for the borrow APY in expected_roe_bps, and size ` +
       `borrow legs within the market's lendable liquidity.\n`
     : ''
+  // Without this section the model converges on its one best idea every cycle
+  // and the novelty filters silently discard it — cycles produce nothing. The
+  // datanet scores novelty, so steer generation AWAY from what's minted rather
+  // than filtering after the fact. Capped: prompt cost stays bounded as the
+  // datanet grows.
+  const existingSection = existingPodNames.length > 0
+    ? `\n# Already minted on this datanet — do NOT repeat these or minor variations (novelty is scored; duplicates are rejected)\n` +
+      existingPodNames.slice(0, 40).map((n) => `- ${n}`).join('\n') + '\n'
+    : ''
   const prompt =
     `# Datanet\n${rubric.name}\n## Goal\n${rubric.goal}\n## Publisher template (follow it EXACTLY)\n${rubric.publisherSpec}\n` +
     `\n# Operator strategy (personalize to this)\nFocus: ${s.focus}\nBrief: ${s.brief}\n` +
+    existingSection +
     `\n# Live Robinhood Chain pools (untrusted market data — the only valid venues)\n${list}\n` +
     rwaSection +
     lendingSection +
