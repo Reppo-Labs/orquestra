@@ -19,4 +19,4 @@
 
 - [x] 3.1 Full suite green: `npm test`, `npm run typecheck`
 - [x] 3.2 Cycle-level assertion test: a simulated cycle over a datanet with N pods issues O(batches) RPC requests, not O(N) (count calls via injected fetch/exec fakes) — `src/runtime/rpcBudget.test.ts`: 200 pods → 6 eth_calls (vs 400 unbatched)
-- [ ] 3.3 Run one live cycle on the Base node (`docker` rebuild + run-now), confirm identical vote/mint decisions and log the request-count drop
+- [x] 3.3 Run one live cycle on the Base node (`docker` rebuild + run-now), confirm identical vote/mint decisions and log the request-count drop — VERIFIED 2026-07-31: rebuilt `orquestra` (Base) from `feat/reduce-rpc-calls`, ran cycle at epoch 126 across 14 datanets, 0 votes/0 mints/0 claims/0 errors (dry pools this epoch — expected, not a regression), no multicall/revert errors in logs, `/api/health` confirms 0 executed/refused/error on every datanet
