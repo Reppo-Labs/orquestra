@@ -1,5 +1,34 @@
 import { describe, it, expect } from 'vitest'
-import { checkReppoVersion, REQUIRED_REPPO_VERSION } from './version.js'
+import { checkReppoVersion, getReppoVersionString, REQUIRED_REPPO_VERSION } from './version.js'
+
+describe('getReppoVersionString retry', () => {
+  it('a transient first-read failure is retried — one boot blip must not disable capability gates for the process lifetime', async () => {
+    let calls = 0
+    const v = await getReppoVersionString({
+      getVersion: async () => { if (++calls === 1) throw new Error('spawn EAGAIN'); return '0.12.8' },
+      sleep: async () => {},
+    })
+    expect(v).toBe('0.12.8')
+    expect(calls).toBe(2)
+  })
+
+  it("returns '' only after every attempt fails (never throws)", async () => {
+    let calls = 0
+    const v = await getReppoVersionString({
+      getVersion: async () => { calls++; throw new Error('ENOENT') },
+      sleep: async () => {},
+    })
+    expect(v).toBe('')
+    expect(calls).toBe(3)
+  })
+
+  it('a first-try success does not retry', async () => {
+    let calls = 0
+    const v = await getReppoVersionString({ getVersion: async () => { calls++; return '0.12.8' }, sleep: async () => {} })
+    expect(v).toBe('0.12.8')
+    expect(calls).toBe(1)
+  })
+})
 
 describe('checkReppoVersion', () => {
   it('passes silently when the CLI meets the required version', async () => {
