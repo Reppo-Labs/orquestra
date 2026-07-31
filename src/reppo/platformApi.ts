@@ -1,9 +1,19 @@
 // src/reppo/platformApi.ts
 // Reppo platform REST API — distinct from on-chain CLI.
 // All functions are fire-and-forget-safe: callers catch and log on failure.
+import { isRobinhood } from './network.js'
 
-const BASE = 'https://reppo.ai/api/v1'
 const TIMEOUT_MS = 15_000
+
+/** Per-network platform base: robinhood agents/pods/votes live on
+ *  robinhood.reppo.ai (same API contract; agent ids are per-platform).
+ *  Resolved at call time so REPPO_NETWORK is read live, matching how the CLI
+ *  layer resolves its endpoints. Before this, updateAgentOnPlatform PATCHed
+ *  reppo.ai even on robinhood — the agent id doesn't exist there, so every
+ *  node start logged a 401 (isOrquestra mark failed). */
+export function platformBase(): string {
+  return isRobinhood() ? 'https://robinhood.reppo.ai/api/v1' : 'https://reppo.ai/api/v1'
+}
 
 /** POST /agents/:agentId/pods/:podId/votes — index an on-chain vote for display.
  *  Non-fatal: a failed call never invalidates the on-chain result.
@@ -21,7 +31,7 @@ export async function registerVoteOnPlatform(
     const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
     try {
       return await fetchImpl(
-        `${BASE}/agents/${encodeURIComponent(agentId)}/pods/${encodeURIComponent(podId)}/votes`,
+        `${platformBase()}/agents/${encodeURIComponent(agentId)}/pods/${encodeURIComponent(podId)}/votes`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -62,7 +72,7 @@ export async function updateAgentOnPlatform(
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
   try {
-    const res = await fetchImpl(`${BASE}/agents/${encodeURIComponent(agentId)}`, {
+    const res = await fetchImpl(`${platformBase()}/agents/${encodeURIComponent(agentId)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(patch),

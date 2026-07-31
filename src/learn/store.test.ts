@@ -83,6 +83,30 @@ describe('learn store — proposals', () => {
   it('setProposalStatus on an unknown id returns null', () => {
     expect(setProposalStatus(dir, 999, 'rejected')).toBeNull()
   })
+
+  it('a new proposal supersedes a pending one on the same (datanetId, field) — old goes stale', () => {
+    const oldId = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '8', toValue: '1' })
+    insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '8', toValue: '3' })
+    const pending = readProposals(dir, { status: 'pending' })
+    expect(pending).toHaveLength(1)
+    expect(pending[0].toValue).toBe('3')
+    const stale = readProposals(dir, { status: 'stale' })
+    expect(stale).toHaveLength(1)
+    expect(stale[0].id).toBe(oldId)
+    expect(stale[0].decidedTs).toBeTruthy()
+  })
+
+  it('superseding is scoped: other fields, other datanets, and decided rows are untouched', () => {
+    const strictnessId = insertProposal(dir, proposal()) // strictness, datanet 9
+    const otherDatanetId = insertProposal(dir, { ...proposal(), datanetId: '2', field: 'vote_share', fromValue: '8', toValue: '2' })
+    const acceptedId = insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '9', toValue: '8' })
+    setProposalStatus(dir, acceptedId, 'accepted')
+    insertProposal(dir, { ...proposal(), field: 'vote_share', fromValue: '8', toValue: '3' })
+    const byId = new Map(readProposals(dir).map((p) => [p.id, p.status]))
+    expect(byId.get(strictnessId)).toBe('pending')   // different field
+    expect(byId.get(otherDatanetId)).toBe('pending') // different datanet
+    expect(byId.get(acceptedId)).toBe('accepted')    // decided rows never touched
+  })
 })
 
 describe('learn store — per-datanet flag', () => {

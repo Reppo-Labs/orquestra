@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { foldExecError, parseChainResult, resetWarnedNoGas } from './cli.js'
+import { foldExecError, grantAccessArgs, parseChainResult, resetWarnedNoGas } from './cli.js'
 
 describe('foldExecError', () => {
   it('folds stderr into the message so the activity log records the real cause', () => {
@@ -89,6 +89,13 @@ describe('parseChainResult reppoFee', () => {
   it('reppoFee absent → undefined (older CLI)', () => {
     expect(parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {}).reppoFee).toBeUndefined()
   })
+  it('reppoFee null (robinhood mint — no REPPO on chain) → undefined, NOT 0', () => {
+    // Number(null) is 0; parsing null as a 0 fee would tell the budget ledger the
+    // mint was free and the cap would never decrement. feePaid carries the real cost.
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.001,"reppoFee":null,"feePaid":"150"}', () => {})
+    expect(r.reppoFee).toBeUndefined()
+    expect(r.feePaid).toBe('150')
+  })
 })
 
 describe('parseChainResult grant-access fee (reppo >=0.8.5)', () => {
@@ -112,5 +119,26 @@ describe('parseChainResult grant-access fee (reppo >=0.8.5)', () => {
     expect(r.feeAmount).toBeUndefined()
     expect(r.feePaid).toBeUndefined()
     expect(r.feeToken).toBeUndefined()
+  })
+})
+
+describe('grantAccessArgs', () => {
+  it("mainnet + 'primary' → --token primary (reppo >=0.8.5 flag)", () => {
+    expect(grantAccessArgs('7', { token: 'primary' }, { REPPO_NETWORK: 'mainnet' }))
+      .toEqual(['grant-access', '--datanet', '7', '--token', 'primary'])
+  })
+
+  it("robinhood + 'primary' → NO --token flag (RBV1 rejects it with INVALID_TOKEN; fee token resolved on-chain)", () => {
+    expect(grantAccessArgs('3', { token: 'primary' }, { REPPO_NETWORK: 'robinhood' }))
+      .toEqual(['grant-access', '--datanet', '3'])
+  })
+
+  it("'reppo' / omitted opts → byte-identical pre-0.8.5 call on every network", () => {
+    for (const REPPO_NETWORK of ['mainnet', 'robinhood']) {
+      expect(grantAccessArgs('7', { token: 'reppo' }, { REPPO_NETWORK }))
+        .toEqual(['grant-access', '--datanet', '7'])
+      expect(grantAccessArgs('7', undefined, { REPPO_NETWORK }))
+        .toEqual(['grant-access', '--datanet', '7'])
+    }
   })
 })

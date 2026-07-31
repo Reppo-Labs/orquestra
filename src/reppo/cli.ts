@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { reppoEnv, withRpcUrl } from './exec.js'
+import { isRobinhood } from './network.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -95,7 +96,10 @@ export function parseChainResult(stdout: string, warn: (m: string) => void = (m)
     warnedNoGas = true
     warn('reppo CLI reports no gasEth (0.8.0 omits it); recording 0 — gas caps under-count until the CLI adds it')
   }
-  const fee = j.reppoFee !== undefined ? Number(j.reppoFee) : undefined
+  // != null: robinhood mint results carry reppoFee: null (no REPPO on that
+  // chain) — Number(null) is 0, which would read as "mint was free" and stop
+  // the budget cap from ever decrementing. Treat null as absent instead.
+  const fee = j.reppoFee != null ? Number(j.reppoFee) : undefined
   const podId = j.podId !== undefined ? String(j.podId) : undefined
   return {
     txHash: j.txHash ?? j.tx ?? '',
@@ -164,11 +168,23 @@ export const defaultReppoCli: ReppoCli = {
   ]),
   claimEmissions: (a) => run(['claim-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
   claimVoterEmissions: (a) => run(['claim-voter-emissions', '--pod', a.podId, '--epoch', String(a.epoch), '--idempotency-key', a.idempotencyKey]),
-  // 'reppo' (default) is byte-identical to the pre-0.8.5 call — no --token flag added.
-  // 'primary' pays the datanet's primary-token access fee (reppo >=0.8.5; gated upstream
-  // on the CLI version so an older CLI never sees the unknown flag).
-  grantAccess: (datanetId, opts) => run([
+  grantAccess: (datanetId, opts) => run(grantAccessArgs(datanetId, opts)),
+}
+
+/** Pure: assemble the grant-access argv.
+ *  - 'reppo' (default) is byte-identical to the pre-0.8.5 call — no --token flag added.
+ *  - 'primary' pays the datanet's primary-token access fee (reppo >=0.8.5; gated upstream
+ *    on the CLI version so an older CLI never sees the unknown flag).
+ *  - robinhood (RBV1) REJECTS --token outright (INVALID_TOKEN): the access fee is always
+ *    the datanet's own token, resolved on-chain via getSubnetToken — the 'primary' intent
+ *    is implicit there, so the flag is emitted only on token-selecting networks. */
+export function grantAccessArgs(
+  datanetId: string,
+  opts?: GrantAccessOpts,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return [
     'grant-access', '--datanet', datanetId,
-    ...(opts?.token === 'primary' ? ['--token', 'primary'] : []),
-  ]),
+    ...(opts?.token === 'primary' && !isRobinhood(env) ? ['--token', 'primary'] : []),
+  ]
 }

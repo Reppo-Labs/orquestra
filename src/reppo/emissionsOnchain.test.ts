@@ -85,6 +85,69 @@ describe('discoverOwnedPods', () => {
   })
 })
 
+describe('discoverOwnedPods — adaptive chunk (provider caps below our default)', () => {
+  /** Fetch that 400s any span wider than `cap` blocks — models free-tier RPCs
+   *  (several cap eth_getLogs at 1k-5k; our default chunk is 9k). */
+  const cappingFetch = (cap: bigint, spans: Array<[bigint, bigint]>) => (async (_url: string, init: { body: string }) => {
+    const { method, params } = JSON.parse(init.body)
+    if (method === 'eth_getLogs') {
+      const from = BigInt(params[0].fromBlock), to = BigInt(params[0].toBlock)
+      if (to - from + 1n > cap) return new Response('range too large', { status: 400 })
+      spans.push([from, to])
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: [] }))
+    }
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+  }) as unknown as typeof fetch
+
+  it('halves the chunk on a range-cap 400 and completes the scan', async () => {
+    const spans: Array<[bigint, bigint]> = []
+    await discoverOwnedPods(cappingFetch(2_000n, spans), 'http://rpc', '0xpm', WALLET, 0n, 30_000n)
+    expect(spans.length).toBeGreaterThan(0)
+    for (const [from, to] of spans) expect(to - from + 1n).toBeLessThanOrEqual(2_000n)
+    // full, contiguous coverage despite the shrink
+    expect(spans[0][0]).toBe(0n)
+    expect(spans[spans.length - 1][1]).toBe(30_000n)
+    for (let i = 1; i < spans.length; i++) expect(spans[i][0]).toBe(spans[i - 1][1] + 1n)
+  })
+
+  it('remembers the reduced chunk within the same scan (no re-probing every window)', async () => {
+    const attempts: bigint[] = []
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') {
+        const span = BigInt(params[0].toBlock) - BigInt(params[0].fromBlock) + 1n
+        attempts.push(span)
+        if (span > 2_000n) return new Response('range too large', { status: 400 })
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: [] }))
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+    await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 50_000n)
+    // over-cap attempts happen only during the initial shrink, not once per window
+    expect(attempts.filter((s) => s > 2_000n).length).toBeLessThanOrEqual(4)
+  })
+
+  it('gives up (throws) when even the minimum chunk is rejected — no infinite loop', async () => {
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') return new Response('nope', { status: 400 })
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/HTTP 400/)
+  })
+
+  it('does NOT shrink-and-retry on non-range transient failures (5xx propagates untouched)', async () => {
+    let calls = 0
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') { calls++; return new Response('down', { status: 503 }) }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/HTTP 503/)
+    expect(calls).toBe(1) // transient outage: fail fast for the caller's own retry-next-cycle
+  })
+})
+
 describe('queryClaimableOnchain', () => {
   it('returns only unclaimed + non-reverting (pod,epoch) pairs', async () => {
     // epoch 103; pods 5 & 7 known. 5@100 & 5@102 claimable, 5@101 already claimed,

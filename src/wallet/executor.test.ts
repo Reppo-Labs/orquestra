@@ -86,6 +86,38 @@ describe('WalletExecutor', () => {
     expect(ledger.state.mintReppoSpent).toBe(150)
   })
 
+  it('robinhood: reconciles the mint cap in FEE-TOKEN units from the CLI feePaid (reader never consulted)', async () => {
+    vi.stubEnv('REPPO_NETWORK', 'robinhood')
+    try {
+      const cli = fakeCli()
+      cli.mintPod = vi.fn(async () => ({ txHash: '0xmint', gasEth: 0.01, feePaid: '150' })) // 150 WOOD
+      const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
+      const reader = vi.fn(async () => 0) // REPPO reader would report 0 on robinhood — must be ignored
+      const ex = new WalletExecutor(cli, ledger, reader)
+      const r = await ex.executeMint(mintIntent('k1'))
+      expect(r.status).toBe('executed')
+      expect(ledger.state.mintReppoSpent).toBe(150) // WOOD units, from feePaid
+      expect(reader).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('robinhood: missing feePaid records the conservative fallback units — cap stays enforced, never 0', async () => {
+    vi.stubEnv('REPPO_NETWORK', 'robinhood')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const cli = fakeCli() // fake mint result carries no feePaid
+      const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')
+      const ex = new WalletExecutor(cli, ledger)
+      await ex.executeMint(mintIntent('k1'))
+      expect(ledger.state.mintReppoSpent).toBe(MINT_REPPO_FALLBACK)
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('falls back to a conservative REPPO estimate when the fee read fails (never under-counts to 0)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const cli = fakeCli(); const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 500 }); ledger.startCycle('c1')

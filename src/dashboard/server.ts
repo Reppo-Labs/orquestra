@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { matchRoute, routes, type ApiResponse, type DashboardOpts, type OnboardingSession, type RouteContext } from './routes.js'
+import { loadOnboardingSession } from './onboardingSession.js'
 
 export type { DashboardOpts } from './routes.js'
 
@@ -213,7 +214,9 @@ async function handle(ctx: RouteContext, req: IncomingMessage, res: ServerRespon
  *  (no `127.0.0.1:` prefix) WOULD expose the panel. Operators who must expose it
  *  deliberately set DASHBOARD_HOST and should add auth first. */
 export function startDashboard(dataDir: string, port: number, opts: DashboardOpts = {}): Promise<DashboardHandle> {
-  const session: OnboardingSession = { messages: [], draft: null, finalized: null }
+  // Rehydrate a half-finished interview from disk so container restarts and
+  // page refreshes resume instead of restarting (onboardingSession.ts).
+  const session: OnboardingSession = loadOnboardingSession(dataDir)
   const ctx: RouteContext = { dataDir, opts, session }
   const server = createServer((req, res) => { void handle(ctx, req, res) })
   // Default to loopback (see doc above). The Docker image overrides via DASHBOARD_HOST=0.0.0.0.

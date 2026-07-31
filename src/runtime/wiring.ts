@@ -36,6 +36,29 @@ import { runReflection } from '../learn/reflect.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
 import { registerVoteOnPlatform } from '../reppo/platformApi.js'
+import { isRobinhood } from '../reppo/network.js'
+
+// One notice per process, not one per vote: robinhood votes are durable on-chain
+// but invisible to the reppo.ai vote index until robinhood gets its own API.
+let warnedRobinhoodVotesNotIndexed = false
+function warnRobinhoodVotesNotIndexed(): void {
+  if (warnedRobinhoodVotesNotIndexed) return
+  warnedRobinhoodVotesNotIndexed = true
+  console.error(
+    'orquestra: robinhood network — votes are NOT indexed on the reppo.ai platform (no robinhood vote API yet); on-chain votes are unaffected.',
+  )
+}
+
+// Same one-notice discipline for the own-pod vote guard (needs the wallet-auth
+// platform API, absent on robinhood; the chain's CanNotVoteForOwnPod backstops).
+let warnedRobinhoodOwnPodGuard = false
+function warnRobinhoodOwnPodGuard(): void {
+  if (warnedRobinhoodOwnPodGuard) return
+  warnedRobinhoodOwnPodGuard = true
+  console.error(
+    'orquestra: robinhood network — own-pod vote guard runs without the platform own-pods list (no wallet-auth API); the on-chain CanNotVoteForOwnPod check backstops it.',
+  )
+}
 
 /** Bound a promise so a hung reflection/collection can't stall the next cycle. The
  *  underlying work may continue in the background; we only stop waiting on it. */
@@ -290,6 +313,13 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       // Cred check deferred to call time so late-arriving or rotated creds take effect
       // without restarting the node (env vars set from SQLite at startup but re-read here).
       registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+        // The vote-indexing API is the reppo.ai (Base) platform — it doesn't know
+        // robinhood pods, so every registration would fail-log. Skip with a
+        // one-time notice instead of a per-vote error line.
+        if (isRobinhood()) {
+          warnRobinhoodVotesNotIndexed()
+          return Promise.resolve()
+        }
         const agentId = process.env.REPPO_AGENT_ID
         const apiKey = process.env.REPPO_API_KEY
         if (!agentId || !apiKey) return Promise.resolve()
@@ -300,12 +330,18 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       getRubric: (id) => io.getRubric(id),
       getPodsAndFilter: async (id) => {
         const pods = await reader.listPods(id, { all: true })
-        const own = await reader.listPods(id, { all: false })
-          .then((p) => p.map((x) => x.podId))
-          .catch((e) => {
-            console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
-            return [] as string[]
-          })
+        // The own-pods read needs the wallet-auth platform API, which robinhood
+        // doesn't have — attempting it fail-logged EVERY cycle. Skip with a
+        // one-time notice instead; the on-chain CanNotVoteForOwnPod revert is
+        // the backstop, so the guard's absence costs at most one reverted tx.
+        const own = isRobinhood()
+          ? (warnRobinhoodOwnPodGuard(), [] as string[])
+          : await reader.listPods(id, { all: false })
+              .then((p) => p.map((x) => x.podId))
+              .catch((e) => {
+                console.error(`orquestra: own-pods read failed for datanet ${id} — own-pod vote guard disabled this cycle: ${(e as Error).message}`)
+                return [] as string[]
+              })
         const currentEpoch = deriveCurrentEpoch(pods)
         const voted = w.dedup.getVotedPodIds(id)
         const ownSet = new Set(own), votedSet = new Set(voted)

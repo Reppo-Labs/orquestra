@@ -31,5 +31,33 @@ services:
       - orquestra-data:/data
     restart: unless-stopped
 
+  # Parallel Robinhood Chain node — OPT-IN via profile, so a plain
+  # `docker compose up -d` (Base-only operators) is unaffected:
+  #   cp .env.robinhood.example .env.robinhood   # wallet + LLM key + robinhood RPC
+  #   docker compose --profile robinhood up -d
+  # Dashboard: ssh -L 7071:localhost:7071 <host> → http://localhost:7071
+  # Same wallet key as the Base node is fine (different chains, independent nonces).
+  # State is fully separate on purpose: budget ledger, activity DB, and strategy
+  # config must never be shared across networks (datanet ids collide; robinhood
+  # fees are in per-datanet tokens, not REPPO).
+  orquestra-robinhood:
+    image: ghcr.io/reppo-labs/orquestra:latest
+    build: .
+    container_name: orquestra-robinhood
+    profiles: [robinhood]
+    env_file: .env.robinhood
+    environment:
+      - DASHBOARD_HOST=0.0.0.0
+      - ORQUESTRA_DATA_DIR=/data
+      # The network is this service's identity — pinned here (overrides the env
+      # file) so a copy-pasted .env can never silently run this node on Base.
+      - REPPO_NETWORK=robinhood
+    ports:
+      - "127.0.0.1:7071:7070"
+    volumes:
+      - orquestra-robinhood-data:/data
+    restart: unless-stopped
+
 volumes:
   orquestra-data:
+  orquestra-robinhood-data:

@@ -119,8 +119,18 @@ export function hasPendingProposal(dataDir: string, datanetId: string, field: Pr
   ).get(datanetId, field, toValue, 'pending')
 }
 
+/** Insert a proposal, superseding any still-pending proposal for the same
+ *  (datanetId, field): the latest reflection is the only actionable read of the
+ *  data, so contradictory leftovers (vote_share 8→1 stacked next to 8→3) never
+ *  pile up in the dashboard. Old rows go 'stale' (kept for the audit trail), and
+ *  decided rows are never touched. An UNCHANGED recommendation doesn't reach this
+ *  function — callers skip the insert via hasPendingProposal on the same toValue. */
 export function insertProposal(dataDir: string, p: Omit<ProposalRow, 'id' | 'status' | 'decidedTs'>): number {
-  const info = getDb(dataDir).prepare(
+  const d = getDb(dataDir)
+  d.prepare(
+    `UPDATE proposals SET status = 'stale', decidedTs = ? WHERE datanetId = ? AND field = ? AND status = 'pending'`,
+  ).run(new Date().toISOString(), p.datanetId, p.field)
+  const info = d.prepare(
     `INSERT INTO proposals (datanetId, field, fromValue, toValue, rationale, basisConfigMtime, createdEpoch, createdTs)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(p.datanetId, p.field, p.fromValue, p.toValue, p.rationale, p.basisConfigMtime, p.createdEpoch, p.createdTs)

@@ -5,7 +5,7 @@
 // the real budget is votingPowerOf(wallet) − votesCastedByVoterForEpoch(wallet, epoch).
 // epochEnd(epoch) is read alongside so the caller can pace spending over the time left.
 // Raw JSON-RPC, no extra dep — mirrors src/reppo/epochVotes.ts.
-import { POD_MANAGER_MAINNET, VE_REPPO_MAINNET } from './emissionsOnchain.js'
+import { networkAddresses } from './network.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
@@ -57,8 +57,8 @@ export async function queryVotePowerBudget(
   deps: VotePowerDeps = {},
 ): Promise<VotePowerBudget> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const pm = deps.podManager ?? POD_MANAGER_MAINNET
-  const ve = deps.veReppo ?? VE_REPPO_MAINNET
+  const pm = deps.podManager ?? networkAddresses().podManager
+  const ve = deps.veReppo ?? networkAddresses().veReppo
 
   const epoch = await ethCallUint(fetchImpl, rpcUrl, ve, SEL.currentEpoch)
   const [votingPowerWei, votesCastedWei, epochEndsAt] = await Promise.all([

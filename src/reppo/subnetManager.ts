@@ -5,6 +5,8 @@
 //   gated on getReppoEmissionsPerEpoch / getPrimaryTokenEmissionsPerEpoch being > 0.
 // Raw JSON-RPC eth_call (no extra dep), mirroring src/reppo/emissionsOnchain.ts.
 
+import { networkAddresses, isRobinhood } from './network.js'
+
 export const SUBNET_MANAGER_MAINNET = '0x2629a8083065938b533b117704935d727270ee7a'
 
 // Function selectors (viem toFunctionSelector; verified live against subnet 22 / Litebeam).
@@ -12,6 +14,14 @@ const SEL = {
   primaryToken: '0x0d1b89d8', // getSubnetPrimaryToken(uint256) -> address
   primaryEmissions: '0x9f9a490b', // getPrimaryTokenEmissionsPerEpoch(uint256) -> uint256
   reppoEmissions: '0xd323657d', // getReppoEmissionsPerEpoch(uint256) -> uint256
+}
+
+// SubnetManagerRBV1 (robinhood) selectors — the single-token variant: one
+// subnet token, one emission stream, no REPPO leg. Verified live against
+// robinhood subnet 1 (Genesis/PAW), 2026-07-27.
+const SEL_RBV1 = {
+  subnetToken: '0xf8d7097c', // getSubnetToken(uint256) -> address
+  emissionsPerEpoch: '0x8a24efae', // getEmissionsPerEpoch(uint256) -> uint256
 }
 
 const word = (v: bigint): string => v.toString(16).padStart(64, '0')
@@ -57,8 +67,24 @@ export async function getSubnetEmissionInfo(
   deps: SubnetManagerDeps = {},
 ): Promise<SubnetEmissionInfo> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const sm = deps.subnetManager ?? SUBNET_MANAGER_MAINNET
+  const sm = deps.subnetManager ?? networkAddresses().subnetManager
   const arg = word(BigInt(subnetId))
+
+  // RBV1 (robinhood): the subnet's own token plays the primary-token role and
+  // there is no REPPO emission leg — map it onto the same shape so every
+  // downstream consumer (pool checks, claim readers) reuses the primary path.
+  if (isRobinhood()) {
+    const [tokenHex, emissionsHex] = await Promise.all([
+      ethCall(fetchImpl, rpcUrl, sm, SEL_RBV1.subnetToken + arg),
+      ethCall(fetchImpl, rpcUrl, sm, SEL_RBV1.emissionsPerEpoch + arg),
+    ])
+    return {
+      primaryToken: addressFromWord(tokenHex),
+      primaryEmissionsPerEpoch: toBigInt(emissionsHex),
+      reppoEmissionsPerEpoch: 0n,
+    }
+  }
+
   const [tokenHex, primaryHex, reppoHex] = await Promise.all([
     ethCall(fetchImpl, rpcUrl, sm, SEL.primaryToken + arg),
     ethCall(fetchImpl, rpcUrl, sm, SEL.primaryEmissions + arg),

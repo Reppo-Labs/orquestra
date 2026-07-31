@@ -5,11 +5,12 @@
 // before any handler runs: the cross-site write guards (the panel is deliberately
 // unauthenticated and localhost-bound, so CSRF/DNS-rebinding is the realistic
 // remote path to the budget), JSON body parsing, and response serialization.
-import { readActivity, readActivitySince, sumClaimedReppo, sumMintReppoSpent } from './activityLog.js'
+import { readActivity, readActivitySince, sumClaimedReppo, sumClaimedTokens, sumMintReppoSpent, sumMintSpentByDatanet } from './activityLog.js'
 import { readAgentStore, writeAgentStore, syncAgentName } from '../reppo/agent.js'
 import { updateAgentOnPlatform } from '../reppo/platformApi.js'
 import { readSnapshot } from './snapshot.js'
-import { derivePnl } from './pnl.js'
+import { derivePnl, deriveTokenFlows } from './pnl.js'
+import { createTokenPricer } from './prices.js'
 import { readEarnStatus } from './earnStatus.js'
 import { buildHealth } from './health.js'
 import { StrategyConfigSchema, type StrategyConfig } from '../config/schema.js'
@@ -21,6 +22,7 @@ import { runStrategyChat, type ChatMessage } from './strategyChat.js'
 import { queryLockConstraints, type LockConstraints } from '../reppo/queryLockConstraints.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
 import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
+import { clearOnboardingSession, saveOnboardingSession, sessionView } from './onboardingSession.js'
 import { buildStrategyConfig } from '../onboarding/build.js'
 import { validateAnswers } from '../onboarding/schema.js'
 import { runOnboardingTurn, seedOnboardingMessages, type OnboardingTurnResult } from '../onboarding/agent.js'
@@ -261,6 +263,11 @@ const onboardingStatus: RouteHandler = ({ dataDir, opts }) => json(200, {
   chatAvailable: Boolean(opts.onboardingTurn ?? opts.resolveChatModel?.()),
 } satisfies OnboardingStatusView)
 
+/** Resume view: the persisted transcript + draft, so a page refresh (or a
+ *  container restart mid-interview) picks up where the operator left off
+ *  instead of restarting the interview. */
+const onboardingSession: RouteHandler = ({ session }) => json(200, sessionView(session))
+
 const activity: RouteHandler = ({ dataDir }) => json(200, readActivity(dataDir, { limit: 500 }))
 
 const config: RouteHandler = ({ dataDir }) => json(200, safeConfig(dataDir))
@@ -301,24 +308,32 @@ const models: RouteHandler = ({ opts }) => {
   return json(200, { providers } satisfies ModelsResponse)
 }
 
-const pnl: RouteHandler = ({ dataDir }) => {
+// One pricer per server process — it holds the token-address and USD-spot caches.
+const tokenPricer = createTokenPricer()
+
+const pnl: RouteHandler = async ({ dataDir }) => {
   const snapshot = readSnapshot(dataDir)
   // claimed total must be the unbounded SQL sum, NOT a readActivity({ limit })
   // slice — a capped window drops old claims while mint spend is cumulative,
   // making net REPPO read falsely negative as the log grows.
   const p = snapshot ? derivePnl(snapshot, sumClaimedReppo(dataDir), sumMintReppoSpent(dataDir)) : null
-  return json(200, { pnl: p, snapshot } satisfies PnlResponse)
+  if (!snapshot || !p) return json(200, { pnl: p, snapshot } satisfies PnlResponse)
+  const econ = snapshot.datanetEconomics ?? []
+  const flows = deriveTokenFlows(p.earnedReppo, sumClaimedTokens(dataDir), sumMintSpentByDatanet(dataDir), econ)
+  const { tokens, netUsd } = await tokenPricer.priceTokenFlows(flows, econ)
+  return json(200, { pnl: p, snapshot, tokens, netUsd } satisfies PnlResponse)
 }
 
 // ── write handlers ──────────────────────────────────────────────────────────────
 
-const onboardingChat: RouteHandler = async ({ opts, session }, req) => {
+const onboardingChat: RouteHandler = async ({ dataDir, opts, session }, req) => {
   const chatModel = opts.resolveChatModel?.() ?? null
   const turn = opts.onboardingTurn ?? (chatModel ? defaultOnboardingTurn(chatModel) : null)
   if (!turn) return json(503, { error: 'onboarding chat unavailable — node started without an LLM model' })
   const b = req.body as { message?: string; reset?: boolean }
   if (b?.reset) {
     session.messages = []; session.draft = null; session.finalized = null
+    clearOnboardingSession(dataDir)
     return json(200, { reset: true })
   }
   if (session.messages.length === 0) session.messages = seedOnboardingMessages()
@@ -335,6 +350,8 @@ const onboardingChat: RouteHandler = async ({ opts, session }, req) => {
   }
   if (r.draft) session.draft = { ...(session.draft ?? {}), ...r.draft }
   if (r.finalized) { session.finalized = r.finalized; session.draft = r.finalized }
+  // Persist after every turn so refresh/restart resumes the interview.
+  saveOnboardingSession(dataDir, session)
   return json(200, { reply: r.text, draft: session.draft, finalized: session.finalized } satisfies OnboardingChatView)
 }
 
@@ -345,6 +362,7 @@ const onboardingConfirm: RouteHandler = ({ dataDir, session }, req) => {
   if (!v.ok) return json(400, { error: v.error })
   persistOnboarding(dataDir, buildStrategyConfig(v.answers))
   session.messages = []; session.draft = null; session.finalized = null
+  clearOnboardingSession(dataDir) // interview done — nothing to resume
   return json(200, { saved: true })
 }
 
@@ -437,6 +455,7 @@ const strategySave: RouteHandler = ({ dataDir }, req) => {
 
 export const routes: Route[] = [
   { method: 'GET', path: '/api/onboarding/status', handler: onboardingStatus },
+  { method: 'GET', path: '/api/onboarding/session', handler: onboardingSession },
   { method: 'GET', path: '/api/activity', handler: activity },
   { method: 'GET', path: '/api/config', handler: config },
   { method: 'GET', path: '/api/agent', handler: agent },
