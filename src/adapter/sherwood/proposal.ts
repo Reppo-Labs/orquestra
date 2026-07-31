@@ -209,13 +209,21 @@ export function buildProposalPrompt(
       `Morpho to borrow the stable leg, or hedge LP stock exposure with a Lighter perp. Never invent a lending market.\n`
     : ''
   const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
+  // LIVE-derived legal values for pair.borrowed_asset — the same set the
+  // post-generation gate enforces (borrowableAssets). Deliberately not
+  // hardcoded: when Morpho lists a new loan asset, both the prompt and the
+  // gate widen on the next fetch. Making the enum explicit at the point of
+  // use matters: prose rules lost to "exotic legs" operator steering once
+  // (the model proposed borrowing NVDA — generated, gated, cycle wasted).
+  const borrowList = [...borrowableAssets(lendingMarkets)].sort().join(', ')
   const lendingSection = lendingMarkets.length > 0
     ? `\n# Live Morpho Blue lending markets on Robinhood Chain (the ONLY borrow venue)\n` +
       lendingMarkets
         .filter((m) => m.liquidityUsd >= 1_000 || m.borrowedUsd >= 1_000)
         .map((m) => `- collateral ${m.collateralSymbol} → borrow ${m.loanSymbol} — LLTV ${pct(m.lltv)}, borrow APY ${pct(m.borrowApy)}, lendable $${Math.round(m.liquidityUsd).toLocaleString('en-US')}`)
         .join('\n') +
-      `\nOnly the loan assets above are borrowable. Account for the borrow APY in expected_roe_bps, and size ` +
+      `\nBORROWABLE ASSETS — the ONLY legal values for pair.borrowed_asset: ${borrowList || '(none — omit pair strategies this cycle)'}. ` +
+      `Tokenized stocks are collateral, never borrowable. Account for the borrow APY in expected_roe_bps, and size ` +
       `borrow legs within the market's lendable liquidity.\n`
     : ''
   // Without this section the model converges on its one best idea every cycle
@@ -236,6 +244,7 @@ export function buildProposalPrompt(
     lendingSection +
     `\nPropose up to ${s.topN} DISTINCT strategies. For each: a short title (max 50 chars, the pod name), ` +
     `all template fields, capital_range_usd sized WITHIN the cited pool's liquidity (a $500k pool cannot absorb a $2M strategy), ` +
+    `${borrowList ? `pair.borrowed_asset MUST be one of: ${borrowList} (proposals borrowing anything else are auto-rejected), ` : ''}` +
     `expected_roe_bps NET of borrow costs for pair strategies, and self_score 1-10 for how well it meets the ` +
     `datanet's scoring criteria (completeness, feasibility, risk coherence, novelty).`
   return { system, prompt }

@@ -166,4 +166,21 @@ describe('buildProposalPrompt', () => {
     const { prompt } = buildProposalPrompt(pools, rubric, strategy, [], [])
     expect(prompt).not.toContain('Already minted')
   })
+
+  it('derives the legal borrowed-asset enum from LIVE lending data (never hardcoded)', () => {
+    const markets = [
+      { collateralSymbol: 'TSLA', collateralName: 'Tesla', loanSymbol: 'USDG', lltv: 0.77, borrowApy: 0.016, liquidityUsd: 50_000, borrowedUsd: 12 },
+      { collateralSymbol: 'WETH', collateralName: 'WETH', loanSymbol: 'wUSDX', lltv: 0.9, borrowApy: 0.02, liquidityUsd: 90_000, borrowedUsd: 0 },
+    ]
+    const { prompt } = buildProposalPrompt(pools, rubric, strategy, markets)
+    // A newly listed Morpho loan asset (wUSDX) appears automatically.
+    expect(prompt).toContain('BORROWABLE ASSETS — the ONLY legal values for pair.borrowed_asset: USDG, WUSDX')
+    expect(prompt).toContain('pair.borrowed_asset MUST be one of: USDG, WUSDX')
+  })
+
+  it('no lending data → no borrowable enum and no MUST clause (gate is off too — consistent)', () => {
+    const { prompt } = buildProposalPrompt(pools, rubric, strategy, [])
+    expect(prompt).not.toContain('BORROWABLE ASSETS')
+    expect(prompt).not.toContain('MUST be one of')
+  })
 })
