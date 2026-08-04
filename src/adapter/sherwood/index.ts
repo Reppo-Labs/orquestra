@@ -2,6 +2,8 @@
 import type { LanguageModel } from 'ai'
 import { fetchRobinhoodPools, type PoolInfo } from './pools.js'
 import { fetchMorphoMarkets, type MorphoMarket } from './morpho.js'
+import { fetchMetrics, type PoolMetrics } from './metrics.js'
+import { venueRejectReason, type Venue } from './derive.js'
 import { synthesizeProposals, type SherwoodStrategy, type ProposalOut } from './proposal.js'
 import { filterNovel } from '../dedup.js'
 import { filterNovelSemantic } from '../semanticDedup.js'
@@ -15,6 +17,9 @@ export interface SherwoodDeps {
   getModel?: () => LanguageModel | undefined
   fetchPools?: () => Promise<PoolInfo[]>
   fetchLendingMarkets?: () => Promise<MorphoMarket[]>
+  /** Trailing OHLCV statistics per pool — the measured inputs bands, gates and
+   *  returns are derived from. A pool this cannot measure is not offered. */
+  fetchMetrics?: (addresses: string[]) => Promise<Map<string, PoolMetrics>>
   generate?: (args: { system: string; prompt: string }) => Promise<ProposalOut>
   /** Don't hit GeckoTerminal more than once per interval (default 30 min) —
    *  armed only on a successful fetch so a transient failure retries next cycle. */
@@ -32,6 +37,18 @@ const STRATEGY_DEFAULTS: SherwoodStrategy = {
 const DEFAULT_MIN_FETCH_INTERVAL_MS = 30 * 60_000
 /** Pools thinner than this can't absorb a strategy worth minting about. */
 const DEFAULT_MIN_POOL_LIQUIDITY_USD = 10_000
+/** How many pools we care to have measurements for, ranked RWA-first. */
+const DEFAULT_MAX_MEASURED_POOLS = 10
+/** New measurements per cycle. Measured live: ten paced OHLCV calls took 173s
+ *  because GeckoTerminal's limiter trips even at 2.1s spacing and each 429
+ *  costs a 30s floor. Measuring the whole set in one cycle would stall the
+ *  cycle for minutes, so coverage is built up a few pools at a time and the
+ *  venues already measured are offered meanwhile. */
+const MEASUREMENTS_PER_CYCLE = 3
+/** Hard ceiling on the measurement phase within a cycle. */
+const METRICS_DEADLINE_MS = 45_000
+/** Daily candles age slowly; re-measuring more often than this buys nothing. */
+const METRICS_TTL_MS = 6 * 60 * 60_000
 
 /** Operator-tunable sherwood params, as they arrive on AdapterContext.strategy
  *  (config datanets[id].adapterParams merged with the live brief). */
@@ -64,6 +81,9 @@ export function parseSherwoodParams(raw: Record<string, unknown> | undefined): S
 export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
   const fetchPools = deps.fetchPools ?? fetchRobinhoodPools
   const fetchLending = deps.fetchLendingMarkets ?? fetchMorphoMarkets
+  const fetchMeasurements = deps.fetchMetrics
+    ?? ((addrs: string[]) => fetchMetrics(addrs, { max: addrs.length, deadlineMs: METRICS_DEADLINE_MS }))
+  const maxMeasured = DEFAULT_MAX_MEASURED_POOLS
   const minInterval = deps.minFetchIntervalMs ?? DEFAULT_MIN_FETCH_INTERVAL_MS
   const now = deps.now ?? (() => Date.now())
   // Both upstreams refresh together — one throttle slot; the instance persists
@@ -71,6 +91,10 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
   let lastFetchAt: number | undefined
   let lastPools: PoolInfo[] = []
   let lastLending: MorphoMarket[] = []
+  /** Measurements accumulate ACROSS cycles rather than being swept in one go —
+   *  see MEASUREMENTS_PER_CYCLE. Keyed by pool address, stamped so entries can
+   *  expire on METRICS_TTL_MS. */
+  const measured = new Map<string, { m: PoolMetrics; at: number }>()
   return {
     id: 'sherwood',
     async discover(ctx: AdapterContext): Promise<CandidatePod[]> {
@@ -111,15 +135,82 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
         lastLending = lending
       }
 
-      const liquid = pools.filter((p) => p.reserveUsd >= minLiquidity)
-      if (liquid.length === 0) return []
+      // Which pools we WANT measurements for: RWA-first, then deepest. The
+      // datanet prizes tokenized-equity strategies, so those get measured even
+      // when a meme pair is deeper.
+      const ranked = pools
+        .filter((p) => p.reserveUsd >= minLiquidity)
+        .sort((a, b) => {
+          const rwa = (p: PoolInfo): number => (p.base?.isTokenizedStock || p.quote?.isTokenizedStock ? 1 : 0)
+          return rwa(b) - rwa(a) || b.reserveUsd - a.reserveUsd
+        })
+        .slice(0, maxMeasured)
+
+      // Measure a few per cycle, oldest first, and offer whatever is already
+      // measured meanwhile. A per-pool failure is silent: an unmeasurable pool
+      // is simply not offered, never defaulted.
+      const wanted = new Set(ranked.map((p) => p.address))
+      for (const addr of [...measured.keys()]) {
+        if (!wanted.has(addr)) measured.delete(addr) // pool left the live set
+      }
+      const stale = ranked
+        .filter((p) => {
+          const e = measured.get(p.address)
+          return !e || t - e.at >= METRICS_TTL_MS
+        })
+        .slice(0, MEASUREMENTS_PER_CYCLE)
+        .map((p) => p.address)
+      if (stale.length > 0) {
+        const fresh = await fetchMeasurements(stale).catch((e: unknown) => {
+          console.error(`orquestra: sherwood metrics fetch failed (venues measured in earlier cycles still apply) — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
+          return new Map<string, PoolMetrics>()
+        })
+        for (const [addr, m] of fresh) measured.set(addr, { m, at: t })
+      }
+
+      // A venue is a pool PAIRED WITH its measurements. Unmeasured pools are
+      // dropped rather than defaulted: without σ there is no band input, and a
+      // band with no input is exactly the hardcoded constant this design
+      // removes. Decaying venues are dropped here too — the original strategy
+      // had an exit rule for collapsing volume but no entry rule, so nothing
+      // stopped it entering a venue that was visibly dying and tripping its own
+      // exit on day one.
+      const venues: Venue[] = []
+      for (const pool of ranked) {
+        const entry = measured.get(pool.address)
+        if (!entry) continue
+        const v: Venue = { pool, metrics: entry.m }
+        const reject = venueRejectReason(v)
+        if (reject) {
+          console.error(`orquestra: sherwood venue ${pool.name} not offered — ${reject}`)
+          continue
+        }
+        venues.push(v)
+      }
+      if (venues.length === 0) {
+        console.error('orquestra: sherwood — no measurable, non-decaying venue this cycle; nothing to propose')
+        return []
+      }
 
       // Resolve the model LIVE, once per discover — synthesis and semantic dedup share it.
       const model = deps.getModel?.()
-      const cands = await synthesizeProposals(liquid, ctx.rubric, ctx.datanetId, strategy, {
-        model,
-        generate: deps.generate,
-      }, lending, ctx.existingPodNames ?? [])
+      const cands = await synthesizeProposals(
+        {
+          venues,
+          rubric: ctx.rubric,
+          datanetId: ctx.datanetId,
+          strategy,
+          lendingMarkets: lending,
+          existingPodNames: ctx.existingPodNames ?? [],
+          // When the pool snapshot was actually FETCHED, not when this cycle
+          // ran — within the throttle window they differ by up to 30 minutes,
+          // and stamping the cycle time would restate a half-hour-old TVL as
+          // current. That is the same defect (a point-in-time reading written
+          // as a standing property) the evidence block exists to prevent.
+          asOf: new Date(lastFetchAt ?? t).toISOString(),
+        },
+        { model, generate: deps.generate },
+      )
       // Exact-name pre-filter: strategy titles are short (2 significant words),
       // below filterNovel's shared-word floor — an identical title would slip
       // through the overlap backstop and re-mint. Names are the visible dedup

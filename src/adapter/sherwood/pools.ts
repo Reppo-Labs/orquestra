@@ -106,6 +106,36 @@ export function parsePools(body: unknown): PoolInfo[] {
   return out
 }
 
+/** A pool whose 24h volume exceeds this multiple of its TVL is a data artifact,
+ *  not a venue. Live Robinhood Chain pools sit well under it (the busiest,
+ *  USDG/WETH 0.01%, runs ~16x; the meme tail ~40x; measured 2026-08-04). */
+export const MAX_VOLUME_TVL_RATIO = 200
+
+/** Input sanity bounds. GeckoTerminal serves degenerate rows — e.g.
+ *  "VLAD / GME 1%" with TVL $0 and volume 1.5e28. Any selection rule that
+ *  ranks on a COMPUTED RATIO (fee/TVL, volume/TVL) picks that row first, every
+ *  time, which turns the price feed into an attack surface against our own
+ *  ranker. Bound the inputs before anything ranks on them. */
+export function isSanePool(p: PoolInfo): boolean {
+  if (!Number.isFinite(p.reserveUsd) || p.reserveUsd <= 0) return false
+  if (!Number.isFinite(p.volumeUsd24h) || p.volumeUsd24h < 0) return false
+  return p.volumeUsd24h <= p.reserveUsd * MAX_VOLUME_TVL_RATIO
+}
+
+/** Drop rows failing the sanity bounds. */
+export const sanePools = (pools: PoolInfo[]): PoolInfo[] => pools.filter(isSanePool)
+
+/** Swap fee as a fraction, parsed from the GeckoTerminal pool name suffix
+ *  ("nvda / USDG 0.05%" -> 0.0005). Undefined when the name carries no tier —
+ *  fee income is then unmeasurable and the pool cannot back a fee-yield claim. */
+export function feeTierFromName(name: string): number | undefined {
+  const m = /(\d+(?:\.\d+)?)\s*%\s*$/.exec(name.trim())
+  if (!m) return undefined
+  const pct = Number(m[1])
+  if (!Number.isFinite(pct) || pct <= 0 || pct > 100) return undefined
+  return pct / 100
+}
+
 /** Unique tokenized-equity tokens present across the fetched pools. */
 export function tokenizedStocks(pools: PoolInfo[]): TokenRef[] {
   const seen = new Map<string, TokenRef>()
@@ -132,7 +162,14 @@ export async function fetchRobinhoodPools(
     try {
       const res = await fetchImpl(
         `${BASE}/networks/robinhood/pools?page=${page}&include=base_token,quote_token`,
-        { headers: { accept: 'application/json' }, signal: ctrl.signal },
+        // Identify ourselves: the API 403s some default agents outright.
+        {
+          headers: {
+            accept: 'application/json',
+            'user-agent': 'orquestra-sherwood-adapter/1.0 (+https://github.com/Reppo-Labs/orquestra)',
+          },
+          signal: ctrl.signal,
+        },
       )
       if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}`)
       return parsePools(await res.json())
@@ -151,7 +188,9 @@ export async function fetchRobinhoodPools(
       break // tail pages are best-effort
     }
   }
-  // Dedup by pool address (defensive: pages can shift between requests).
+  // Dedup by pool address (defensive: pages can shift between requests), then
+  // bound the inputs — every downstream consumer ranks or divides by these
+  // numbers, so degenerate rows must not survive the fetch boundary.
   const seen = new Set<string>()
-  return out.filter((p) => (seen.has(p.address) ? false : (seen.add(p.address), true)))
+  return sanePools(out.filter((p) => (seen.has(p.address) ? false : (seen.add(p.address), true))))
 }

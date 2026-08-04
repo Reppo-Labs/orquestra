@@ -1,6 +1,14 @@
 // src/adapter/sherwood/pools.test.ts
 import { describe, it, expect } from 'vitest'
-import { parsePools, tokenizedStocks, fetchRobinhoodPools } from './pools.js'
+import {
+  parsePools,
+  tokenizedStocks,
+  fetchRobinhoodPools,
+  isSanePool,
+  sanePools,
+  feeTierFromName,
+  type PoolInfo,
+} from './pools.js'
 
 // Shape mirrors GeckoTerminal /networks/robinhood/pools?include=base_token,quote_token
 // (verified live; the "(Robinhood Tokenized Stock)" name marker is the RWA classifier).
@@ -86,7 +94,8 @@ describe('fetchRobinhoodPools', () => {
     }) as unknown as typeof fetch
     const pools = await fetchRobinhoodPools(fetchImpl, 3)
     expect(calls).toHaveLength(3)
-    expect(pools).toHaveLength(2) // dedup collapsed the repeat page
+    // dedup collapsed the repeat page; the TVL-$0 row died at the sanity bound
+    expect(pools.map((p) => p.address)).toEqual(['0xpool-nvda'])
     expect(calls[0]).toContain('include=base_token,quote_token')
   })
 
@@ -99,6 +108,45 @@ describe('fetchRobinhoodPools', () => {
       throw new Error('429')
     }) as unknown as typeof fetch
     const pools = await fetchRobinhoodPools(failTail, 3)
-    expect(pools).toHaveLength(2) // page 1 delivered despite tail blip
+    expect(pools).toHaveLength(1) // page 1 delivered despite tail blip
+  })
+})
+
+describe('isSanePool / sanePools', () => {
+  const base: PoolInfo = { name: 'X / Y 1%', address: '0x1', dex: 'd', reserveUsd: 100_000, volumeUsd24h: 200_000 }
+
+  it('accepts a normal venue', () => {
+    expect(isSanePool(base)).toBe(true)
+  })
+
+  it('rejects the poisoned row a fee/TVL ranker would pick first (TVL $0, vol 1.5e28)', () => {
+    const vlad: PoolInfo = { ...base, name: 'VLAD / GME 1%', reserveUsd: 0, volumeUsd24h: 1.5e28 }
+    expect(isSanePool(vlad)).toBe(false)
+    // and it must not survive into anything that ranks
+    expect(sanePools([base, vlad])).toEqual([base])
+  })
+
+  it('rejects impossible volume/TVL ratios even with non-zero TVL', () => {
+    expect(isSanePool({ ...base, reserveUsd: 1, volumeUsd24h: 1e9 })).toBe(false)
+    // the busiest live pool (~16x) stays well inside the bound
+    expect(isSanePool({ ...base, reserveUsd: 6_538_230, volumeUsd24h: 102_686_898 })).toBe(true)
+  })
+
+  it('rejects non-finite and negative inputs', () => {
+    expect(isSanePool({ ...base, reserveUsd: Number.NaN })).toBe(false)
+    expect(isSanePool({ ...base, volumeUsd24h: Number.POSITIVE_INFINITY })).toBe(false)
+    expect(isSanePool({ ...base, volumeUsd24h: -1 })).toBe(false)
+  })
+})
+
+describe('feeTierFromName', () => {
+  it('parses the tier suffix GeckoTerminal puts on the pool name', () => {
+    expect(feeTierFromName('nvda / USDG 0.05%')).toBe(0.0005)
+    expect(feeTierFromName('WOOD / WETH 0.3%')).toBe(0.003)
+    expect(feeTierFromName('TYGR / WETH 1%')).toBe(0.01)
+  })
+  it('undefined when no tier is present — fee yield is then unmeasurable', () => {
+    expect(feeTierFromName('WOOD / WETH')).toBeUndefined()
+    expect(feeTierFromName('weird 0%')).toBeUndefined()
   })
 })
