@@ -10,6 +10,22 @@ const txLink = (r: ActivityRow) =>
 const pillClass = (r: ActivityRow) =>
   r.kind === 'vote' ? (r.direction === 'up' || r.direction === 'down' ? r.direction : 'vote') : r.kind
 
+/** What a claim actually paid, named by the token it paid in. Most datanets
+ *  emit REPPO, but not all — datanet 3 (Sherwood) pays WOOD — and hardcoding
+ *  the symbol reported a real 737 WOOD payout as "0 REPPO", i.e. as if the
+ *  claim had earned nothing. Both legs can be present, so read the row rather
+ *  than assume which one applies. */
+const claimAmount = (r: ActivityRow): string => {
+  const legs: string[] = []
+  if (r.reppoClaimed) legs.push(`${fmt(r.reppoClaimed)} REPPO`)
+  if (r.claimedTokenSymbol && r.claimedTokenAmount) {
+    legs.push(`${fmt(r.claimedTokenAmount)} ${r.claimedTokenSymbol}`)
+  }
+  // No measurable leg. Say that without naming a token — which token this claim
+  // would have paid is precisely what is unknown here.
+  return legs.length > 0 ? legs.join(' + ') : 'nothing claimed'
+}
+
 const detail = (r: ActivityRow) =>
   r.kind === 'vote'
     ? (r.direction ? `${r.direction} · conv ${r.conviction} · ${r.reason ?? ''}` : (r.detail || '—'))
@@ -20,7 +36,7 @@ const detail = (r: ActivityRow) =>
     // 50 EXY"; stake carries "topped up veREPPO 1031 → 2000 (+969, 30d)"; info carries the
     // per-datanet emission-yield summary (src/voter/yield.ts formatYieldLine).
     : r.kind === 'skip' || r.kind === 'grant' || r.kind === 'stake' || r.kind === 'info' ? (r.reason ?? '—')
-    : `epoch ${r.epoch} · ${fmt(r.reppoClaimed)} REPPO`
+    : `epoch ${r.epoch} · ${claimAmount(r)}`
 
 /** Pod column: prefer the human-readable name; fall back to the id for entries
  *  logged before names were recorded. */
