@@ -64,15 +64,35 @@ const toNum = (v: string | undefined): number => {
   return Number.isFinite(n) ? n : 0
 }
 
+/** Token names and symbols are ATTACKER-CONTROLLED: anyone who can deploy an
+ *  ERC-20 and a pool on 4663 chooses these strings, and they are rendered as
+ *  the venue list inside the synthesis prompt. A newline in a token name would
+ *  otherwise forge a venue or lending line in that list. Collapse control
+ *  characters and whitespace, and bound the length so one row cannot crowd out
+ *  the rest of the prompt. (A forged venue would not resolve in
+ *  `resolveProposal`, so the blast radius was wasted cycles and misleading
+ *  thesis prose rather than a bad number — but structured text a stranger can
+ *  write into should not be forgeable at all.) */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\ufeff]/g
+const MAX_LABEL_LEN = 120
+export const sanitizeLabel = (s: string, max = MAX_LABEL_LEN): string =>
+  s.replace(CONTROL_CHARS, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
+
+/** Identifiers get interpolated into evidence sources and a GeckoTerminal URL,
+ *  so a row whose address is not a plain identifier is dropped rather than
+ *  rewritten — a mangled address would resolve to nothing anyway. */
+const isUsableIdentifier = (s: string): boolean => /^[0-9a-zA-Z._:-]{1,80}$/.test(s)
+
 function tokenIndex(body: unknown): Map<string, TokenRef> {
   const included = (body as { included?: RawTokenRow[] })?.included
   const map = new Map<string, TokenRef>()
   if (!Array.isArray(included)) return map
   for (const t of included) {
     if (t?.type !== 'token' || !t.id || !t.attributes?.address) continue
-    const name = t.attributes.name ?? ''
+    if (!isUsableIdentifier(t.attributes.address)) continue
+    const name = sanitizeLabel(t.attributes.name ?? '')
     map.set(t.id, {
-      symbol: t.attributes.symbol ?? '',
+      symbol: sanitizeLabel(t.attributes.symbol ?? '', 32),
       name,
       address: t.attributes.address,
       isTokenizedStock: name.includes(TOKENIZED_STOCK_MARKER),
@@ -91,12 +111,15 @@ export function parsePools(body: unknown): PoolInfo[] {
   for (const r of rows) {
     const a = r?.attributes
     if (!a?.name || !a?.address) continue
+    if (!isUsableIdentifier(a.address)) continue
+    const name = sanitizeLabel(a.name)
+    if (!name) continue
     const base = tokens.get(r.relationships?.base_token?.data?.id ?? '')
     const quote = tokens.get(r.relationships?.quote_token?.data?.id ?? '')
     out.push({
-      name: a.name,
+      name,
       address: a.address,
-      dex: r.relationships?.dex?.data?.id ?? 'unknown',
+      dex: sanitizeLabel(r.relationships?.dex?.data?.id ?? 'unknown', 64) || 'unknown',
       reserveUsd: toNum(a.reserve_in_usd),
       volumeUsd24h: toNum(a.volume_usd?.h24),
       ...(base ? { base } : {}),
@@ -104,6 +127,48 @@ export function parsePools(body: unknown): PoolInfo[] {
     })
   }
   return out
+}
+
+/** A pool whose 24h volume exceeds this multiple of its TVL is a data artifact,
+ *  not a venue. Live Robinhood Chain pools sit well under it (the busiest,
+ *  USDG/WETH 0.01%, runs ~16x; the meme tail ~40x; measured 2026-08-04). */
+export const MAX_VOLUME_TVL_RATIO = 200
+
+/** Input sanity bounds. GeckoTerminal serves degenerate rows — e.g.
+ *  "VLAD / GME 1%" with TVL $0 and volume 1.5e28. Any selection rule that
+ *  ranks on a COMPUTED RATIO (fee/TVL, volume/TVL) picks that row first, every
+ *  time, which turns the price feed into an attack surface against our own
+ *  ranker. Bound the inputs before anything ranks on them. */
+export function isSanePool(p: PoolInfo): boolean {
+  if (!Number.isFinite(p.reserveUsd) || p.reserveUsd <= 0) return false
+  if (!Number.isFinite(p.volumeUsd24h) || p.volumeUsd24h < 0) return false
+  return p.volumeUsd24h <= p.reserveUsd * MAX_VOLUME_TVL_RATIO
+}
+
+/** Drop rows failing the sanity bounds. */
+export const sanePools = (pools: PoolInfo[]): PoolInfo[] => pools.filter(isSanePool)
+
+/** No DEX on this chain charges more than this. The fee tier is the one number
+ *  in the pipeline still parsed out of an attacker-controllable STRING, and it
+ *  multiplies straight into `feeApr` → `expected_roe_bps` on a minted pod — so
+ *  an implausible tier has to read as "no tier", never as a huge one. */
+export const MAX_FEE_TIER = 0.03
+
+/** Swap fee as a fraction, parsed from the GeckoTerminal pool name suffix
+ *  ("nvda / USDG 0.05%" -> 0.0005). Undefined when the name carries no tier —
+ *  fee income is then unmeasurable and the pool cannot back a fee-yield claim.
+ *
+ *  The percentage must be its own token in the name. Without that separator, a
+ *  pool with no DEX fee suffix whose token symbol ends in digits and a `%`
+ *  ("SCAM / EVIL100%" — both fields chosen by whoever deployed the token)
+ *  parsed as a 100% fee tier and inflated the published fee APR ~2000x. */
+export function feeTierFromName(name: string): number | undefined {
+  const m = name.trim().match(/(?:^|\s)(\d+(?:\.\d+)?)\s*%$/)
+  if (!m) return undefined
+  const pct = Number(m[1])
+  if (!Number.isFinite(pct) || pct <= 0) return undefined
+  const tier = pct / 100
+  return tier > MAX_FEE_TIER ? undefined : tier
 }
 
 /** Unique tokenized-equity tokens present across the fetched pools. */
@@ -132,7 +197,14 @@ export async function fetchRobinhoodPools(
     try {
       const res = await fetchImpl(
         `${BASE}/networks/robinhood/pools?page=${page}&include=base_token,quote_token`,
-        { headers: { accept: 'application/json' }, signal: ctrl.signal },
+        // Identify ourselves: the API 403s some default agents outright.
+        {
+          headers: {
+            accept: 'application/json',
+            'user-agent': 'orquestra-sherwood-adapter/1.0 (+https://github.com/Reppo-Labs/orquestra)',
+          },
+          signal: ctrl.signal,
+        },
       )
       if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}`)
       return parsePools(await res.json())
@@ -151,7 +223,9 @@ export async function fetchRobinhoodPools(
       break // tail pages are best-effort
     }
   }
-  // Dedup by pool address (defensive: pages can shift between requests).
+  // Dedup by pool address (defensive: pages can shift between requests), then
+  // bound the inputs — every downstream consumer ranks or divides by these
+  // numbers, so degenerate rows must not survive the fetch boundary.
   const seen = new Set<string>()
-  return out.filter((p) => (seen.has(p.address) ? false : (seen.add(p.address), true)))
+  return sanePools(out.filter((p) => (seen.has(p.address) ? false : (seen.add(p.address), true))))
 }
