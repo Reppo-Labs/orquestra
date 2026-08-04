@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { queryVoterClaimableOnchain, type VoterScanCache } from './emissionsOnchain.js'
+import { MULTICALL3_ADDRESS, resetMulticallAvailabilityCache } from './multicall.js'
 
 const SEL = {
   currentEpoch: '0x76671808',
@@ -64,6 +65,97 @@ function fakeFetch(opts: {
 }
 const jsonOk = (result: string) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }), { status: 200 })
 const jsonErr = (message: string) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message } }), { status: 200 })
+
+/** ABI-decode an aggregate3 REQUEST into its inner calls. */
+function decodeAggregate3Request(data: string): { to: string; data: string }[] {
+  const h = data.replace(/^0x/, '').slice(8) // strip selector
+  const uintAt = (off: number) => Number(BigInt('0x' + h.slice(off * 2, off * 2 + 64)))
+  const arr = uintAt(0)
+  const n = uintAt(arr)
+  const base = arr + 32
+  const calls: { to: string; data: string }[] = []
+  for (let i = 0; i < n; i++) {
+    const el = base + uintAt(base + 32 * i)
+    const to = '0x' + h.slice(el * 2 + 24, el * 2 + 64)
+    const bytesAt = el + uintAt(el + 64)
+    const len = uintAt(bytesAt)
+    calls.push({ to, data: '0x' + h.slice((bytesAt + 32) * 2, (bytesAt + 32 + len) * 2) })
+  }
+  return calls
+}
+
+/** ABI-encode an aggregate3 RESULT: (bool success, bytes returnData)[]. */
+function encodeAggregate3Result(results: { success: boolean; returnData: string }[]): string {
+  const heads: string[] = []
+  const tails: string[] = []
+  let off = 32 * results.length
+  for (const r of results) {
+    heads.push(word(BigInt(off)))
+    const data = r.returnData.replace(/^0x/, '')
+    const padded = data.length % 64 === 0 ? data : data + '0'.repeat(64 - (data.length % 64))
+    const elem = word(r.success ? 1n : 0n) + word(0x40n) + word(BigInt(data.length / 2)) + padded
+    tails.push(elem)
+    off += elem.length / 2
+  }
+  return '0x' + word(0x20n) + word(BigInt(results.length)) + heads.join('') + tails.join('')
+}
+
+/** Make Multicall3 "deployed" over an existing fake fetch: answers the code probe, unpacks
+ *  aggregate3 requests and routes every inner call through the inner fake — batched and
+ *  serial paths therefore share the exact same per-selector fixtures. */
+function mcWrap(inner: typeof fetch): typeof fetch & { _mc: { aggregates: number; directSelectors: string[] } } {
+  const _mc = { aggregates: 0, directSelectors: [] as string[] }
+  const f = (async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; params?: [{ to?: string; data?: string }] }
+    if (body.method === 'eth_getCode') return jsonOk('0x6080')
+    const p0 = body.params?.[0]
+    if (body.method === 'eth_call' && p0?.to?.toLowerCase() === MULTICALL3_ADDRESS.toLowerCase()) {
+      _mc.aggregates++
+      const results: { success: boolean; returnData: string }[] = []
+      for (const c of decodeAggregate3Request(p0.data ?? '')) {
+        const r = await (inner as unknown as (u: string, i: { body: string }) => Promise<Response>)(
+          url, { body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: c.to, data: c.data }, 'latest'] }) })
+        const j = (await r.json()) as { result?: string; error?: unknown }
+        results.push(j.error ? { success: false, returnData: '0x' } : { success: true, returnData: j.result ?? '0x' })
+      }
+      return jsonOk(encodeAggregate3Result(results))
+    }
+    if (body.method === 'eth_call' && p0?.data) _mc.directSelectors.push(p0.data.slice(0, 10))
+    return (inner as unknown as (u: string, i?: RequestInit) => Promise<Response>)(url, init)
+  }) as unknown as typeof fetch & { _mc: typeof _mc }
+  f._mc = _mc
+  return f
+}
+
+describe('queryVoterClaimableOnchain — multicall path', () => {
+  beforeEach(() => resetMulticallAvailabilityCache())
+
+  it('finds the same claimables as the serial path, batching gates and keeping claim probes serial', async () => {
+    const opts = {
+      current: 107n, votedEpochs: new Set([104, 105]), votedPodEpochs: new Set(['105:50', '104:51']),
+      claimableEpochs: new Set(['105:50', '104:51']),
+    }
+    const serial = await queryVoterClaimableOnchain('rpc', W, ['50', '51'], undefined, { fetchImpl: fakeFetch(opts) })
+    const mc = mcWrap(fakeFetch(opts))
+    const batched = await queryVoterClaimableOnchain('rpc-mc', W, ['50', '51'], undefined, { fetchImpl: mc })
+    expect(batched).toEqual(serial)
+    expect(serial.map((e) => `${e.epoch}:${e.podId}`).sort()).toEqual(['104:51', '105:50'])
+    expect(mc._mc.aggregates).toBe(2) // one votesCasted batch + one gate-grid batch
+    // gates went through the aggregate; only currentEpoch and the msg.sender-dependent
+    // claim probes were issued as direct eth_calls
+    expect(mc._mc.directSelectors).not.toContain(SEL.votesCasted)
+    expect(mc._mc.directSelectors).not.toContain(SEL.voterUp)
+    expect(mc._mc.directSelectors).not.toContain(SEL.hasVoterClaimed)
+    expect(mc._mc.directSelectors.filter((s) => s === SEL.claimVoter)).toHaveLength(2)
+  })
+
+  it('an inner gate failure reads as "not active / no votes", matching serial catch semantics', async () => {
+    // votedEpochs empty → every votesCasted inner call returns 0 → no active epochs → no claims
+    const mc = mcWrap(fakeFetch({ current: 107n, votedEpochs: new Set(), votedPodEpochs: new Set(), claimableEpochs: new Set() }))
+    expect(await queryVoterClaimableOnchain('rpc-mc2', W, ['50'], undefined, { fetchImpl: mc })).toEqual([])
+    expect(mc._mc.directSelectors).not.toContain(SEL.claimVoter) // nothing probed
+  })
+})
 
 describe('queryVoterClaimableOnchain', () => {
   it('claims an active epoch where the wallet voted the pod and a reward is due', async () => {

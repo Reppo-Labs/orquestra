@@ -21,6 +21,7 @@ import { readProposals, setProposalStatus, setLearnEnabled, clearLessons } from 
 import { runStrategyChat, type ChatMessage } from './strategyChat.js'
 import { queryLockConstraints, type LockConstraints } from '../reppo/queryLockConstraints.js'
 import { listDatanetsJson } from '../reppo/listDatanets.js'
+import type { DatanetSummary } from '../reppo/reader.js'
 import { needsOnboarding, persistOnboarding } from '../onboarding/persist.js'
 import { clearOnboardingSession, saveOnboardingSession, sessionView } from './onboardingSession.js'
 import { buildStrategyConfig } from '../onboarding/build.js'
@@ -55,6 +56,10 @@ export interface DashboardOpts {
    *  it works even though the dashboard starts before the scheduler exists — index.ts wires
    *  a lazy closure. Absent (or returns { started:false }) before the scheduler is up. */
   triggerCycle?: () => { started: boolean; reason?: string }
+  /** Datanet list read. Defaults to the uncached CLI call; index.ts wires the shared
+   *  TTL-cached ReppoReader so /api/datanets shares its freshness policy with the cycle
+   *  instead of keeping its own separate cache. */
+  listDatanets?: () => Promise<DatanetSummary[]>
 }
 
 /** One in-memory onboarding conversation per server (single-operator node).
@@ -158,17 +163,18 @@ async function getLockConstraints(): Promise<LockConstraints | undefined> {
   } catch { return undefined }
 }
 
-// Datanet id→name map, cached: names change rarely and the CLI call is slow.
-let netNamesCache: { at: number; names: Record<string, string> } | null = null
-async function datanetNames(): Promise<Record<string, string>> {
-  if (netNamesCache && Date.now() - netNamesCache.at < 10 * 60_000) return netNamesCache.names
+// Datanet id→name map. Freshness policy (TTL) lives on the injected reader (index.ts
+// wires the shared cached ReppoReader — openspec change reduce-rpc-calls); this only
+// keeps a last-good fallback so a transient CLI/RPC failure serves stale, not empty.
+let lastGoodNames: Record<string, string> | null = null
+async function datanetNames(listDatanets: () => Promise<DatanetSummary[]>): Promise<Record<string, string>> {
   try {
-    const nets = await listDatanetsJson()
+    const nets = await listDatanets()
     const names = Object.fromEntries(nets.map((n) => [n.id, n.name]))
-    netNamesCache = { at: Date.now(), names }
+    lastGoodNames = names
     return names
   } catch {
-    return netNamesCache?.names ?? {} // tolerate CLI/RPC failure; serve stale or empty
+    return lastGoodNames ?? {}
   }
 }
 
@@ -298,7 +304,8 @@ const health: RouteHandler = ({ dataDir }) => {
   return json(200, buildHealth(readActivitySince(dataDir, since), { sinceMs: since }) satisfies HealthReport)
 }
 
-const datanets: RouteHandler = async () => json(200, await datanetNames() satisfies DatanetNames)
+const datanets: RouteHandler = async ({ opts }) =>
+  json(200, await datanetNames(opts.listDatanets ?? listDatanetsJson) satisfies DatanetNames)
 
 const models: RouteHandler = ({ opts }) => {
   // Provider/model NAMES only — never keys (the unauthenticated dashboard holds no secrets).

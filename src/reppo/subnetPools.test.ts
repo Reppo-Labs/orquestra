@@ -1,6 +1,7 @@
 // src/reppo/subnetPools.test.ts
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { querySubnetPools } from './subnetPools.js'
+import { resetMulticallAvailabilityCache } from './multicall.js'
 
 const SEL_REPPO = '0x8b473a17'
 const SEL_PRIMARY = '0xb4025408'
@@ -8,10 +9,12 @@ const word = (v: bigint) => v.toString(16).padStart(64, '0')
 const hex = (v: bigint) => '0x' + word(v)
 const REPPO = 10n ** 18n
 
-/** Fake JSON-RPC: dispatch on the calldata selector (epochVotes.test.ts pattern). */
+/** Fake JSON-RPC: dispatch on the calldata selector (epochVotes.test.ts pattern). Answers
+ *  the multicall availability probe with "no code" so these tests exercise the serial path. */
 function fakeFetch(handler: (data: string, to: string) => bigint): typeof fetch {
   return (async (_url: unknown, init: unknown) => {
-    const body = JSON.parse((init as { body: string }).body) as { params: [{ data: string; to: string }] }
+    const body = JSON.parse((init as { body: string }).body) as { method: string; params: [{ data: string; to: string }] }
+    if (body.method === 'eth_getCode') return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: '0x' }) }
     const result = hex(handler(body.params[0].data, body.params[0].to))
     return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result }) }
   }) as unknown as typeof fetch
@@ -21,11 +24,27 @@ function fakeFetch(handler: (data: string, to: string) => bigint): typeof fetch 
  *  selector instead of always hex-encoding a bigint. */
 function fakeFetchRaw(handler: (data: string, to: string) => bigint | '0x'): typeof fetch {
   return (async (_url: unknown, init: unknown) => {
-    const body = JSON.parse((init as { body: string }).body) as { params: [{ data: string; to: string }] }
+    const body = JSON.parse((init as { body: string }).body) as { method: string; params: [{ data: string; to: string }] }
+    if (body.method === 'eth_getCode') return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: '0x' }) }
     const out = handler(body.params[0].data, body.params[0].to)
     const result = out === '0x' ? '0x' : hex(out)
     return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result }) }
   }) as unknown as typeof fetch
+}
+
+/** Aggregate3 returndata builder + a multicall-answering fetch (multicall.test.ts pattern). */
+function encodeResultFixture(results: { success: boolean; returnData: string }[]): string {
+  const heads: string[] = []
+  const tails: string[] = []
+  let off = 32 * results.length
+  for (const r of results) {
+    heads.push(word(BigInt(off)))
+    const data = r.returnData.replace(/^0x/, '')
+    const elem = word(r.success ? 1n : 0n) + word(0x40n) + word(BigInt(data.length / 2)) + data
+    tails.push(elem)
+    off += elem.length / 2
+  }
+  return '0x' + word(0x20n) + word(BigInt(results.length)) + heads.join('') + tails.join('')
 }
 
 describe('querySubnetPools', () => {
@@ -74,6 +93,39 @@ describe('querySubnetPools', () => {
     })
     const out = await querySubnetPools('http://rpc', '22', { fetchImpl: f, podManager: '0xpm' })
     expect(out).toEqual({ reppoWei: 2_780n * REPPO, primaryWei: 0n })
+  })
+})
+
+describe('querySubnetPools — multicall path', () => {
+  beforeEach(() => resetMulticallAvailabilityCache())
+
+  it('reads both seedings in ONE aggregate3 request when Multicall3 is deployed', async () => {
+    const methods: string[] = []
+    const f = (async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as { body: string }).body) as { method: string }
+      methods.push(body.method)
+      if (body.method === 'eth_getCode') return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: '0x6080' }) }
+      return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: encodeResultFixture([
+        { success: true, returnData: hex(2_780n * REPPO) },
+        { success: true, returnData: hex(215_912n * REPPO) },
+      ]) }) }
+    }) as unknown as typeof fetch
+    const out = await querySubnetPools('http://rpc-mc', '22', { fetchImpl: f, podManager: '0xpm' })
+    expect(out).toEqual({ reppoWei: 2_780n * REPPO, primaryWei: 215_912n * REPPO })
+    expect(methods).toEqual(['eth_getCode', 'eth_call']) // probe + ONE aggregate, not 2 eth_calls
+  })
+
+  it('an inner revert throws (pool unknown), never a fabricated dry pool', async () => {
+    const f = (async (_url: unknown, init: unknown) => {
+      const body = JSON.parse((init as { body: string }).body) as { method: string }
+      if (body.method === 'eth_getCode') return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: '0x6080' }) }
+      return { ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: encodeResultFixture([
+        { success: true, returnData: hex(1n) },
+        { success: false, returnData: '0x' },
+      ]) }) }
+    }) as unknown as typeof fetch
+    await expect(querySubnetPools('http://rpc-mc2', '22', { fetchImpl: f, podManager: '0xpm' }))
+      .rejects.toThrow(/reverted in multicall/)
   })
 })
 

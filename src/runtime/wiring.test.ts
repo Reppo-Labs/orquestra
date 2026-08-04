@@ -656,6 +656,25 @@ describe('buildTick config hot-reload', () => {
   })
 })
 
+describe('buildTick onTickStart hook', () => {
+  it('fires once per tick, before the cycle runs', async () => {
+    const w = wiring()
+    const deps = buildCycleDeps({ ...w, io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } } })
+    const calls: string[] = []
+    const tick = buildTick(w, deps, { reporting: false, onTickStart: () => calls.push('start') })
+    await tick()
+    await tick()
+    expect(calls).toEqual(['start', 'start'])
+  })
+
+  it('a throwing onTickStart is tolerated — the tick still runs to completion', async () => {
+    const w = wiring()
+    const deps = buildCycleDeps({ ...w, io: { fetchContent: async () => '', getRubric: async () => { throw new Error('skip') } } })
+    const tick = buildTick(w, deps, { reporting: false, onTickStart: () => { throw new Error('cache bug') } })
+    await expect(tick()).resolves.toBeUndefined()
+  })
+})
+
 describe('buildTick budget-cap hot-swap (security boundary)', () => {
   // The dashboard is the ONLY way an operator can lower a cap to stop spend. buildTick
   // must re-arm the live ledger when the reloaded budget/horizon differs — otherwise the

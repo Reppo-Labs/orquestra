@@ -439,6 +439,9 @@ export interface TickOpts {
   reloadConfig?: () => StrategyConfig
   /** false skips the best-effort snapshot/earn reporting (tests). */
   reporting?: boolean
+  /** Runs first thing every tick — index.ts wires the read cache's beginCycle() here
+   *  so tick-scoped memos never survive into the next cycle. Must not throw. */
+  onTickStart?: () => void
 }
 
 /** Build the scheduler tick: re-read config, run a cycle, then best-effort
@@ -449,6 +452,10 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
   let lastReflectedEpoch = -1 // reflect at most once per epoch boundary (this process)
   const reflecting = new Set<string>() // datanets with an in-flight reflection (mutual exclusion)
   return async () => {
+    // Best-effort: a cache-eviction bug must not abort the whole cycle.
+    try { opts.onTickStart?.() } catch (e) {
+      console.error(`orquestra: onTickStart failed this tick (non-fatal): ${(e as Error).message}`)
+    }
     if (opts.reloadConfig) {
       try {
         const fresh = opts.reloadConfig()

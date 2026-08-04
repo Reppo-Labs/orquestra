@@ -22,6 +22,56 @@ const fakeCli = (): ReppoCli => ({
   grantAccess: vi.fn(async () => ({ txHash: '0xgrant', gasEth: 0.0005 })),
 })
 const voteIntent = (podId: string): VoteIntent => ({ kind: 'vote', datanetId: '9', podId, direction: 'up', conviction: 9, reason: 'aligned' })
+
+describe('onWriteExecuted (read-cache invalidation hook)', () => {
+  it('fires with the write kind on every landed write', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const kinds: string[] = []
+    ex.onWriteExecuted = (k) => kinds.push(k)
+    await ex.executeVote(voteIntent('1'))
+    await ex.executeMint(mintIntent('k1', 50)) // explicit estimate under mintReppoMax
+    await ex.executeClaim({ kind: 'claim', podId: '1', epoch: 5, idempotencyKey: 'c-1-5' } as ClaimIntent)
+    await ex.executeVoterClaim({ kind: 'claim', podId: '2', epoch: 5, idempotencyKey: 'vc-2-5' } as ClaimIntent)
+    await ex.executeGrantAccess('9')
+    await ex.lock({ amount: '1', durationWeeks: 1 } as never)
+    expect(kinds).toEqual(['vote', 'mint', 'claim', 'claim', 'grant', 'lock'])
+  })
+
+  it('does NOT fire on refused-budget or errored writes', async () => {
+    const cli = fakeCli()
+    ;(cli.vote as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'))
+    const ledger = new BudgetLedger(dir, { ...caps, mintReppoMax: 0 }); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const kinds: string[] = []
+    ex.onWriteExecuted = (k) => kinds.push(k)
+    const v = await ex.executeVote(voteIntent('1')) // cli error
+    const m = await ex.executeMint(mintIntent('k1')) // refused-budget (mintReppoMax 0)
+    expect(v.status).toBe('error')
+    expect(m.status).toBe('refused-budget')
+    expect(kinds).toEqual([])
+  })
+
+  it('does NOT fire on the already-granted no-op (no chain write happened)', async () => {
+    const cli = fakeCli()
+    ;(cli.grantAccess as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('ACCESS_ALREADY_GRANTED'))
+    const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    const kinds: string[] = []
+    ex.onWriteExecuted = (k) => kinds.push(k)
+    const r = await ex.executeGrantAccess('9')
+    expect(r.status).toBe('executed')
+    expect(kinds).toEqual([])
+  })
+
+  it('a throwing listener never poisons the landed write result', async () => {
+    const cli = fakeCli(); const ledger = new BudgetLedger(dir, caps); ledger.startCycle('c1')
+    const ex = new WalletExecutor(cli, ledger)
+    ex.onWriteExecuted = () => { throw new Error('listener bug') }
+    const r = await ex.executeVote(voteIntent('1'))
+    expect(r).toMatchObject({ ok: true, status: 'executed', txHash: '0xvote' })
+  })
+})
 const mintIntent = (key: string, est = 0): MintIntent => ({ kind: 'mint', datanetId: '9', subnetUuid: 'cm-subnet-9', canonicalKey: key, podName: 'p', podDescription: 'd', datasetPath: '/tmp/x.json', estReppoCost: est })
 
 describe('WalletExecutor', () => {

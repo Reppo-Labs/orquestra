@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, type PodCache, type EpochScanCache } from './emissionsOnchain.js'
+import { MULTICALL3_ADDRESS, resetMulticallAvailabilityCache } from './multicall.js'
 
 // Minimal JSON-RPC mock: routes by method + decodes the selector/args we care about.
 const SEL = { hasClaimed: '0x5b778a36', claim: '0x6dd6f4c9', currentEpoch: '0x76671808' }
@@ -296,5 +297,86 @@ describe('queryClaimableOnchain — transient RPC error vs contract revert', () 
     await expect(
       queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f, lookbackEpochs: 3 }),
     ).rejects.toThrow()
+  })
+})
+
+/** ABI helpers + a wrapper that makes Multicall3 "deployed" over an existing fake fetch:
+ *  aggregate3 requests are unpacked and every inner call routed through the inner fake, so
+ *  batched and serial paths share the exact same per-selector fixtures (voterClaim.test.ts
+ *  pattern). */
+function decodeAggregate3Request(data: string): { to: string; data: string }[] {
+  const h = data.replace(/^0x/, '').slice(8)
+  const uintAt = (off: number) => Number(BigInt('0x' + h.slice(off * 2, off * 2 + 64)))
+  const arr = uintAt(0)
+  const n = uintAt(arr)
+  const base = arr + 32
+  const calls: { to: string; data: string }[] = []
+  for (let i = 0; i < n; i++) {
+    const el = base + uintAt(base + 32 * i)
+    const to = '0x' + h.slice(el * 2 + 24, el * 2 + 64)
+    const bytesAt = el + uintAt(el + 64)
+    const len = uintAt(bytesAt)
+    calls.push({ to, data: '0x' + h.slice((bytesAt + 32) * 2, (bytesAt + 32 + len) * 2) })
+  }
+  return calls
+}
+
+function encodeAggregate3Result(results: { success: boolean; returnData: string }[]): string {
+  const heads: string[] = []
+  const tails: string[] = []
+  let off = 32 * results.length
+  for (const r of results) {
+    heads.push(w(BigInt(off)))
+    const data = r.returnData.replace(/^0x/, '')
+    const padded = data.length % 64 === 0 ? data : data + '0'.repeat(64 - (data.length % 64))
+    const elem = w(r.success ? 1 : 0) + w(0x40) + w(data.length / 2) + padded
+    tails.push(elem)
+    off += elem.length / 2
+  }
+  return '0x' + w(0x20) + w(results.length) + heads.join('') + tails.join('')
+}
+
+function mcWrap(inner: typeof fetch): typeof fetch & { _mc: { aggregates: number; directSelectors: string[] } } {
+  const _mc = { aggregates: 0, directSelectors: [] as string[] }
+  const reply = (result: string) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))
+  const f = (async (url: string, init: { body: string }) => {
+    const body = JSON.parse(init.body) as { method: string; params?: [{ to?: string; data?: string }] }
+    if (body.method === 'eth_getCode') return reply('0x6080')
+    const p0 = body.params?.[0]
+    if (body.method === 'eth_call' && typeof p0 === 'object' && p0?.to?.toLowerCase() === MULTICALL3_ADDRESS.toLowerCase()) {
+      _mc.aggregates++
+      const results: { success: boolean; returnData: string }[] = []
+      for (const c of decodeAggregate3Request(p0.data ?? '')) {
+        const r = await (inner as unknown as (u: string, i: { body: string }) => Promise<Response>)(
+          url, { body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: c.to, data: c.data }, 'latest'] }) })
+        const j = (await r.json()) as { result?: string; error?: unknown }
+        results.push(j.error ? { success: false, returnData: '0x' } : { success: true, returnData: j.result ?? '0x' })
+      }
+      return reply(encodeAggregate3Result(results))
+    }
+    if (body.method === 'eth_call' && typeof p0 === 'object' && p0?.data) _mc.directSelectors.push(p0.data.slice(0, 10))
+    return (inner as unknown as (u: string, i: { body: string }) => Promise<Response>)(url, init)
+  }) as unknown as typeof fetch & { _mc: typeof _mc }
+  f._mc = _mc
+  return f
+}
+
+describe('queryClaimableOnchain — multicall path', () => {
+  beforeEach(() => resetMulticallAvailabilityCache())
+
+  it('finds the same claimables as the serial path, batching hasClaimed and keeping claim probes serial', async () => {
+    const opts = { epoch: 103, claimed: new Set(['100:5']), claimable: new Set(['5:101', '5:102']) }
+    const serial = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), {
+      fetchImpl: makeFetch(opts), lookbackEpochs: 3,
+    })
+    const mc = mcWrap(makeFetch(opts))
+    const batched = await queryClaimableOnchain('http://rpc-mc', WALLET, memCache(['5'], 1n), {
+      fetchImpl: mc, lookbackEpochs: 3,
+    })
+    expect(batched).toEqual(serial)
+    expect(serial.map((e) => e.epoch).sort()).toEqual([101, 102])
+    expect(mc._mc.aggregates).toBe(1) // the whole hasClaimed grid in one request
+    expect(mc._mc.directSelectors).not.toContain(SEL.hasClaimed) // status reads all batched
+    expect(mc._mc.directSelectors.filter((s) => s === SEL.claim)).toHaveLength(2) // probes stay serial; epoch 100 skipped as claimed
   })
 })

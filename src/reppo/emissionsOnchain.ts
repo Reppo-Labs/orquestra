@@ -12,6 +12,7 @@
 // mirroring src/reppo/mintFee.ts.
 import type { ClaimableEmission } from './queryEmissionsDue.js'
 import { networkAddresses } from './network.js'
+import { tryAggregate, isMulticallAvailable, type Call3Result } from './multicall.js'
 
 export const POD_MANAGER_MAINNET = '0x5C563f853eb4db33005A5C1aD9290e8560254A80'
 export const VE_REPPO_MAINNET = '0x0EFBE19Cb7B07D934D01990a8989E9CaA98b9009'
@@ -212,15 +213,42 @@ export async function queryClaimableOnchain(
 
   // 3. for each owned pod, scan CLOSED epochs for an unclaimed, non-reverting claim
   const out: ClaimableEmission[] = []
-  for (const podStr of cache.getKnownPods()) {
-    const podId = BigInt(podStr)
+  const pods = cache.getKnownPods()
+  const startFor = (podStr: string): bigint => {
     const through = scanCache ? BigInt(scanCache.getThrough(podStr)) : 0n
     const resume = through + 1n > floor ? through + 1n : floor
-    const start = scanCache ? resume : windowStart
+    return scanCache ? resume : windowStart
+  }
+  // Batched claim-STATUS grid: hasPodOwnerClaimedEmissions is a plain view (no msg.sender),
+  // so the whole (pod × epoch) grid collapses into ⌈pairs/200⌉ requests. The claim PROBE
+  // below stays serial — its revert oracle needs `from: wallet` (see multicall.ts header).
+  let claimedByPair: Map<string, boolean> | null = null
+  if (await isMulticallAvailable(rpcUrl, { fetchImpl })) {
+    const pairs: { pod: string; ep: bigint }[] = []
+    for (const podStr of pods) for (let ep = startFor(podStr); ep <= lastClosed; ep++) pairs.push({ pod: podStr, ep })
+    claimedByPair = new Map()
+    if (pairs.length > 0) {
+      const res = await tryAggregate(rpcUrl, pairs.map(({ pod, ep }) =>
+        ({ target: pm, callData: SEL.hasClaimed + word(ep) + word(BigInt(pod)) })), { fetchImpl })
+      pairs.forEach(({ pod, ep }, i) => {
+        // A view with no legitimate revert path reverting inside the batch is as malformed
+        // as a missing result — abort before any watermark advances, exactly like a serial
+        // transient failure would.
+        if (!res[i].success) throw new Error('RPC eth_call error: hasPodOwnerClaimedEmissions reverted in multicall')
+        claimedByPair!.set(`${pod}|${ep}`, isTrue(res[i].returnData))
+      })
+    }
+  }
+  for (const podStr of pods) {
+    const podId = BigInt(podStr)
+    const through = scanCache ? BigInt(scanCache.getThrough(podStr)) : 0n
+    const start = startFor(podStr)
     let firstClaimable: bigint | null = null
     for (let ep = start; ep <= lastClosed; ep++) {
-      const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasClaimed + word(ep) + word(podId))
-      if (isTrue(claimed)) continue
+      const claimed = claimedByPair
+        ? claimedByPair.get(`${podStr}|${ep}`) === true
+        : isTrue(await ethCall(fetchImpl, rpcUrl, pm, SEL.hasClaimed + word(ep) + word(podId)))
+      if (claimed) continue
       try {
         await ethCall(fetchImpl, rpcUrl, pm, SEL.claim + word(podId) + word(ep), wallet)
       } catch (e) {
@@ -273,21 +301,67 @@ export async function queryVoterClaimableOnchain(
   const out: ClaimableEmission[] = []
   const lastClosed = cur - 1n
   const scanFrom = floor > 1n ? floor : 1n
+  const useMc = await isMulticallAvailable(rpcUrl, { fetchImpl })
 
   // Active closed epochs the wallet voted in (votesCasted > 0) — computed ONCE, shared by all
   // pods. A pod can only have a voter reward at an epoch the wallet voted, so this prunes the
   // grid without dropping any real claim.
   const activeEpochs: bigint[] = []
-  for (let ep = scanFrom; ep <= lastClosed; ep++) {
-    const cast = await ethCall(fetchImpl, rpcUrl, pm, SEL.votesCasted + w + word(ep)).catch(() => '0x')
-    if (isTrue(cast)) activeEpochs.push(ep)
+  if (useMc && lastClosed >= scanFrom) {
+    const eps: bigint[] = []
+    for (let ep = scanFrom; ep <= lastClosed; ep++) eps.push(ep)
+    const res = await tryAggregate(rpcUrl, eps.map((ep) =>
+      ({ target: pm, callData: SEL.votesCasted + w + word(ep) })), { fetchImpl })
+    // Mirrors the serial `.catch(() => '0x')`: an inner failure reads as "not active".
+    eps.forEach((ep, i) => { if (res[i].success && isTrue(res[i].returnData)) activeEpochs.push(ep) })
+  } else {
+    for (let ep = scanFrom; ep <= lastClosed; ep++) {
+      const cast = await ethCall(fetchImpl, rpcUrl, pm, SEL.votesCasted + w + word(ep)).catch(() => '0x')
+      if (isTrue(cast)) activeEpochs.push(ep)
+    }
   }
   if (activeEpochs.length === 0) return []
 
-  for (const podStr of [...new Set(votedPodIds)]) {
+  const podList = [...new Set(votedPodIds)]
+  const throughFor = (podStr: string): bigint => (cache ? BigInt(cache.getThrough(podStr)) : 0n)
+
+  // Batched GATE reads (voterUp, voterDown, hasUserClaimedEmissions — all plain views keyed
+  // by explicit args, no msg.sender): 3 calls per unscanned (pod, epoch) pair collapse into
+  // ⌈3·pairs/200⌉ requests. The claim PROBE below stays serial — its revert oracle needs
+  // `from: wallet` (see multicall.ts header).
+  let gateByPair: Map<string, { up: bigint; down: bigint; claimed: boolean }> | null = null
+  if (useMc) {
+    const pairs = podList.flatMap((podStr) =>
+      activeEpochs.filter((ep) => ep > throughFor(podStr)).map((ep) => ({ pod: podStr, ep })))
+    gateByPair = new Map()
+    if (pairs.length > 0) {
+      const calls = pairs.flatMap(({ pod, ep }) => {
+        const pid = word(BigInt(pod))
+        return [
+          { target: pm, callData: SEL.voterUp + word(ep) + pid + w },
+          { target: pm, callData: SEL.voterDown + word(ep) + pid + w },
+          { target: pm, callData: SEL.hasVoterClaimed + word(ep) + pid + w },
+        ]
+      })
+      const res = await tryAggregate(rpcUrl, calls, { fetchImpl })
+      // voterUp/Down mirror readUint (failure → 0n); hasUserClaimedEmissions mirrors the
+      // serial ethCall (a revert on a no-revert-path view aborts the scan before any
+      // watermark advances, like a serial transient failure).
+      const uintOr0 = (r: Call3Result): bigint => (r.success && r.returnData !== '0x' ? BigInt(r.returnData) : 0n)
+      pairs.forEach(({ pod, ep }, i) => {
+        const claimed = res[3 * i + 2]
+        if (!claimed.success) throw new Error('RPC eth_call error: hasUserClaimedEmissions reverted in multicall')
+        gateByPair!.set(`${pod}|${ep}`, {
+          up: uintOr0(res[3 * i]), down: uintOr0(res[3 * i + 1]), claimed: isTrue(claimed.returnData),
+        })
+      })
+    }
+  }
+
+  for (const podStr of podList) {
     const podId = BigInt(podStr)
     // Resume past the watermark (highest closed epoch already scanned); first run → from floor.
-    const through = cache ? BigInt(cache.getThrough(podStr)) : 0n
+    const through = throughFor(podStr)
     let firstClaimable: bigint | null = null
     for (const ep of activeEpochs) {
       if (ep <= through) continue
@@ -296,12 +370,15 @@ export async function queryVoterClaimableOnchain(
       // payout — so skipping vote==0 (pod,epoch) avoids 0-REPPO claim txs (wasted gas) without
       // dropping any real claim (a reward requires the wallet voted there). hasUserClaimed/claim
       // checks only run for pods the wallet actually voted.
-      const up = await readUint(fetchImpl, rpcUrl, pm, SEL.voterUp + word(ep) + word(podId) + w)
-      const down = await readUint(fetchImpl, rpcUrl, pm, SEL.voterDown + word(ep) + word(podId) + w)
+      const gate = gateByPair?.get(`${podStr}|${ep}`)
+      const up = gate ? gate.up : await readUint(fetchImpl, rpcUrl, pm, SEL.voterUp + word(ep) + word(podId) + w)
+      const down = gate ? gate.down : await readUint(fetchImpl, rpcUrl, pm, SEL.voterDown + word(ep) + word(podId) + w)
       if (up === 0n && down === 0n) continue
       // hasUserClaimedEmissions(epoch, podId, user)
-      const claimed = await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w)
-      if (isTrue(claimed)) continue
+      const claimed = gate
+        ? gate.claimed
+        : isTrue(await ethCall(fetchImpl, rpcUrl, pm, SEL.hasVoterClaimed + word(ep) + word(podId) + w))
+      if (claimed) continue
       try {
         // claimVoterEmissions(voter, podId, epoch) — reverts ⇒ nothing due for this voter
         await ethCall(fetchImpl, rpcUrl, pm, SEL.claimVoter + w + word(podId) + word(ep), wallet)

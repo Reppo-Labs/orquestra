@@ -5,6 +5,7 @@
 // datanet with a rate but an empty pool pays NOTHING (datanet 11 died this way,
 // silently). Raw JSON-RPC, no extra dep — mirrors src/reppo/epochVotes.ts.
 import { networkAddresses, isRobinhood } from './network.js'
+import { tryAggregate, isMulticallAvailable } from './multicall.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
@@ -63,6 +64,18 @@ export async function querySubnetPools(
   if (isRobinhood()) {
     const primaryWei = await ethCallUint(fetchImpl, rpcUrl, pm, SEL.rbSeedings + id)
     return { reppoWei: 0n, primaryWei }
+  }
+
+  // Both seedings in ONE request when Multicall3 is up (view getters: an inner revert is
+  // as malformed as a missing result — throw, never fabricate a dry pool).
+  if (await isMulticallAvailable(rpcUrl, { fetchImpl })) {
+    const [r, p] = await tryAggregate(rpcUrl, [
+      { target: pm, callData: SEL.reppoSeedings + id },
+      { target: pm, callData: SEL.primarySeedings + id },
+    ], { fetchImpl })
+    if (!r.success || !p.success) throw new Error('RPC eth_call error: seedings getter reverted in multicall')
+    const toUint = (h: string): bigint => (h === '0x' ? 0n : BigInt(h))
+    return { reppoWei: toUint(r.returnData), primaryWei: toUint(p.returnData) }
   }
 
   const [reppoWei, primaryWei] = await Promise.all([
