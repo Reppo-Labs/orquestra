@@ -138,8 +138,57 @@ describe('deriveStrategy — capacity', () => {
     const r = derive({ policy: { ...policy, capitalShareOfTvl: 0.43 } })
     expect(r.ok).toBe(false)
     if (r.ok) return
-    expect(r.reason).toMatch(/exceeds the 8\.00% depth cap/)
+    expect(r.reason).toMatch(/above the 8\.00% depth cap/)
     expect(MAX_POOL_SHARE).toBe(0.08)
+  })
+
+  it('caps the LEVERED position, not the equity behind it', () => {
+    // 6% equity at 1.82x is 10.9% of the pool. Bounding the equity share let an
+    // 8% cap admit a position at 14.6% of TVL.
+    const r = derive({
+      policy: { ...policy, capitalShareOfTvl: 0.06, ltvFracOfLltv: 0.9, exitLtvFracOfLltv: 0.95 },
+      market,
+    })
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/position would be 10\.94% of pool TVL/)
+    expect(r.reason).toMatch(/leverage 1\.82x/)
+  })
+
+  it('the same equity share passes unlevered and fails levered', () => {
+    const share = { ...policy, capitalShareOfTvl: 0.06 }
+    expect(derive({ policy: share }).ok).toBe(true)
+    expect(derive({ policy: { ...share, ltvFracOfLltv: 0.9, exitLtvFracOfLltv: 0.95 }, market }).ok).toBe(false)
+  })
+
+  it('reports the position share and the equity share as different numbers', () => {
+    const r = derive({
+      policy: { ...policy, capitalShareOfTvl: 0.03, ltvFracOfLltv: 0.5, exitLtvFracOfLltv: 0.7 },
+      market,
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const c = r.derived.capacity
+    expect(c.equity_share_of_tvl).toBe(0.03)
+    // max_share_of_pool must be reconstructible from the notional it sits next
+    // to — previously it restated the equity share and contradicted it.
+    expect(c.max_share_of_pool).toBeCloseTo(c.intended_notional_usd / c.pool_tvl_usd, 3)
+    expect(c.max_share_of_pool).toBeGreaterThan(c.equity_share_of_tvl)
+  })
+
+  it('prices exit slippage on the whole position, not the equity', () => {
+    const a = derive()
+    const b = derive({
+      policy: { ...policy, capitalShareOfTvl: 0.03, ltvFracOfLltv: 0.5, exitLtvFracOfLltv: 0.7 },
+      market,
+    })
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    // Same equity share (0.03), so an equity-based slippage figure would tie.
+    expect(b.derived.capacity.est_exit_slippage_bps).toBeGreaterThan(a.derived.capacity.est_exit_slippage_bps)
+    expect(b.derived.derivation.est_exit_slippage_bps).toContain(
+      `$${b.derived.capacity.intended_notional_usd.toLocaleString('en-US')}`,
+    )
   })
 
   it('refuses a borrow the market cannot fund — the question never asked', () => {
@@ -235,6 +284,28 @@ describe('deriveStrategy — leverage safety', () => {
     const ltvStop = 1 - 0.65 / 0.85
     expect(r.derived.maxDrawdownBps).toBe(Math.round(Math.min(0.077, ltvStop) * 10_000))
     expect(r.derived.derivation.max_drawdown).toContain('min(')
+  })
+})
+
+describe('deriveStrategy — a published number never contradicts its own derivation', () => {
+  it('discloses the clamp when the drawdown floor binds', () => {
+    // 0.2σ band with a 1.05x exit multiple is 81bps, under the 100bps floor.
+    const r = derive({ policy: { ...policy, bandSigmaMult: 0.2, exitBandMult: 1.05 } })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.derived.maxDrawdownBps).toBe(100)
+    expect(r.derived.derivation.max_drawdown).toContain('published as 100bps')
+    expect(r.derived.derivation.max_drawdown).toMatch(/clamped from \d+bps/)
+  })
+
+  it('says nothing about clamping when the raw value is in range', () => {
+    const r = derive()
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.derived.derivation.max_drawdown).not.toContain('clamped')
+    expect(r.derived.derivation.expected_roe).not.toContain('clamped')
+    // and the unclamped figure still reconciles with the machine-readable input
+    expect(r.derived.expectedRoeBps).toBe(Math.round(r.derived.expectedRoeInputs.net_apr_frac * 10_000))
   })
 })
 

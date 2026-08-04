@@ -68,7 +68,11 @@ export interface Venue {
 
 export interface Capacity {
   pool_tvl_usd: number
+  /** Share of pool TVL the POSITION occupies — equity × leverage. This is the
+   *  figure the depth cap bounds; it equals intended_notional_usd / pool_tvl_usd. */
   max_share_of_pool: number
+  /** Share of pool TVL backed by the vault's own capital, before the borrow. */
+  equity_share_of_tvl: number
   intended_notional_usd: number
   /** CPMM small-trade approximation at full size, plus the swap fee. */
   est_exit_slippage_bps: number
@@ -204,56 +208,69 @@ export function deriveStrategy(input: {
   derivation.exit_pct =
     `${policy.exitBandMult.toFixed(2)} × band = ${policy.exitBandMult.toFixed(2)} × ${pct(bandPct)} = ${pct(exitPct)}`
 
+  // --- leverage: a function of the market's live LLTV. Derived BEFORE sizing,
+  //     because what lands in the pool is capital × leverage and it is THAT the
+  //     depth cap has to bound. Capping the equity share instead let an 8% cap
+  //     admit a position at 14.6% of TVL (0.08 × 1.82x at LLTV 91.5%), and left
+  //     `max_share_of_pool` disagreeing with `intended_notional_usd`.
+  let lev: { targetLtv: number; exitLtv: number; market: MorphoMarket } | undefined
+  if (market && policy.ltvFracOfLltv !== undefined) {
+    const exitFrac = policy.exitLtvFracOfLltv ?? Math.min(0.95, policy.ltvFracOfLltv + 0.2)
+    const tLtv = policy.ltvFracOfLltv * market.lltv
+    const xLtv = exitFrac * market.lltv
+    if (xLtv <= tLtv) {
+      return { ok: false, reason: 'derived exit LTV is not above the target LTV — no room to de-risk' }
+    }
+    if (xLtv >= market.lltv) {
+      return { ok: false, reason: `derived exit LTV ${pct(xLtv)} is at or past liquidation LLTV ${pct(market.lltv)}` }
+    }
+    derivation.target_ltv =
+      `${policy.ltvFracOfLltv.toFixed(2)} × LLTV(${pct(market.lltv)}, market ${market.marketId}) = ${pct(tLtv)}`
+    derivation.exit_ltv = `${exitFrac.toFixed(2)} × LLTV(${pct(market.lltv)}) = ${pct(xLtv)}`
+    lev = { targetLtv: tLtv, exitLtv: xLtv, market }
+  }
+  const targetLtv = lev?.targetLtv
+  const exitLtv = lev?.exitLtv
+  const borrowCostFrac = lev ? lev.market.borrowApy * lev.targetLtv : 0
+
+  // borrow = LTV × capital, so leverage is a pure function of the LTV and is
+  // known before any dollar figure exists.
+  const leverage = lev ? 1 + lev.targetLtv : 1
+  derivation.leverage = lev
+    ? `1 + target LTV(${pct(lev.targetLtv)}) = ${leverage.toFixed(2)}x (the borrowed leg is deployed alongside the equity)`
+    : '1.00x (unlevered)'
+
   // --- size: a function of the venue's measured depth, not a free parameter -
-  if (policy.capitalShareOfTvl > MAX_POOL_SHARE) {
+  const notionalShare = policy.capitalShareOfTvl * leverage
+  if (notionalShare > MAX_POOL_SHARE) {
     return {
       ok: false,
-      reason: `capital share ${pct(policy.capitalShareOfTvl)} of pool TVL exceeds the ${pct(MAX_POOL_SHARE)} depth cap`,
+      reason: `position would be ${pct(notionalShare)} of pool TVL (capital share ${pct(policy.capitalShareOfTvl)} × leverage ${leverage.toFixed(2)}x), above the ${pct(MAX_POOL_SHARE)} depth cap`,
     }
   }
   const capitalMaxUsd = policy.capitalShareOfTvl * pool.reserveUsd
   const capitalMinUsd = CAPITAL_MIN_FRACTION * capitalMaxUsd
+  const notionalUsd = capitalMaxUsd * leverage
   derivation.capital_max_usd =
     `${pct(policy.capitalShareOfTvl)} × pool TVL(${usd(pool.reserveUsd)}) = ${usd(capitalMaxUsd)}`
+  derivation.notional_usd =
+    `capital max(${usd(capitalMaxUsd)}) × leverage(${leverage.toFixed(2)}x) = ${usd(notionalUsd)} = ${pct(notionalShare)} of pool TVL (depth cap ${pct(MAX_POOL_SHARE)})`
   if (capitalMaxUsd <= 0) return { ok: false, reason: 'derived capital max is 0 — pool too thin to size into' }
 
-  // --- leverage: a function of the market's live LLTV ----------------------
-  let targetLtv: number | undefined
-  let exitLtv: number | undefined
   let borrowUsd: number | undefined
-  let borrowCostFrac = 0
-  if (market && policy.ltvFracOfLltv !== undefined) {
-    const exitFrac = policy.exitLtvFracOfLltv ?? Math.min(0.95, policy.ltvFracOfLltv + 0.2)
-    targetLtv = policy.ltvFracOfLltv * market.lltv
-    exitLtv = exitFrac * market.lltv
-    if (exitLtv <= targetLtv) {
-      return { ok: false, reason: 'derived exit LTV is not above the target LTV — no room to de-risk' }
-    }
-    if (exitLtv >= market.lltv) {
-      return { ok: false, reason: `derived exit LTV ${pct(exitLtv)} is at or past liquidation LLTV ${pct(market.lltv)}` }
-    }
-    borrowUsd = targetLtv * capitalMaxUsd
-    borrowCostFrac = market.borrowApy * targetLtv
-    derivation.target_ltv =
-      `${policy.ltvFracOfLltv.toFixed(2)} × LLTV(${pct(market.lltv)}, market ${market.marketId}) = ${pct(targetLtv)}`
-    derivation.exit_ltv = `${exitFrac.toFixed(2)} × LLTV(${pct(market.lltv)}) = ${pct(exitLtv)}`
-    derivation.borrow_usd = `target LTV(${pct(targetLtv)}) × capital max(${usd(capitalMaxUsd)}) = ${usd(borrowUsd)}`
+  if (lev) {
+    borrowUsd = lev.targetLtv * capitalMaxUsd
+    derivation.borrow_usd = `target LTV(${pct(lev.targetLtv)}) × capital max(${usd(capitalMaxUsd)}) = ${usd(borrowUsd)}`
 
     // --- capacity: can this venue actually fill the borrow? ---------------
-    const cap = MAX_BORROW_SHARE_OF_LENDABLE * market.liquidityUsd
+    const cap = MAX_BORROW_SHARE_OF_LENDABLE * lev.market.liquidityUsd
     if (borrowUsd > cap) {
       return {
         ok: false,
-        reason: `borrow of ${usd(borrowUsd)} exceeds ${pct(MAX_BORROW_SHARE_OF_LENDABLE)} of lendable liquidity ${usd(market.liquidityUsd)} in market ${market.marketId}`,
+        reason: `borrow of ${usd(borrowUsd)} exceeds ${pct(MAX_BORROW_SHARE_OF_LENDABLE)} of lendable liquidity ${usd(lev.market.liquidityUsd)} in market ${lev.market.marketId}`,
       }
     }
   }
-
-  const leverage = borrowUsd !== undefined ? 1 + borrowUsd / capitalMaxUsd : 1
-  derivation.leverage =
-    borrowUsd !== undefined
-      ? `1 + borrow(${usd(borrowUsd)}) / capital(${usd(capitalMaxUsd)}) = ${leverage.toFixed(2)}x`
-      : '1.00x (unlevered)'
 
   // --- return: derived from a measurable yield source, or refused ----------
   const tier = feeTierFromName(pool.name)
@@ -298,14 +315,37 @@ export function deriveStrategy(input: {
       ? `min(exit band ${pct(exitPct)}, collateral fall to exit LTV ${pct(ltvStop)}) = ${pct(ddFrac)}`
       : `exit band ${pct(exitPct)}`
 
-  const slippage = exitSlippageBps(capitalMaxUsd, pool.reserveUsd, tier ?? 0)
+  // The pod schema takes integer bps in a bounded range, so the published
+  // figure can differ from the derived one. Say so in the derivation rather
+  // than letting a clamped number sit next to an expression that computes
+  // something else — a value disagreeing with its own stated derivation is the
+  // defect this module exists to remove, and it does not stop being that
+  // because WE introduced the discrepancy.
+  const publish = (frac: number, lo: number, hi: number, key: string): number => {
+    const raw = bps(frac)
+    const out = clamp(raw, lo, hi)
+    if (out !== raw) {
+      derivation[key] += ` → published as ${out}bps (clamped from ${raw}bps to the pod schema's ${lo}–${hi} range)`
+    }
+    return out
+  }
+  const expectedRoeBps = publish(netFrac, 1, 100_000, 'expected_roe')
+  const maxDrawdownBps = publish(ddFrac, 100, 10_000, 'max_drawdown')
+
+  // Sized on the LEVERED notional: it is the whole position that has to be
+  // unwound into the book, not the equity behind it.
+  const slippage = exitSlippageBps(notionalUsd, pool.reserveUsd, tier ?? 0)
   derivation.est_exit_slippage_bps =
-    `notional(${usd(capitalMaxUsd)}) / (2 × TVL(${usd(pool.reserveUsd)})) + fee(${pct(tier ?? 0)}) = ${slippage}bps (CPMM small-trade approximation)`
+    `notional(${usd(notionalUsd)}) / (2 × TVL(${usd(pool.reserveUsd)})) + fee(${pct(tier ?? 0)}) = ${slippage}bps (CPMM small-trade approximation)`
 
   const capacity: Capacity = {
     pool_tvl_usd: Math.round(pool.reserveUsd),
-    max_share_of_pool: Number(policy.capitalShareOfTvl.toFixed(4)),
-    intended_notional_usd: Math.round(capitalMaxUsd * leverage),
+    // The share of the pool the POSITION occupies, so this stays consistent
+    // with intended_notional_usd / pool_tvl_usd. The equity behind it is
+    // reported separately rather than passed off as the same thing.
+    max_share_of_pool: Number(notionalShare.toFixed(4)),
+    equity_share_of_tvl: Number(policy.capitalShareOfTvl.toFixed(4)),
+    intended_notional_usd: Math.round(notionalUsd),
     est_exit_slippage_bps: slippage,
     ...(market ? { borrowable_liquidity_usd: Math.round(market.liquidityUsd) } : {}),
     ...(borrowUsd !== undefined ? { intended_borrow_usd: Math.round(borrowUsd) } : {}),
@@ -328,7 +368,7 @@ export function deriveStrategy(input: {
       ...(feeAprFrac !== undefined ? { feeAprFrac } : {}),
       ...(supplyAprFrac !== undefined ? { supplyAprFrac } : {}),
       ...(borrowCostFrac > 0 ? { borrowCostFrac } : {}),
-      expectedRoeBps: clamp(bps(netFrac), 1, 100_000),
+      expectedRoeBps,
       expectedRoeInputs: {
         ...(feeAprFrac !== undefined ? { fee_apr_frac: Number(feeAprFrac.toFixed(6)) } : {}),
         ...(supplyAprFrac !== undefined ? { supply_apr_frac: Number(supplyAprFrac.toFixed(6)) } : {}),
@@ -340,7 +380,7 @@ export function deriveStrategy(input: {
         net_apr_frac: Number(netFrac.toFixed(6)),
         basis: strategyType === 'lending_supply' ? 'market_supply_apy' : 'pool_fee_apr',
       },
-      maxDrawdownBps: clamp(bps(ddFrac), 100, 10_000),
+      maxDrawdownBps,
       derivation,
       evidence: buildEvidence(venue, asOf, market),
       capacity,

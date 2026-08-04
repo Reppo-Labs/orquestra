@@ -116,8 +116,16 @@ describe('retryAfterMs', () => {
     expect(retryAfterMs('2')).toBe(30_000)
     expect(retryAfterMs('garbage')).toBe(30_000)
   })
-  it('honors a longer delta-seconds value', () => {
-    expect(retryAfterMs('90')).toBe(90_000)
+  it('honors a longer delta-seconds value, up to the ceiling', () => {
+    expect(retryAfterMs('45')).toBe(45_000)
+    expect(retryAfterMs('90')).toBe(60_000)
+  })
+
+  it('caps an upstream-chosen wait — this sleep runs inside an untimed cycle', () => {
+    // `Retry-After: 86400`, honored literally, parks the node for a day.
+    expect(retryAfterMs('86400')).toBe(60_000)
+    const farFuture = new Date(Date.now() + 30 * 24 * 3_600_000).toUTCString()
+    expect(retryAfterMs(farFuture)).toBe(60_000)
   })
 })
 
@@ -161,6 +169,34 @@ describe('fetchMetrics', () => {
     const fetchImpl = (async () => { calls++; return { ok: false, status: 429 } as unknown as Response }) as unknown as typeof fetch
     const out = await fetchMetrics(['0xa'], { fetchImpl, delayMs: 0, sleep: async () => {} })
     expect(calls).toBe(3) // initial + 2 retries
+    expect(out.size).toBe(0)
+  })
+
+  it('stops issuing new calls once the phase deadline has passed', async () => {
+    let clock = 0
+    const calls: string[] = []
+    const fetchImpl = (async (u: string) => { calls.push(u); clock += 20_000; return okBody() }) as unknown as typeof fetch
+    const out = await fetchMetrics(['0xa', '0xb', '0xc', '0xd'], {
+      fetchImpl, delayMs: 0, deadlineMs: 45_000, now: () => clock,
+    })
+    // 0s -> call, 20s -> call, 40s -> call, 60s -> past the deadline, stop.
+    expect(calls).toHaveLength(3)
+    expect(out.size).toBe(3) // partial coverage is fine; the rest waits a cycle
+  })
+
+  it('a rate-limit backoff cannot outlive the deadline it is bounded by', async () => {
+    // Two 30s floors on one pool would blow a 45s ceiling, because the deadline
+    // is only consulted BETWEEN pools.
+    const slept: number[] = []
+    let clock = 0
+    const fetchImpl = (async () => ({
+      ok: false, status: 429, headers: { get: () => null },
+    }) as unknown as Response) as unknown as typeof fetch
+    const out = await fetchMetrics(['0xa'], {
+      fetchImpl, delayMs: 0, deadlineMs: 45_000, now: () => clock,
+      sleep: async (ms) => { slept.push(ms); clock += ms },
+    })
+    expect(slept).toEqual([30_000]) // the second 30s wait would exceed 45s
     expect(out.size).toBe(0)
   })
 })

@@ -64,15 +64,35 @@ const toNum = (v: string | undefined): number => {
   return Number.isFinite(n) ? n : 0
 }
 
+/** Token names and symbols are ATTACKER-CONTROLLED: anyone who can deploy an
+ *  ERC-20 and a pool on 4663 chooses these strings, and they are rendered as
+ *  the venue list inside the synthesis prompt. A newline in a token name would
+ *  otherwise forge a venue or lending line in that list. Collapse control
+ *  characters and whitespace, and bound the length so one row cannot crowd out
+ *  the rest of the prompt. (A forged venue would not resolve in
+ *  `resolveProposal`, so the blast radius was wasted cycles and misleading
+ *  thesis prose rather than a bad number — but structured text a stranger can
+ *  write into should not be forgeable at all.) */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\ufeff]/g
+const MAX_LABEL_LEN = 120
+export const sanitizeLabel = (s: string, max = MAX_LABEL_LEN): string =>
+  s.replace(CONTROL_CHARS, ' ').replace(/\s+/g, ' ').trim().slice(0, max)
+
+/** Identifiers get interpolated into evidence sources and a GeckoTerminal URL,
+ *  so a row whose address is not a plain identifier is dropped rather than
+ *  rewritten — a mangled address would resolve to nothing anyway. */
+const isUsableIdentifier = (s: string): boolean => /^[0-9a-zA-Z._:-]{1,80}$/.test(s)
+
 function tokenIndex(body: unknown): Map<string, TokenRef> {
   const included = (body as { included?: RawTokenRow[] })?.included
   const map = new Map<string, TokenRef>()
   if (!Array.isArray(included)) return map
   for (const t of included) {
     if (t?.type !== 'token' || !t.id || !t.attributes?.address) continue
-    const name = t.attributes.name ?? ''
+    if (!isUsableIdentifier(t.attributes.address)) continue
+    const name = sanitizeLabel(t.attributes.name ?? '')
     map.set(t.id, {
-      symbol: t.attributes.symbol ?? '',
+      symbol: sanitizeLabel(t.attributes.symbol ?? '', 32),
       name,
       address: t.attributes.address,
       isTokenizedStock: name.includes(TOKENIZED_STOCK_MARKER),
@@ -91,12 +111,15 @@ export function parsePools(body: unknown): PoolInfo[] {
   for (const r of rows) {
     const a = r?.attributes
     if (!a?.name || !a?.address) continue
+    if (!isUsableIdentifier(a.address)) continue
+    const name = sanitizeLabel(a.name)
+    if (!name) continue
     const base = tokens.get(r.relationships?.base_token?.data?.id ?? '')
     const quote = tokens.get(r.relationships?.quote_token?.data?.id ?? '')
     out.push({
-      name: a.name,
+      name,
       address: a.address,
-      dex: r.relationships?.dex?.data?.id ?? 'unknown',
+      dex: sanitizeLabel(r.relationships?.dex?.data?.id ?? 'unknown', 64) || 'unknown',
       reserveUsd: toNum(a.reserve_in_usd),
       volumeUsd24h: toNum(a.volume_usd?.h24),
       ...(base ? { base } : {}),
@@ -125,15 +148,27 @@ export function isSanePool(p: PoolInfo): boolean {
 /** Drop rows failing the sanity bounds. */
 export const sanePools = (pools: PoolInfo[]): PoolInfo[] => pools.filter(isSanePool)
 
+/** No DEX on this chain charges more than this. The fee tier is the one number
+ *  in the pipeline still parsed out of an attacker-controllable STRING, and it
+ *  multiplies straight into `feeApr` → `expected_roe_bps` on a minted pod — so
+ *  an implausible tier has to read as "no tier", never as a huge one. */
+export const MAX_FEE_TIER = 0.03
+
 /** Swap fee as a fraction, parsed from the GeckoTerminal pool name suffix
  *  ("nvda / USDG 0.05%" -> 0.0005). Undefined when the name carries no tier —
- *  fee income is then unmeasurable and the pool cannot back a fee-yield claim. */
+ *  fee income is then unmeasurable and the pool cannot back a fee-yield claim.
+ *
+ *  The percentage must be its own token in the name. Without that separator, a
+ *  pool with no DEX fee suffix whose token symbol ends in digits and a `%`
+ *  ("SCAM / EVIL100%" — both fields chosen by whoever deployed the token)
+ *  parsed as a 100% fee tier and inflated the published fee APR ~2000x. */
 export function feeTierFromName(name: string): number | undefined {
-  const m = /(\d+(?:\.\d+)?)\s*%\s*$/.exec(name.trim())
+  const m = name.trim().match(/(?:^|\s)(\d+(?:\.\d+)?)\s*%$/)
   if (!m) return undefined
   const pct = Number(m[1])
-  if (!Number.isFinite(pct) || pct <= 0 || pct > 100) return undefined
-  return pct / 100
+  if (!Number.isFinite(pct) || pct <= 0) return undefined
+  const tier = pct / 100
+  return tier > MAX_FEE_TIER ? undefined : tier
 }
 
 /** Unique tokenized-equity tokens present across the fetched pools. */

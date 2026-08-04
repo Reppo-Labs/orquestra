@@ -49,6 +49,12 @@ const MEASUREMENTS_PER_CYCLE = 3
 const METRICS_DEADLINE_MS = 45_000
 /** Daily candles age slowly; re-measuring more often than this buys nothing. */
 const METRICS_TTL_MS = 6 * 60 * 60_000
+/** Past this a measurement is not merely due for refresh, it is meaningless —
+ *  drop it rather than offer a venue on day-old volatility. */
+const METRICS_MAX_AGE_MS = 24 * 60 * 60_000
+/** Bound on the cross-cycle measurement cache. Comfortably above
+ *  DEFAULT_MAX_MEASURED_POOLS so ordinary rank churn never evicts. */
+const MEASURED_CACHE_MAX = 32
 
 /** Operator-tunable sherwood params, as they arrive on AdapterContext.strategy
  *  (config datanets[id].adapterParams merged with the live brief). */
@@ -149,9 +155,19 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
       // Measure a few per cycle, oldest first, and offer whatever is already
       // measured meanwhile. A per-pool failure is silent: an unmeasurable pool
       // is simply not offered, never defaulted.
-      const wanted = new Set(ranked.map((p) => p.address))
-      for (const addr of [...measured.keys()]) {
-        if (!wanted.has(addr)) measured.delete(addr) // pool left the live set
+      // Expire on age, not on "fell out of the top N this cycle": ranking is by
+      // TVL, so a pool sitting near the cut oscillates across it, and evicting
+      // on that basis threw away a measurement that costs a scarce
+      // MEASUREMENTS_PER_CYCLE slot to rebuild. A hard size cap keeps the map
+      // bounded without tying it to one cycle's ranking.
+      for (const [addr, e] of [...measured]) {
+        if (t - e.at >= METRICS_MAX_AGE_MS) measured.delete(addr)
+      }
+      if (measured.size > MEASURED_CACHE_MAX) {
+        const excess = [...measured.entries()]
+          .sort((a, b) => a[1].at - b[1].at)
+          .slice(0, measured.size - MEASURED_CACHE_MAX)
+        for (const [addr] of excess) measured.delete(addr)
       }
       const stale = ranked
         .filter((p) => {

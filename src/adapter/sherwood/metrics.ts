@@ -109,14 +109,26 @@ const RATE_LIMIT_FLOOR_MS = 30_000
 /** Identify ourselves: the API 403s some default agents outright. */
 const UA = 'orquestra-sherwood-adapter/1.0 (+https://github.com/Reppo-Labs/orquestra)'
 
-/** `Retry-After` is either delta-seconds or an HTTP date. */
-export function retryAfterMs(header: string | null, floorMs = RATE_LIMIT_FLOOR_MS): number {
-  if (!header) return floorMs
+/** `Retry-After` is upstream-controlled and this sleep runs INSIDE the cycle,
+ *  which `runCycle` does not wrap in a timeout — honoring `Retry-After: 86400`
+ *  would park the whole node for a day. Waiting longer buys nothing anyway: the
+ *  pool is simply left unmeasured and picked up on a later cycle. */
+const RATE_LIMIT_CEILING_MS = 60_000
+
+/** `Retry-After` is either delta-seconds or an HTTP date. Bounded at both ends:
+ *  a short value wastes the retry budget, a long one hangs the cycle. */
+export function retryAfterMs(
+  header: string | null,
+  floorMs = RATE_LIMIT_FLOOR_MS,
+  ceilingMs = RATE_LIMIT_CEILING_MS,
+): number {
+  const bound = (ms: number): number => Math.min(Math.max(ceilingMs, floorMs), Math.max(floorMs, ms))
+  if (!header) return bound(floorMs)
   const secs = Number(header.trim())
-  if (Number.isFinite(secs) && secs >= 0) return Math.max(floorMs, secs * 1_000)
+  if (Number.isFinite(secs) && secs >= 0) return bound(secs * 1_000)
   const when = Date.parse(header)
-  if (Number.isFinite(when)) return Math.max(floorMs, when - Date.now())
-  return floorMs
+  if (Number.isFinite(when)) return bound(when - Date.now())
+  return bound(floorMs)
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -147,7 +159,12 @@ export async function fetchPoolMetrics(
   fetchImpl: typeof fetch = fetch,
   days = DEFAULT_DAYS,
   sleep: (ms: number) => Promise<void> = defaultSleep,
+  retryBudgetMs = Number.POSITIVE_INFINITY,
 ): Promise<PoolMetrics | null> {
+  // The caller's deadline is only consulted BETWEEN pools, so without a budget
+  // here two 30s rate-limit floors on a single pool blow straight through a 45s
+  // phase ceiling. Give up on this pool instead of overrunning the cycle.
+  let budgetMs = retryBudgetMs
   for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
@@ -158,7 +175,10 @@ export async function fetchPoolMetrics(
       )
       if (res.status === 429 && attempt < RATE_LIMIT_RETRIES) {
         clearTimeout(t)
-        await sleep(retryAfterMs(res.headers?.get?.('retry-after') ?? null))
+        const wait = retryAfterMs(res.headers?.get?.('retry-after') ?? null)
+        if (wait > budgetMs) return null
+        budgetMs -= wait
+        await sleep(wait)
         continue
       }
       if (!res.ok) return null
@@ -187,9 +207,12 @@ export async function fetchMetrics(
   const targets = addresses.slice(0, max)
   const started = now()
   for (let i = 0; i < targets.length; i++) {
-    if (now() - started >= deadlineMs) break
+    const remaining = deadlineMs - (now() - started)
+    if (remaining <= 0) break
     if (i > 0 && delayMs > 0) await sleep(delayMs)
-    const m = await fetchPoolMetrics(targets[i], fetchImpl, DEFAULT_DAYS, sleep)
+    // Hand the pool what is left of the phase, so a rate-limit backoff cannot
+    // outlive the deadline it is supposed to be bounded by.
+    const m = await fetchPoolMetrics(targets[i], fetchImpl, DEFAULT_DAYS, sleep, remaining)
     if (m) out.set(targets[i], m)
   }
   return out

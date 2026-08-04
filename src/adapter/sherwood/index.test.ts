@@ -256,6 +256,38 @@ describe('createSherwoodAdapter', () => {
     expect(offered).toEqual([3, 5]) // coverage grows; measured venues offered meanwhile
   })
 
+  it('keeps a measurement when the pool slips out of the ranked window', async () => {
+    // Ranking is by TVL, so a pool near the cut oscillates across it. Evicting
+    // on "not in this cycle's top N" threw away a measurement that costs a
+    // scarce per-cycle slot to rebuild.
+    const mk = (i: number, tvl: number): PoolInfo => ({
+      name: `T${i} / WETH 0.3%`, address: `0xp${i}`, dex: 'sushiswap-robinhood',
+      reserveUsd: tvl, volumeUsd24h: 100_000,
+    })
+    const all = Object.fromEntries(
+      [0, 1].map((i) => [`0xp${i}`, { ...healthyMetrics, address: `0xp${i}` }]),
+    )
+    let pools = [mk(0, 1_000_000), mk(1, 900_000)]
+    const batches: string[][] = []
+    const fetchMetrics = vi.fn(async (addrs: string[]) => {
+      batches.push(addrs)
+      return measure(all)(addrs)
+    })
+    const a = base({ fetchPools: async () => pools, fetchMetrics, generate: async () => ({ strategies: [] }) })
+
+    await a.discover({ datanetId: '3', rubric, topN: 3 })
+    expect(batches[0]).toEqual(['0xp0', '0xp1'])
+
+    // 0xp1 drops out of the live set for one cycle, then comes back.
+    pools = [mk(0, 1_000_000)]
+    await a.discover({ datanetId: '3', rubric, topN: 3 })
+    pools = [mk(0, 1_000_000), mk(1, 900_000)]
+    await a.discover({ datanetId: '3', rubric, topN: 3 })
+
+    // Nothing was re-measured: only the first cycle ever called out.
+    expect(batches).toHaveLength(1)
+  })
+
   it('a FAILED fetch does not arm the throttle — next cycle retries', async () => {
     let clock = 1_000_000
     let calls = 0

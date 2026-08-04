@@ -97,6 +97,32 @@ describe('resolveProposal', () => {
     expect(r.market?.marketId).toBe('0xmkt-tsla')
   })
 
+  it('refuses a cited market_id that does not resolve, instead of quietly substituting one', () => {
+    // findMarket falls back to the deepest (collateral, loan) pair. That is the
+    // right default when no id was cited, but silently swapping in a different
+    // market hides the exact error citing-by-id exists to surface.
+    const r = resolveProposal(
+      { ...good, borrow: { market_id: '0xfabricated', collateral_symbol: 'TSLA', borrowed_asset: 'USDG', ltv_frac_of_lltv: 0.65, exit_ltv_frac_of_lltv: 0.85 } },
+      venues,
+      [market],
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.reason).toMatch(/cited market_id 0xfabricated does not resolve/)
+    expect(r.reason).toContain('0xmkt-tsla') // and names the one it should have cited
+  })
+
+  it('still resolves by symbols when no id was cited', () => {
+    const r = resolveProposal(
+      { ...good, borrow: { collateral_symbol: 'TSLA', borrowed_asset: 'USDG', ltv_frac_of_lltv: 0.65, exit_ltv_frac_of_lltv: 0.85 } },
+      venues,
+      [market],
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.market?.marketId).toBe('0xmkt-tsla')
+  })
+
   it('refuses a borrowed asset the live lending data does not lend', () => {
     const r = resolveProposal(
       { ...good, borrow: { collateral_symbol: 'TSLA', borrowed_asset: 'NVDA', ltv_frac_of_lltv: 0.65, exit_ltv_frac_of_lltv: 0.85 } },
@@ -193,10 +219,18 @@ describe('proposalDataset', () => {
     expect(d).not.toHaveProperty('pair')
   })
 
-  it('appends the non-decay entry condition unconditionally', () => {
+  it('appends the non-decay entry condition when the model did not state it', () => {
     if (!derived.ok) return
     const d = proposalDataset(good, woodVenue, derived.derived)
     expect(d.entry_rule).toContain(NON_DECAY_CLAUSE)
+  })
+
+  it('does not restate the condition when the rule already compares 7d to 14d', () => {
+    if (!derived.ok) return
+    const already = { ...good, entry_rule: 'enter when 7d avg volume >= 0.8 x 14d avg volume' }
+    const d = proposalDataset(already, woodVenue, derived.derived)
+    expect(d.entry_rule).toBe(already.entry_rule)
+    expect(String(d.entry_rule).match(/14d/g)).toHaveLength(1)
   })
 })
 

@@ -135,6 +135,10 @@ const mentionsTrailingWindow = (s: string): boolean => /\b(7d|14d|7-day|14-day|t
 export const NON_DECAY_CLAUSE =
   `AND 7d avg daily volume >= ${MIN_VOL_TREND_RATIO} x 14d avg daily volume at entry`
 
+/** Did the model already write the 7d-vs-14d comparison itself? Appending the
+ *  clause unconditionally produced rules stating the same condition twice. */
+const statesNonDecay = (s: string): boolean => /7d.{0,120}14d|14d.{0,120}7d/is.test(s)
+
 const isRwaVenue = (p: PoolInfo): boolean => Boolean(p.base?.isTokenizedStock || p.quote?.isTokenizedStock)
 
 /** Resolution of a proposal against the live snapshot: either the concrete
@@ -186,6 +190,19 @@ export function resolveProposal(
     return {
       ok: false,
       reason: `no live Morpho market for collateral ${p.borrow.collateral_symbol} / loan ${p.borrow.borrowed_asset}${p.borrow.market_id ? ` (id ${p.borrow.market_id})` : ''}`,
+    }
+  }
+  // `findMarket` falls back to the deepest (collateral, loan) pair when the id
+  // does not hit, which is the right default when no id was cited — but if the
+  // model DID cite one and it resolved to a different market, that id was
+  // fabricated or stale. Silently substituting another market keeps the emitted
+  // artifact truthful while hiding exactly the error citing-by-id exists to
+  // surface, so refuse and name the market it should have cited.
+  const citedId = p.borrow.market_id?.trim().toLowerCase()
+  if (citedId && market.marketId.toLowerCase() !== citedId) {
+    return {
+      ok: false,
+      reason: `cited market_id ${p.borrow.market_id} does not resolve to a live market (the deepest ${market.collateralSymbol}/${market.loanSymbol} market is ${market.marketId})`,
     }
   }
   return { ok: true, venue, market }
@@ -268,7 +285,7 @@ export function proposalDataset(
         }
       : {}),
     thesis: p.thesis,
-    entry_rule: `${p.entry_rule} ${NON_DECAY_CLAUSE}`,
+    entry_rule: statesNonDecay(p.entry_rule) ? p.entry_rule : `${p.entry_rule} ${NON_DECAY_CLAUSE}`,
     exit_rule: p.exit_rule,
     ...(p.rerange_rule ? { rerange_rule: p.rerange_rule } : {}),
     ...(p.session_policy ? { session_policy: p.session_policy } : {}),
