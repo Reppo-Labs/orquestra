@@ -90,15 +90,24 @@ export function EmissionsSummary({ pnl, tokens, netUsd, earn, snapshot, netNames
       {showPods && pods.length > 0 && (
         <div className="panel-box" id="emissions-pods" style={{ marginTop: 10 }}>
           <table>
-            <thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>REPPO due</th></tr></thead>
+            {/* "Due", not "REPPO due": a datanet paying a native token (WOOD on
+                Sherwood) has every row at 0 REPPO, and the old header asserted
+                the payout was REPPO-denominated when it was not. */}
+            <thead><tr><th>Pod</th><th>Datanet</th><th>Epoch</th><th>Due</th></tr></thead>
             <tbody>
               {pods.map((p) => (
                 <tr key={`${p.podId}-${p.epoch}`}>
                   <td className="mono net-cell" title={p.podId}>{p.podId}</td>
                   <td className="net-cell" title={netLabel(p.datanetId, netNames ?? {})}>{netLabel(p.datanetId, netNames ?? {})}</td>
                   <td className="mono">{String(p.epoch)}</td>
-                  {/* 0 is honest: on-chain detection knows a payout is due before its amount */}
-                  <td className="mono">{p.reppo > 0 ? <span className="pos">{fmt(p.reppo)}</span> : <span className="faint">pending</span>}</td>
+                  {/* 0 is honest: on-chain detection knows a payout is due before
+                      its amount. Name the token when we know it, so "pending" on
+                      a native-token datanet is not read as pending REPPO. */}
+                  <td className="mono">
+                    {p.reppo > 0
+                      ? <span className="pos">{fmt(p.reppo)} REPPO</span>
+                      : <span className="faint">pending{p.token ? ` (${p.token.symbol})` : ''}</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
