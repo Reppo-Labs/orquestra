@@ -1,0 +1,27 @@
+{
+  "name": "orquestra-telemetry-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AWS ingest + aggregation for Orquestra operator telemetry. Deployed separately from the node.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "diff": "cdk diff"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.700.0",
+    "@aws-sdk/lib-dynamodb": "^3.700.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.10.0",
+    "aws-cdk": "^2.170.0",
+    "aws-cdk-lib": "^2.170.0",
+    "constructs": "^10.4.2",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.23.6",
+    "typescript": "^5.7.0"
+  }
+}

@@ -88,6 +88,20 @@ Sentry is purpose-built for crash aggregation, but groups on error *messages*, r
 
 *Trade-off*: an operational surface to run and secure.
 
+### AWS: API Gateway HTTP API -> Lambda -> DynamoDB with TTL
+
+Chosen over a container-plus-Postgres deployment for one specific reason: **retention becomes a table property instead of a job**.
+
+The spec requires raw reports to be deleted after a documented period, and `docs/telemetry.md` states that period to operators. A cron-driven delete can fail silently, and its failure mode is holding operator data for years while still promising ninety days — a broken privacy claim rather than a broken feature. DynamoDB TTL makes expiry an attribute on the item, so the guarantee does not depend on a scheduled job succeeding.
+
+API Gateway's native throttling also covers the per-source rate limit (`specs/telemetry-ingest`) without application code.
+
+*Cost accepted*: DynamoDB has no `COUNT(DISTINCT)`, so the distinct-install threshold is computed by a scheduled Lambda over a bounded window rather than by a single query. At the fleet sizes this is designed for, the window is small enough that this is unremarkable. If aggregation later outgrows it, S3 + Athena is the escape hatch and the ingest half is unchanged.
+
+*Alternatives considered*: Fargate + RDS is closest to "a small service" and makes aggregation trivial SQL, but is always-on cost for a workload idle almost all the time, and puts retention back on a cron. S3 + Athena is cheapest and keeps SQL aggregation, but S3 lifecycle expiry is coarser and the raw store is less convenient to rate-limit against.
+
+*Note on cold starts*: normally the argument against Lambda for an API. It is not one here — transmission is fire-and-forget with a short timeout and no retry (`specs/telemetry-payload`), and the admission threshold already treats individual reports as lossy and untrustworthy. A cold start that overruns the timeout costs one report from one node.
+
 ### Non-blocking, best-effort delivery
 
 Nodes earn only by voting and minting on-chain. Telemetry must never be able to delay or fail a cycle, so transmission is fire-and-forget with contained failures (`specs/telemetry-payload`). Delivery loss is acceptable; aggregates tolerate it, and the threshold is expressed in distinct installs rather than report counts.

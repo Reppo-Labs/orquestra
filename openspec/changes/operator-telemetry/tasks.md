@@ -42,22 +42,25 @@
 - [x] 5.5 Test that a disabled node performs no collector network call
 - [x] 5.6 Test that a node which has not yet displayed the notice performs no collector network call
 
-## 6. Collector service
+## 6. Collector service (AWS: API Gateway HTTP API -> Lambda -> DynamoDB)
 
-- [ ] 6.1 Stand up the ingest service and datastore; accept reports without sender authentication
-- [ ] 6.2 Validate `schemaVersion` and reject malformed reports; record rejections
-- [ ] 6.3 Rate limit per install id and per source address
-- [ ] 6.4 Implement bounded retention of raw reports with scheduled deletion; keep derived aggregates
-- [ ] 6.5 Verify the deployed retention period matches what the first-run notice and `docs/telemetry.md` state
+- [x] 6.1 Add `collector/` with the ingest Lambda handler: accept POST without sender authentication, return 202 on accept
+- [x] 6.2 Validate `schemaVersion` and payload shape; reject malformed reports with 400 and record the rejection
+- [x] 6.3 Per-install rate limiting in the handler; per-source throttling on the API Gateway stage
+- [x] 6.4 DynamoDB table with a TTL attribute set from `RETENTION_DAYS`, so expiry is a table property rather than a cron
+- [x] 6.5 CDK stack wiring API Gateway, Lambda, and the table, with throttling and least-privilege IAM
+- [x] 6.6 Handler tests: accept, reject-malformed, reject-unknown-schema, TTL is set, rate limit trips
+- [x] 6.7 Test asserting the collector's retention matches `RETENTION_DAYS` and what `docs/telemetry.md` states
+- [ ] 6.8 Deploy (operator-run `cdk deploy`) and record the endpoint URL
 
 ## 7. Aggregation and admission threshold
 
-- [ ] 7.1 Choose and document the distinct-install threshold and window; record them as security-relevant configuration
-- [ ] 7.2 Implement aggregation that exposes a signal only above the distinct-install threshold within the window
-- [ ] 7.3 Ensure exposed aggregates carry only counts and closed-set values, with no report-supplied free text
-- [ ] 7.4 Test that a signal from a single install is never exposed
-- [ ] 7.5 Test that instruction-shaped text in a report is absent from consumer-facing output
-- [ ] 7.6 Test that flooding from many fabricated install ids is constrained by rate limiting and the window
+- [x] 7.1 Choose and document the distinct-install threshold and window; record them as security-relevant configuration
+- [x] 7.2 Implement aggregation that exposes a signal only above the distinct-install threshold within the window
+- [x] 7.3 Ensure exposed aggregates carry only counts and closed-set values, with no report-supplied free text
+- [x] 7.4 Test that a signal from a single install is never exposed
+- [x] 7.5 Test that instruction-shaped text in a report is absent from consumer-facing output
+- [x] 7.6 Test that flooding from many fabricated install ids is constrained by rate limiting and the window
 
 ## 8. Verification
 

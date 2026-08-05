@@ -1,0 +1,20 @@
+{
+  // Extends the node's config so the SHARED sources under ../src (which the handlers
+  // import for validation, the threshold, and SCHEMA_VERSION) are typechecked under
+  // exactly the same options here as in the root build. Re-declaring options instead of
+  // extending caused shared files to fail here while passing at the root — a difference
+  // that says nothing about the code and everything about the config.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The root pins rootDir/outDir for its dist build; neither applies to a noEmit
+    // typecheck that deliberately spans two directories.
+    "rootDir": null,
+    "outDir": null,
+    "types": ["node", "aws-lambda"]
+  },
+  // CDK's NodejsFunction bundles across the directory boundary with esbuild at deploy
+  // time, so the relative imports into ../src resolve at runtime as well.
+  "include": ["src/**/*.ts", "cdk/**/*.ts"],
+  "exclude": ["**/*.test.ts", "cdk.out", "node_modules"]
+}
