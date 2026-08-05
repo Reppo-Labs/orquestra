@@ -43,6 +43,10 @@ import { backfillMintReppoSpent, backfillClaimDatanets } from './dashboard/activ
 import { defaultReppoReader } from './reppo/reader.js'
 import { makeCachedReader, type CacheTag } from './reppo/readCache.js'
 import type { WalletWriteKind } from './wallet/executor.js'
+import { telemetryCmd } from './telemetry/cmd.js'
+import { showNoticeIfNeeded } from './telemetry/notice.js'
+import { discloseTelemetry } from './telemetry/onboarding.js'
+import { sendTelemetryInBackground } from './telemetry/send.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -80,6 +84,9 @@ async function onboard(): Promise<void> {
       getBalance: () => queryBalanceJson(),
     })
     persistOnboarding(DATA_DIR, buildStrategyConfig(answers))
+    // Disclose telemetry while the operator is still reading. Satisfies the notice gate,
+    // so a node configured here may transmit from its first cycle. See telemetry/onboarding.ts.
+    await discloseTelemetry(DATA_DIR, p)
     p.info(`Saved strategy to ${DATA_DIR}. Run \`orquestra\` to start the node.`)
   } finally {
     p.close()
@@ -194,6 +201,11 @@ async function start(): Promise<void> {
   await checkReppoVersion({ getVersion: async () => reppoVersion }) // warn-only: old CLI fails every vote/mint cryptically
   const canGrantNonReppo = supportsNonReppoGrants(reppoVersion)
   mkdirSync(DATA_DIR, { recursive: true })
+  // Telemetry is on by default, so the operator must be TOLD before anything is sent.
+  // This runs before any cycle: on a fresh node (and on one upgraded from a version that
+  // predates telemetry) it prints the notice, records it, and the gate in consent.ts keeps
+  // this run silent. Transmission starts on the next run. See src/telemetry/notice.ts.
+  showNoticeIfNeeded(DATA_DIR)
   // Surface the resolved data dir so an operator can confirm it points at the mounted
   // volume. If this prints a path that isn't on a Docker volume, `compose down && up` will
   // silently discard the strategy config + ledgers (kept across a plain restart).
@@ -423,7 +435,14 @@ async function start(): Promise<void> {
   // reloadConfig: dashboard saves apply at the next cycle (validated; last-good on failure)
   const handle = startScheduler(config.cadenceHours, buildTick(wiring, buildCycleDeps(wiring), {
     reloadConfig: () => loadConfig(DATA_DIR),
-    onTickStart: () => cachedReader.beginCycle(),
+    onTickStart: () => {
+      cachedReader.beginCycle()
+      // Fire-and-forget, at tick START deliberately: it is off the cycle's critical path,
+      // and the counts then describe everything through the PREVIOUS completed cycle
+      // rather than racing this one's writes. Gated on notice + enabled inside; a node
+      // with no ORQUESTRA_TELEMETRY_ENDPOINT does nothing at all. See telemetry/send.ts.
+      sendTelemetryInBackground(DATA_DIR)
+    },
   }))
   schedulerHandle = handle // now the dashboard "run now" button can trigger an off-schedule cycle
 
@@ -512,6 +531,11 @@ const run =
   cmd === 'configure' ? onboard
   : cmd === 'login-anthropic' ? loginAnthropicCmd
   : cmd === 'validate-config' ? async () => validateConfigCmd()
+  : cmd === 'telemetry' ? async () => {
+      // Never transmits — see src/telemetry/cmd.ts. Safe to run before onboarding.
+      mkdirSync(DATA_DIR, { recursive: true })
+      process.exitCode = telemetryCmd(DATA_DIR, process.argv.slice(3))
+    }
   : start
 run().catch((e) => {
   const err = e as Error
