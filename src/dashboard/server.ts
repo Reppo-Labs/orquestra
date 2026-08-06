@@ -220,7 +220,9 @@ export function startDashboard(dataDir: string, port: number, opts: DashboardOpt
   const ctx: RouteContext = { dataDir, opts, session }
   const server = createServer((req, res) => { void handle(ctx, req, res) })
   // Default to loopback (see doc above). The Docker image overrides via DASHBOARD_HOST=0.0.0.0.
-  const host = process.env.DASHBOARD_HOST ?? '127.0.0.1'
+  // Blank/whitespace counts as unset: `DASHBOARD_HOST=` in a compose env_file would
+  // otherwise reach listen(port, '') and bind ALL interfaces.
+  const host = process.env.DASHBOARD_HOST?.trim() || '127.0.0.1'
   return new Promise((resolve) => {
     server.listen(port, host, () => {
       const addr = server.address() as AddressInfo
