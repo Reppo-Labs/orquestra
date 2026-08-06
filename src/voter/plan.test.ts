@@ -91,6 +91,29 @@ describe('createVotePlanner — pass 2 redistribution', () => {
     expect(executed.map((e) => e.intent.podId)).toEqual(['a', 'b', 'c', 'z', 'd', 'e'])
   })
 
+  it('a throwing cast isolates that datanet — other datanets still redistribute', async () => {
+    // Pass-2 runs outside runCycle's per-datanet try/catch, so a throw here (e.g. the
+    // ledger's SQLite save) must not abort finish() and drop the rest of the cycle.
+    const executed: string[] = []
+    const cast = vi.fn(async (datanetId: string, i: VoteIntent): Promise<ExecResult> => {
+      if (datanetId === '1') throw new Error('ledger save failed')
+      executed.push(i.podId)
+      return { ok: true, status: 'executed' }
+    })
+    const ledger = { canVote: () => true, votesRemaining: () => 4 }
+    const deferred: [string, number][] = []
+    const planner = createVotePlanner({
+      voteWeights: new Map([['1', 1], ['2', 1]]), voteRateMaxPerCycle: 0, weigher: null,
+      ledger, cast, onDeferred: (id, n) => deferred.push([id, n]),
+    })
+    const sink1 = await planner.castPass1('1', [intent('a'), intent('b')])
+    await planner.castPass1('2', [intent('z')])
+    await expect(planner.finish()).resolves.toBeUndefined()
+    expect(executed).toEqual(['z']) // datanet 2's pass-2 vote still landed
+    expect(sink1.map((r) => r.status)).toEqual(['error']) // the throw is reported, not thrown
+    expect(deferred).toEqual([['1', 2]]) // its intents stay stashed for next cycle
+  })
+
   it('breaks (no infinite loop) when every redistribution cast is refused', async () => {
     const cast = vi.fn(async (): Promise<ExecResult> => ({ ok: false, status: 'refused-budget' }))
     const ledger = { canVote: () => true, votesRemaining: () => 10 } // ledger says yes, executor refuses

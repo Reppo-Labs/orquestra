@@ -11,6 +11,7 @@
 import { allocateVoteSlots } from './allocate.js'
 import type { VoteWeigher } from './weight.js'
 import type { VoteIntent, ExecResult } from '../wallet/intents.js'
+import { redactSecrets } from '../util/redact.js'
 
 export interface VotePlannerOpts {
   /** datanetId → voteShare for every vote-enabled datanet ('*' excluded). */
@@ -91,8 +92,13 @@ export function createVotePlanner(opts: VotePlannerOpts): VotePlanner {
     // cap (cast refuses past it).
     async finish() {
       if (![...leftoverIntents.values()].some((arr) => arr.length > 0)) return
+      // Pass 2 runs after runCycle's per-datanet try/catch, so a throwing cast (ledger
+      // save, dedup write) would abort the whole cycle — deferral breadcrumbs and the
+      // claim phase included. Isolate it like the cycle does: report the throw as an
+      // error result, drop that datanet from further rounds, defer its stash.
+      const failed = new Set<string>()
       while (opts.ledger.canVote()) {
-        const pending = [...leftoverIntents].filter(([, arr]) => arr.length > 0)
+        const pending = [...leftoverIntents].filter(([id, arr]) => arr.length > 0 && !failed.has(id))
         if (pending.length === 0) break
         const remaining = opts.ledger.votesRemaining()
         if (remaining <= 0) break
@@ -106,7 +112,16 @@ export function createVotePlanner(opts: VotePlannerOpts): VotePlanner {
           if (!sink) continue
           let n = split.get(id) ?? 0
           while (n > 0 && arr.length > 0 && opts.ledger.canVote()) {
-            const r = await castOne(id, arr[0], sink)
+            let r: ExecResult
+            try {
+              r = await castOne(id, arr[0], sink)
+            } catch (e) {
+              const detail = redactSecrets(e instanceof Error ? e.message : String(e))
+              console.error(`orquestra: datanet ${id} pass-2 vote failed — ${detail}`)
+              sink.push({ ok: false, status: 'error', detail })
+              failed.add(id)
+              break
+            }
             if (r.status === 'refused-budget') break
             arr.shift(); n--; progressed = true
           }
