@@ -150,6 +150,8 @@ describe('runCycle vote-weight budget', () => {
     votingPowerWei: remaining, votesCastedWei: 0n, remainingWei: remaining,
     epoch: 117, epochEndsAtSec: Math.floor(Date.now() / 1000) + 6 * 3600, // exactly 1 cadence left
   }))
+  const skipReasons = (rec: ReturnType<typeof vi.fn>): string[] =>
+    rec.mock.calls.map((c) => c[0]).filter((e) => e.kind === 'skip').map((e) => e.reason as string)
 
   it('sizes each vote from the wallet budget and threads voteWeightWei to the executor', async () => {
     const getVotePowerBudget = budget(59_400n * REPPO)
@@ -184,6 +186,55 @@ describe('runCycle vote-weight budget', () => {
     expect(intents.length).toBe(1)
     // 1 cycle × cap 99 → perVote = 600 REPPO; conviction 9 → 540 (vs 135 unhorizoned).
     expect(BigInt(intents[0].voteWeightWei)).toBe(540n * REPPO)
+  })
+
+  it('skips vote scoring entirely when the wallet has no voting power (#164)', async () => {
+    // The bug this fixes: with zero power the node fetched pods and LLM-scored every one
+    // of them EVERY cycle, only for the planner to refuse each at cast time. Same shape
+    // as the rate-cap and poolDry gates — do not pay to score what cannot be cast.
+    const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
+    const d = deps({
+      scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod } }) }),
+      onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: budget(0n) }) }),
+    })
+    await runCycle(config, 'cyc-nopower', d)
+    expect(scorePod).not.toHaveBeenCalled()
+    expect((d.executor.executeVote as any).mock.calls.length).toBe(0)
+  })
+
+  it('tells the operator zero power is NOT self-resolving, and how to fix it', async () => {
+    // A wallet with no power at all never recovers on its own, unlike a spent epoch
+    // allowance. The message must say which case it is and name the remedy.
+    const d = deps({ onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: budget(0n) }) }) })
+    await runCycle(config, 'cyc-nopower-msg', d)
+    const reasons = skipReasons(d.activity.record as any)
+    expect(reasons.some((r) => /NO veREPPO voting power/.test(r))).toBe(true)
+    expect(reasons.some((r) => /robinhood\.reppo\.ai/.test(r))).toBe(true)
+    // and it must NOT claim a rate/budget cap was hit
+    expect(reasons.some((r) => /rate\/budget cap reached/.test(r))).toBe(false)
+  })
+
+  it('distinguishes a SPENT epoch allowance from never having had power', async () => {
+    // power > 0 but fully cast this epoch: benign, resumes next epoch — must not tell the
+    // operator to go lock REPPO they already locked.
+    const spent = vi.fn(async () => ({
+      votingPowerWei: 500n * REPPO, votesCastedWei: 500n * REPPO, remainingWei: 0n,
+      epoch: 117, epochEndsAtSec: Math.floor(Date.now() / 1000) + 6 * 3600,
+    }))
+    const d = deps({ onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: spent }) }) })
+    await runCycle(config, 'cyc-spent', d)
+    const reasons = skipReasons(d.activity.record as any)
+    expect(reasons.some((r) => /exhausted for this epoch/.test(r))).toBe(true)
+    expect(reasons.some((r) => /NO veREPPO voting power/.test(r))).toBe(false)
+  })
+
+  it('an unread vote-power budget never gates scoring (fail-open)', async () => {
+    // Same discipline as the yield and rewards-pool reads: unknown must not silence a
+    // datanet. An RPC-less node still votes with legacy sizing.
+    const scorePod = vi.fn(async () => ({ score: 9, reason: 'good' }))
+    const d = deps({ scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod } }) }) })
+    await runCycle(config, 'cyc-unread', d)
+    expect(scorePod).toHaveBeenCalled()
   })
 
   it('refuses instead of signing once the epoch budget is exhausted', async () => {
