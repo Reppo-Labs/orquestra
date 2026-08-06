@@ -513,6 +513,13 @@ describe('network bind (the unauthenticated panel must not default to a public i
     await h.close()
   })
 
+  it('treats a blank DASHBOARD_HOST as unset (compose env_file with DASHBOARD_HOST=)', async () => {
+    process.env.DASHBOARD_HOST = ''
+    const h = await startDashboard(mkdtempSync(join(tmpdir(), 'orq-bind-')), 0)
+    expect(h.host).toBe('127.0.0.1')
+    await h.close()
+  })
+
   it('honors DASHBOARD_HOST override (e.g. 0.0.0.0 inside the Docker image)', async () => {
     process.env.DASHBOARD_HOST = '0.0.0.0'
     const h = await startDashboard(mkdtempSync(join(tmpdir(), 'orq-bind-')), 0)
