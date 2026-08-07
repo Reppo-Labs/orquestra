@@ -23,12 +23,20 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
   onGoToStrategy: (datanetId?: string) => void
 }) {
   const all = snapshot?.datanetEconomics ?? []
-  // Only datanets that pay and whose volume read succeeded can be ranked.
+  // Only datanets that pay and whose volume read succeeded can be ranked — and a
+  // datanet whose rewards pool is DRY cannot pay at all, so it is not a place to
+  // vote. The cycle already refuses to score votes on a dry pool (cycle.ts
+  // "rewards pool dry — skipping vote scoring"), so ranking one here recommended
+  // exactly what the node then declines to do. Worse, dry+uncontested sorted
+  // FIRST, so three unpayable datanets filled the board and pushed the only
+  // solvent one off it. Fail-open is preserved: poolDry is set only on a
+  // successful read, so an unread pool still ranks.
   const rankable = all
-    .filter((y) => (y.emissionsPerEpochReppo > 0 || y.nativeTokenSymbol) && y.epochVoteVolume !== null)
+    .filter((y) => (y.emissionsPerEpochReppo > 0 || y.nativeTokenSymbol) && y.epochVoteVolume !== null && !y.poolDry)
     .sort(rank)
   const top = rankable.slice(0, 3)
   const unavailable = all.filter((y) => y.epochVoteVolume === null).length
+  const dry = all.filter((y) => y.poolDry).length
   if (!all.length) return null
   return (
     // Fragment, not a wrapper div: .sec-head:first-child would otherwise see this
@@ -76,11 +84,21 @@ export function DatanetEconomics({ snapshot, netNames, onGoToStrategy }: {
             ))}
           </div>
         ) : (
-          <div className="muted">no rankable datanets this cycle{unavailable ? ` (${unavailable} unavailable)` : ''}</div>
+          // An all-dry board is the common empty case, and it has a cause and a
+          // remedy the operator can act on — say so instead of the bare
+          // "no rankable datanets", which reads as a node fault.
+          <div className="muted">
+            {dry > 0
+              ? `no datanet can pay a vote right now — ${dry === all.length ? 'every' : `${dry} of your`} configured datanet${dry > 1 ? 's have' : ' has'} a dry rewards pool, so the node skips voting until one is re-seeded`
+              : `no rankable datanets this cycle${unavailable ? ` (${unavailable} unavailable)` : ''}`}
+          </div>
         )}
-        {top.length > 0 && unavailable > 0 && (
+        {top.length > 0 && (unavailable > 0 || dry > 0) && (
           <div className="muted" style={{ marginTop: '0.5rem', fontSize: 12 }}>
-            {unavailable} datanet{unavailable > 1 ? 's' : ''} unavailable this cycle (volume read failed) — details on the Strategy tab
+            {[
+              dry > 0 ? `${dry} skipped — rewards pool dry (the node does not vote these)` : null,
+              unavailable > 0 ? `${unavailable} unavailable this cycle (volume read failed)` : null,
+            ].filter(Boolean).join(' · ')} — details on the Strategy tab
           </div>
         )}
       </div>
