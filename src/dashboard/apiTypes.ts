@@ -62,6 +62,10 @@ export interface PnlResponse {
   tokens?: TokenPnlView[]
   /** Σ net×spot across every token leg; null when any nonzero leg is unpriced. */
   netUsd?: number | null
+  /** Σ spent×spot across every token leg — the cost basis behind `roiPct`. */
+  spentUsd?: number | null
+  /** netUsd / spentUsd × 100; null when unpriceable or nothing has been spent. */
+  roiPct?: number | null
 }
 
 /** GET /api/earn: rows persisted by older nodes may predate claimedTokens. */

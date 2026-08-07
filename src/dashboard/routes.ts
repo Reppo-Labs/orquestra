@@ -327,8 +327,8 @@ const pnl: RouteHandler = async ({ dataDir }) => {
   if (!snapshot || !p) return json(200, { pnl: p, snapshot } satisfies PnlResponse)
   const econ = snapshot.datanetEconomics ?? []
   const flows = deriveTokenFlows(p.earnedReppo, sumClaimedTokens(dataDir), sumMintSpentByDatanet(dataDir), econ)
-  const { tokens, netUsd } = await tokenPricer.priceTokenFlows(flows, econ)
-  return json(200, { pnl: p, snapshot, tokens, netUsd } satisfies PnlResponse)
+  const { tokens, netUsd, spentUsd, roiPct } = await tokenPricer.priceTokenFlows(flows, econ)
+  return json(200, { pnl: p, snapshot, tokens, netUsd, spentUsd, roiPct } satisfies PnlResponse)
 }
 
 // ── write handlers ──────────────────────────────────────────────────────────────

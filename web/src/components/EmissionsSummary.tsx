@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Pnl, TokenPnl, Earn, Snapshot } from '../api'
-import { fmt, sign, netLabel } from '../lib/format'
+import { fmt, sign, pct, netLabel } from '../lib/format'
 
 /** −$3.20 / $0.45 — dollars with the sign OUTSIDE the $ and sensible precision
  *  for sub-cent nets. */
@@ -16,10 +16,12 @@ const usd = (n: number): string => {
  *  (tokens/netUsd — see src/dashboard/prices.ts); token units are NEVER summed
  *  across symbols, only their USD values are. The pod-payout list (snapshot
  *  emissionsDue) stays expandable below. */
-export function EmissionsSummary({ pnl, tokens, netUsd, earn, snapshot, netNames }: {
+export function EmissionsSummary({ pnl, tokens, netUsd, spentUsd, roiPct, earn, snapshot, netNames }: {
   pnl: Pnl | null
   tokens?: TokenPnl[]
   netUsd?: number | null
+  spentUsd?: number | null
+  roiPct?: number | null
   earn?: Earn | null
   snapshot?: Snapshot | null
   netNames?: Record<string, string>
@@ -32,7 +34,7 @@ export function EmissionsSummary({ pnl, tokens, netUsd, earn, snapshot, netNames
   const legs: TokenPnl[] = tokens
     ? tokens.filter((t) => t.symbol !== 'REPPO')
     : (earn?.claimedTokens ?? []).filter((t) => t.amount > 0)
-        .map((t) => ({ symbol: t.symbol, earned: t.amount, spent: 0, net: t.amount, priceUsd: null, netUsd: null }))
+        .map((t) => ({ symbol: t.symbol, earned: t.amount, spent: 0, net: t.amount, priceUsd: null, netUsd: null, earnedUsd: null, spentUsd: null }))
   // tolerate pre-feature snapshots that carry no emissionsDue at all
   const pods = snapshot?.emissionsDue?.pods ?? []
   return (
@@ -56,6 +58,25 @@ export function EmissionsSummary({ pnl, tokens, netUsd, earn, snapshot, netNames
             {netUsd === undefined || netUsd === null
               ? 'price unavailable'
               : 'earned − spent, all tokens · excludes gas + LLM'}
+          </div>
+        </div>
+        {/* Percentage return sits beside the dollar figure: the same net, divided by
+            what it cost to earn it. Null (—) is honest in two distinct cases the sub
+            line distinguishes — an unpriced leg, and a node that has not spent yet
+            (no cost basis ⇒ a ratio would be Infinity, not "infinite profit"). */}
+        <div className="card hero">
+          <div className="k">Net PnL (%)</div>
+          <div className="v">
+            {roiPct === undefined || roiPct === null
+              ? <span className="faint">—</span>
+              : <span className={sign(roiPct)}>{pct(roiPct)}</span>}
+          </div>
+          <div className="sub">
+            {roiPct !== undefined && roiPct !== null && spentUsd
+              ? `return on ${usd(spentUsd)} spent`
+              : netUsd === undefined || netUsd === null
+                ? 'price unavailable'
+                : 'no spend yet — nothing to return on'}
           </div>
         </div>
         {legs.map((t) => (

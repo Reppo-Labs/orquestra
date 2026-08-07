@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { parseTokenPrices, createTokenPricer } from './prices.js'
+import { parseTokenPrices, createTokenPricer, roiPercent } from './prices.js'
 import type { TokenFlow } from './pnl.js'
 
 const WOOD_ADDR = '0xf8bc08092c06db6148114dcf82af881f1085f92b'
@@ -40,6 +40,19 @@ describe('parseTokenPrices', () => {
   })
 })
 
+describe('roiPercent', () => {
+  it('is net over cost basis, as a percentage', () => {
+    expect(roiPercent(3, 12)).toBeCloseTo(25)
+    expect(roiPercent(-6, 12)).toBeCloseTo(-50)
+  })
+
+  it('is null — never Infinity — when nothing was spent, and when an input is unpriced', () => {
+    expect(roiPercent(5, 0)).toBeNull()
+    expect(roiPercent(5, null)).toBeNull()
+    expect(roiPercent(null, 12)).toBeNull()
+  })
+})
+
 describe('createTokenPricer', () => {
   beforeEach(() => {
     vi.stubEnv('REPPO_NETWORK', 'robinhood')
@@ -57,6 +70,22 @@ describe('createTokenPricer', () => {
     // REPPO leg is unpriceable on robinhood (no REPPO token) but its net is 0,
     // so the dollar total still totals.
     expect(out.netUsd).toBeCloseTo(-2.9)
+    // …and the percentage return is that net over the $5 cost basis (100 WOOD × $0.05).
+    expect(wood.earnedUsd).toBeCloseTo(2.1)
+    expect(wood.spentUsd).toBeCloseTo(5)
+    expect(out.spentUsd).toBeCloseTo(5)
+    expect(out.roiPct).toBeCloseTo(-58)
+  })
+
+  it('reports no percentage when nothing has been spent, even with a priced net', async () => {
+    const f = fakeFetch(() => geckoBody({ [WOOD_ADDR]: '0.05' }))
+    const pricer = createTokenPricer({ fetchImpl: f.impl, env: process.env })
+    const out = await pricer.priceTokenFlows(
+      [{ symbol: 'WOOD', earned: 42, spent: 0, net: 42 }], econ,
+    )
+    expect(out.netUsd).toBeCloseTo(2.1)
+    expect(out.spentUsd).toBe(0)
+    expect(out.roiPct).toBeNull() // no cost basis ⇒ no ratio, not Infinity
   })
 
   it('returns null netUsd when a nonzero leg is unpriced (fetch outage)', async () => {
@@ -65,6 +94,10 @@ describe('createTokenPricer', () => {
     const out = await pricer.priceTokenFlows(flows, econ)
     expect(out.tokens.find((t) => t.symbol === 'WOOD')!.priceUsd).toBeNull()
     expect(out.netUsd).toBeNull()
+    // An unpriced leg that SPENT leaves the cost basis incomplete — reporting a
+    // percentage off the priced remainder would overstate the return.
+    expect(out.spentUsd).toBeNull()
+    expect(out.roiPct).toBeNull()
   })
 
   it('caches spots — a second call inside the TTL does not refetch', async () => {
