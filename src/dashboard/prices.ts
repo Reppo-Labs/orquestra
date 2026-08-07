@@ -38,6 +38,11 @@ export interface TokenPnlView extends TokenFlow {
   priceUsd: number | null
   /** net × priceUsd; null when priceUsd is. */
   netUsd: number | null
+  /** earned × priceUsd; null when priceUsd is. */
+  earnedUsd: number | null
+  /** spent × priceUsd; null when priceUsd is. This is the leg's cost basis — the
+   *  denominator of the percentage return. */
+  spentUsd: number | null
 }
 
 export interface TokenPnlSummary {
@@ -45,6 +50,20 @@ export interface TokenPnlSummary {
   /** Σ netUsd across all token legs; null when any leg with a nonzero net is unpriced
    *  (a partial dollar total would read as authoritative while missing a leg). */
   netUsd: number | null
+  /** Σ spentUsd across all token legs — the cost basis behind `roiPct`; null when any
+   *  leg with nonzero spend is unpriced. */
+  spentUsd: number | null
+  /** Percentage return on spend: netUsd / spentUsd × 100. Null when either input is
+   *  null, and null (not Infinity) at zero spend — a node that has earned without
+   *  ever spending has no return RATIO to report, only a dollar figure. */
+  roiPct: number | null
+}
+
+/** netUsd / spentUsd as a percentage, guarding the undefined-at-zero-spend case.
+ *  Exported so the same rule prices one token leg and the whole portfolio. */
+export function roiPercent(netUsd: number | null, spentUsd: number | null): number | null {
+  if (netUsd === null || spentUsd === null || spentUsd <= 0) return null
+  return (netUsd / spentUsd) * 100
 }
 
 /** Defensive parse of GeckoTerminal's simple-price body →
@@ -140,11 +159,22 @@ export function createTokenPricer(deps: TokenPricerDeps = {}) {
     const tokens: TokenPnlView[] = flows.map((f) => {
       const addr = addrOf.get(f.symbol)
       const priceUsd = (addr && prices.get(addr)) || null
-      return { ...f, priceUsd, netUsd: priceUsd === null ? null : f.net * priceUsd }
+      return {
+        ...f,
+        priceUsd,
+        netUsd: priceUsd === null ? null : f.net * priceUsd,
+        earnedUsd: priceUsd === null ? null : f.earned * priceUsd,
+        spentUsd: priceUsd === null ? null : f.spent * priceUsd,
+      }
     })
     const blocked = tokens.some((t) => t.net !== 0 && t.netUsd === null)
     const netUsd = blocked ? null : tokens.reduce((s, t) => s + (t.netUsd ?? 0), 0)
-    return { tokens, netUsd }
+    // Spend has its own blocking rule: an unpriced leg that SPENT is a missing
+    // slice of the cost basis, which would inflate the percentage return even
+    // when every net happens to price.
+    const spendBlocked = tokens.some((t) => t.spent !== 0 && t.spentUsd === null)
+    const spentUsd = spendBlocked ? null : tokens.reduce((s, t) => s + (t.spentUsd ?? 0), 0)
+    return { tokens, netUsd, spentUsd, roiPct: roiPercent(netUsd, spentUsd) }
   }
 
   return { priceTokenFlows }

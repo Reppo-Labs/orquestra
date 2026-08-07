@@ -94,7 +94,7 @@ export function App() {
               ) : 'awaiting first cycle'}
             </div>
             <SecHead title="Emissions" />
-            <EmissionsSummary pnl={data?.pnl ?? null} tokens={data?.tokens} netUsd={data?.netUsd} earn={earn} snapshot={snap} netNames={netNames} />
+            <EmissionsSummary pnl={data?.pnl ?? null} tokens={data?.tokens} netUsd={data?.netUsd} spentUsd={data?.spentUsd} roiPct={data?.roiPct} earn={earn} snapshot={snap} netNames={netNames} />
             {/* One grid-gap of air between the two card blocks of this section. */}
             <div style={{ marginTop: 12 }}>
               <PnlCards pnl={data?.pnl ?? null} snapshot={snap} />

@@ -75,6 +75,10 @@ export interface DashData {
   tokens?: TokenPnlView[]
   /** Σ net×spot across token legs; null = a nonzero leg is unpriced. */
   netUsd?: number | null
+  /** Σ spent×spot across token legs — the cost basis behind `roiPct`. */
+  spentUsd?: number | null
+  /** netUsd / spentUsd × 100; null when unpriceable or nothing spent yet. */
+  roiPct?: number | null
   activity: ActivityEntry[]
   config: SafeStrategyConfig
   earn: EarnStatus | null
@@ -117,6 +121,8 @@ export async function loadAll(): Promise<DashData> {
     snapshot: pnlRes.snapshot ?? null,
     tokens: pnlRes.tokens,
     netUsd: pnlRes.netUsd,
+    spentUsd: pnlRes.spentUsd,
+    roiPct: pnlRes.roiPct,
     // Array.isArray guard: even a 200 must never hand a non-array to consumers that .filter/.map it.
     activity: Array.isArray(activity) ? activity : [],
     config: config ?? {},
