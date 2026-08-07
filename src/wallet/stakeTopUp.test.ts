@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planStakeTopUp, wasStakeTargetAttempted, markStakeTargetAttempted } from './stakeTopUp.js'
+import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from './stakeTopUp.js'
 
 describe('planStakeTopUp', () => {
   it('locks the difference when the target exceeds current veREPPO', () => {
@@ -23,6 +23,19 @@ describe('planStakeTopUp', () => {
   it('rounds the lock amount to 6 decimals (no float noise / scientific notation)', () => {
     expect(planStakeTopUp(1031.4726688, { lockReppo: 2000, lockDurationDays: 30 }))
       .toEqual({ lockAmount: 968.527331, durationSeconds: 30 * 86400 })
+  })
+})
+
+describe('stakeTopUpKey', () => {
+  it('is stable for the same target/duration/amount (crash-retry reuses it)', () => {
+    const stake = { lockReppo: 2000, lockDurationDays: 30 }
+    expect(stakeTopUpKey(stake, 969)).toBe(stakeTopUpKey(stake, 969))
+  })
+  it('changes when the planned lock amount changes (a re-read veREPPO must not collide)', () => {
+    // Same target, but veREPPO moved between attempts so the diff differs. Reusing the key
+    // with different args is reppo-cli IDEMPOTENCY_ARGS_MISMATCH — permanently.
+    const stake = { lockReppo: 2000, lockDurationDays: 30 }
+    expect(stakeTopUpKey(stake, 969)).not.toBe(stakeTopUpKey(stake, 950))
   })
 })
 

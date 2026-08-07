@@ -982,6 +982,22 @@ describe('runCycle stake top-up', () => {
     expect(lock).toHaveBeenCalledTimes(2)
   })
 
+  it('uses a FRESH idempotency key when a retry re-reads a changed veREPPO (no ARGS_MISMATCH)', async () => {
+    // Cross-restart shape: attempt 1 fails, veREPPO moves (someone locked/unlocked, emissions
+    // landed), so the retry locks a DIFFERENT amount. Same key + different args = reppo-cli
+    // IDEMPOTENCY_ARGS_MISMATCH forever, so the key must move with the amount.
+    const lock = vi.fn(async (_args: LockArgs) => ({ ok: false as const, status: 'error' as const, detail: 'RPC blip' }))
+    let ve = 0
+    const d = deps({ reads: fakeReads({ getVeReppo: async () => ve }), executor: stakeExecutor(lock) })
+    const cfg = cfgStake(1600)
+    await runCycle(cfg, 'c1', d)
+    ve = 100 // veREPPO changed between attempts → different diff
+    await runCycle(cfg, 'c2', d)
+    expect(lock).toHaveBeenCalledTimes(2)
+    expect(lock.mock.calls[0][0].amountReppo).not.toBe(lock.mock.calls[1][0].amountReppo)
+    expect(lock.mock.calls[0][0].idempotencyKey).not.toBe(lock.mock.calls[1][0].idempotencyKey)
+  })
+
   it('records the lock-failure reason in the stake activity so the operator sees WHY', async () => {
     const acts: any[] = []
     const lock = vi.fn(async () => ({ ok: false as const, status: 'error' as const, detail: 'INSUFFICIENT_REPPO_BALANCE' }))

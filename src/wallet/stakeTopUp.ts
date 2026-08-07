@@ -44,7 +44,14 @@ export function markStakeTargetAttempted(target: number): void {
 }
 
 /** Stable idempotency key for a top-up to a given target — a crash-retry before the
- *  lock tx lands reuses it (no double-lock); a later further bump uses a new key. */
-export function stakeTopUpKey(stake: { lockReppo: number; lockDurationDays: number }): string {
-  return `lock-target-${stake.lockReppo}-${stake.lockDurationDays}`
+ *  lock tx lands reuses it (no double-lock); a later further bump uses a new key. The
+ *  planned `lockAmount` is part of the key because it is RE-DERIVED from a fresh veREPPO
+ *  read on every attempt: a retry after any veREPPO change locks a different amount, and
+ *  reusing the key with different args is reppo-cli IDEMPOTENCY_ARGS_MISMATCH — permanently,
+ *  since the in-memory latch that otherwise suppresses the retry resets on restart. */
+export function stakeTopUpKey(
+  stake: { lockReppo: number; lockDurationDays: number },
+  lockAmount: number,
+): string {
+  return `lock-target-${stake.lockReppo}-${stake.lockDurationDays}-${lockAmount}`
 }
