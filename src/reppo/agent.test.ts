@@ -58,6 +58,18 @@ describe('parseRegisterAgentOutput (CLI emits TEXT even with --json)', () => {
   it('throws when neither JSON nor an id line is present', () => {
     expect(() => parseRegisterAgentOutput('some unexpected error text')).toThrow()
   })
+  it('never echoes the apiKey into the thrown message (it is logged unredacted)', () => {
+    // registration output whose `id:` line is missing/renamed still carries the apiKey —
+    // the agent's persistent Bearer token. The throw path folds stdout into the message,
+    // which src/index.ts logs verbatim, so the key must not be in it.
+    const stdout = `\u2717 partial registration\n\n  apiKey: agent_cqj3ljok99m_wy3p83yr31d\n`
+    expect(() => parseRegisterAgentOutput(stdout)).toThrow()
+    try {
+      parseRegisterAgentOutput(stdout)
+    } catch (e) {
+      expect((e as Error).message).not.toContain('agent_cqj3ljok99m_wy3p83yr31d')
+    }
+  })
 })
 
 describe('agent store', () => {

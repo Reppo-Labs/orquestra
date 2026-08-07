@@ -51,15 +51,24 @@ export function redactSecrets(s: string): string {
     // separators: provider docs are inconsistent on the Virtuals prefix, and matching
     // only `_` would silently leak a real `acp-…` key. Length floor avoids prose like "inf_".
     .replace(/\b(inf|acp)[_-][A-Za-z0-9]{12,}/gi, (m) => `${m.slice(0, 4)}<redacted>`)
+    // Reppo platform agent api keys (`agent_…`), used as the Bearer token for platform
+    // calls. The register-agent CLI prints one in plain text, and a parse failure folds
+    // that output into an error message — redact it here too as defense in depth.
+    // Underscores are part of the token, so the class includes `_`; the {8,} floor keeps
+    // prose like "agent_id" untouched.
+    .replace(/\bagent_[A-Za-z0-9_]{8,}/g, 'agent_<redacted>')
     // LLM provider API keys, now promoted to first-class env vars (LLM_KEY_*). The node
     // never logs keys deliberately, but a misconfigured provider SDK can fold a key into an
     // error string — redact at the boundary as defense-in-depth.
     //  Anthropic `sk-ant-…` FIRST (its `sk-` prefix would otherwise be eaten by the bare
     //  rule below, losing the `ant-` marker). Case-sensitive: real keys are lowercase `sk-`.
-    .replace(/\bsk-ant-[A-Za-z0-9-]{20,}/g, 'sk-ant-<redacted>')
+    //  The class includes `_`: subscription tokens (`sk-ant-oat…`, minted by `claude
+    //  setup-token`) are base64url, so an `_` inside would otherwise cut the match short —
+    //  or, if it falls within the first 20 chars, prevent it entirely, leaking the token.
+    .replace(/\bsk-ant-[A-Za-z0-9_-]{20,}/g, 'sk-ant-<redacted>')
     //  Bare OpenAI `sk-…` (incl. `sk-proj-…`). The {20,} floor + exact `sk-` prefix avoid
     //  mangling prose like `sk-learn` (too short) or `sku-…` (no `sk-` boundary).
-    .replace(/\bsk-[A-Za-z0-9-]{20,}/g, 'sk-<redacted>')
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}/g, 'sk-<redacted>')
     //  Google `AIza…` keys: the literal `AIza` prefix + 35 url-safe chars (fixed-length shape).
     .replace(/\bAIza[A-Za-z0-9_-]{35}/g, 'AIza<redacted>')
     // usepod carries its auth token in the URL PATH: https://api.usepod.ai/proxy/<token>/v1.
