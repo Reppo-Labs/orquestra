@@ -139,7 +139,15 @@ export type EnsureAgentResult = { source: 'env' | 'stored' | 'registered'; agent
  *  Precedence: operator-set env → persisted store → fresh registration. */
 export async function ensureAgentId(deps: EnsureAgentDeps): Promise<EnsureAgentResult> {
   if (deps.envAgentId && deps.envAgentId.trim() !== '') {
-    return { source: 'env', agentId: deps.envAgentId.trim() }
+    const envAgentId = deps.envAgentId.trim()
+    // The env id short-circuits registration, but the store may still hold the apiKey
+    // for that very agent (registered on an earlier start). Load it — vote registration
+    // (registerVoteOnPlatform) needs id+apiKey, and without this every restart with
+    // REPPO_AGENT_ID set leaves votes unattributed on the platform. Only when the ids
+    // match, so an env override never authenticates as a different agent.
+    const persisted = deps.readStored()
+    if (persisted && persisted.agentId === envAgentId && persisted.apiKey) deps.setEnv(persisted)
+    return { source: 'env', agentId: envAgentId }
   }
 
   const stored = deps.readStored()
