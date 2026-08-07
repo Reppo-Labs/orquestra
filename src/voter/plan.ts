@@ -27,9 +27,22 @@ export interface VotePlannerOpts {
    *  refused-budget (not throw) when the executor's cap refuses. */
   cast(datanetId: string, intent: VoteIntent): Promise<ExecResult>
   /** One deferral breadcrumb per datanet whose stash didn't drain (retried next
-   *  cycle — dedup records executed votes only). */
-  onDeferred(datanetId: string, count: number): void
+   *  cycle — dedup records executed votes only).
+   *
+   *  `reason` MUST be rendered distinctly by the caller. The two cases look identical
+   *  from here but demand opposite operator responses: 'rate-cap' is the node working as
+   *  configured and self-resolves next cycle, while 'vote-power' means the wallet cannot
+   *  vote at all and nothing will change until the operator acts off-node. Collapsing
+   *  them shipped a bug where a node with zero voting power reported a benign throttle
+   *  for days (#164). */
+  onDeferred(datanetId: string, count: number, reason: DeferralReason): void
 }
+
+/** Why a datanet's scored-but-unvoted stash did not drain.
+ *  - 'rate-cap'   — the per-cycle vote budget (slot share or global cap) is spent.
+ *  - 'vote-power' — the wallet's per-epoch veREPPO voting power is spent, or it never
+ *                   had any. Signing would revert InsufficientVotingPower. */
+export type DeferralReason = 'rate-cap' | 'vote-power'
 
 export interface VotePlanner {
   /** Pass 1: cast up to this datanet's slot share, stash the rest for finish().
@@ -45,6 +58,12 @@ export function createVotePlanner(opts: VotePlannerOpts): VotePlanner {
   const voteSlots = allocateVoteSlots(opts.voteWeights, opts.voteRateMaxPerCycle)
   const leftoverIntents = new Map<string, VoteIntent[]>() // scored-but-unvoted, per datanet
   const voteSinks = new Map<string, ExecResult[]>()        // each datanet's results (same ref castPass1 returned)
+  // Set once the weigher reports the epoch's vote power spent. Safe as a cycle-global
+  // flag rather than per-datanet: voting power belongs to the WALLET, not a datanet, and
+  // the weigher draws down monotonically — once it hits zero nothing else can cast this
+  // cycle either. A datanet rate-capped moments before that is reported as 'vote-power'
+  // too, which is the more actionable of the two truths.
+  let votePowerExhausted = false
 
   // Size one intent with the weigher, then cast. A 0n answer means the epoch's
   // vote-power budget is spent — signing would revert InsufficientVotingPower and
@@ -54,6 +73,7 @@ export function createVotePlanner(opts: VotePlannerOpts): VotePlanner {
     if (opts.weigher) {
       const weightWei = opts.weigher(intent.conviction)
       if (weightWei === 0n) {
+        votePowerExhausted = true
         const refused: ExecResult = { ok: false, status: 'refused-budget', detail: 'vote-power budget exhausted this epoch' }
         sink.push(refused)
         return refused
@@ -129,7 +149,7 @@ export function createVotePlanner(opts: VotePlannerOpts): VotePlanner {
         if (!progressed) break
       }
       for (const [id, arr] of leftoverIntents) {
-        if (arr.length > 0) opts.onDeferred(id, arr.length)
+        if (arr.length > 0) opts.onDeferred(id, arr.length, votePowerExhausted ? 'vote-power' : 'rate-cap')
       }
     },
   }

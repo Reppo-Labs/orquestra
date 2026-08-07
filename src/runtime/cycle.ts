@@ -412,6 +412,19 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
 
   // Vote-enabled datanets and their voteShares — the planner's slot-allocation input
   // ('*' wildcard excluded).
+  // Two very different states share one symptom (no vote is castable), so say which:
+  //   votingPower 0        → the wallet has no veREPPO power at all. NOT self-resolving:
+  //                          the operator must lock on Base, and on robinhood also mirror
+  //                          it (VeReppoRBV1 is admin-synced — the node cannot do it).
+  //   power > 0, spent     → this epoch's allowance is used up; resumes next epoch.
+  // Kept next to the planner's onDeferred and the pre-scoring gate so both render the
+  // same sentence — an operator comparing the dashboard row against stderr should not
+  // have to reconcile two phrasings of one condition.
+  const votePowerHint = (vp: { votingPowerWei: bigint; remainingWei: bigint } | null): string =>
+    vp !== null && vp.votingPowerWei === 0n
+      ? 'wallet has NO veREPPO voting power — lock REPPO on Base (on robinhood, then sync voting power at https://robinhood.reppo.ai; the node cannot mirror it itself)'
+      : 'vote-power budget exhausted for this epoch — resumes next epoch'
+
   const voteWeights = new Map<string, number>()
   for (const [id, p] of Object.entries(config.datanets)) {
     if (id !== '*' && p.vote) voteWeights.set(id, p.voteShare)
@@ -423,10 +436,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // fall back to the legacy conviction×1e18 sizing — dust next to a locked stake, but
   // never more fragile than before.
   let voteWeigher: VoteWeigher | null = null
+  // Retained for the pre-scoring gate below. null ⇒ unread (RPC-less node or a failed
+  // read) — fail-open, exactly like the yield and rewards-pool reads: an unknown budget
+  // never gates scoring, it only loses the sizing.
+  let votePower: { votingPowerWei: bigint; remainingWei: bigint } | null = null
   if (voteWeights.size > 0) {
     if (deps.onchain?.wallet?.getVotePowerBudget) {
       try {
         const budget = await deps.onchain.wallet.getVotePowerBudget()
+        votePower = { votingPowerWei: budget.votingPowerWei, remainingWei: budget.remainingWei }
         voteWeigher = createVoteWeigher({
           remainingWei: budget.remainingWei,
           secondsRemainingInEpoch: Math.max(0, budget.epochEndsAtSec - Math.floor(Date.now() / 1000)),
@@ -487,8 +505,14 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     weigher: voteWeigher,
     ledger: deps.ledger,
     cast: castVote,
-    onDeferred: (id, count) => recordSkipActivity(deps, cycleId, id,
-      `vote rate/budget cap reached — ${count} vote${count === 1 ? '' : 's'} deferred to next cycle`),
+    // Render the two deferral causes distinctly. They are NOT interchangeable: a rate cap
+    // self-resolves next cycle, while exhausted vote power means nothing will be cast
+    // until the operator acts — and a wallet with NO power at all never resolves on its
+    // own. Reporting the second as the first hid a dead node for days (#164).
+    onDeferred: (id, count, reason) => recordSkipActivity(deps, cycleId, id,
+      reason === 'vote-power'
+        ? `${votePowerHint(votePower)} — ${count} vote${count === 1 ? '' : 's'} deferred`
+        : `vote rate/budget cap reached — ${count} vote${count === 1 ? '' : 's'} deferred to next cycle`),
   })
 
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
@@ -592,9 +616,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         // 'info' activity kind remains in the schema for historical rows only.
         console.error(`orquestra: datanet ${datanetId} — ${formatYieldLine(yld)}${volumeReadError ? ` — read failed: ${volumeReadError}` : ''}`)
 
-        // Dry pool = every vote earns nothing (claims draw from this balance).
-        // Skip the scoring entirely — same shape as the budget-exhausted gate.
-        if (yld.poolDry) {
+        // Pre-scoring vote-power gate — third of the same shape as the rate-cap and
+        // poolDry gates: when every vote is certain to be refused, scoring them is pure
+        // wasted LLM spend. Without this, a node with zero voting power fetched pods and
+        // paid to LLM-score all of them EVERY cycle, only for the planner to refuse each
+        // one at cast time. Only fires on a SUCCESSFUL read (fail-open, like the pool and
+        // volume reads) — an unread budget must never silence a datanet.
+        if (votePower !== null && votePower.remainingWei === 0n) {
+          recordSkip(`skipping vote scoring — ${votePowerHint(votePower)}`, { activity: votes.length === 0 })
+        } else if (yld.poolDry) {
           recordSkip(`rewards pool dry — skipping vote scoring until the datanet is re-seeded (${formatYieldLine(yld)})`, { activity: votes.length === 0 })
         } else {
           // Yield is a VOTE-ONLY prompt signal — the VoteRubric/MintRubric split
