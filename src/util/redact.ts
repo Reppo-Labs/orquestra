@@ -62,10 +62,13 @@ export function redactSecrets(s: string): string {
     // error string — redact at the boundary as defense-in-depth.
     //  Anthropic `sk-ant-…` FIRST (its `sk-` prefix would otherwise be eaten by the bare
     //  rule below, losing the `ant-` marker). Case-sensitive: real keys are lowercase `sk-`.
-    .replace(/\bsk-ant-[A-Za-z0-9-]{20,}/g, 'sk-ant-<redacted>')
+    //  The class includes `_`: subscription tokens (`sk-ant-oat…`, minted by `claude
+    //  setup-token`) are base64url, so an `_` inside would otherwise cut the match short —
+    //  or, if it falls within the first 20 chars, prevent it entirely, leaking the token.
+    .replace(/\bsk-ant-[A-Za-z0-9_-]{20,}/g, 'sk-ant-<redacted>')
     //  Bare OpenAI `sk-…` (incl. `sk-proj-…`). The {20,} floor + exact `sk-` prefix avoid
     //  mangling prose like `sk-learn` (too short) or `sku-…` (no `sk-` boundary).
-    .replace(/\bsk-[A-Za-z0-9-]{20,}/g, 'sk-<redacted>')
+    .replace(/\bsk-[A-Za-z0-9_-]{20,}/g, 'sk-<redacted>')
     //  Google `AIza…` keys: the literal `AIza` prefix + 35 url-safe chars (fixed-length shape).
     .replace(/\bAIza[A-Za-z0-9_-]{35}/g, 'AIza<redacted>')
     // usepod carries its auth token in the URL PATH: https://api.usepod.ai/proxy/<token>/v1.

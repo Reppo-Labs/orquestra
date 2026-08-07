@@ -91,6 +91,18 @@ describe('redactSecrets', () => {
     expect(out).toContain('sk-ant-<redacted>')
   })
 
+  it('redacts Anthropic subscription sk-ant-oat… tokens containing underscores', () => {
+    // `claude setup-token` mints a base64url token, so `_` is part of the token
+    // charset (see src/llm/oauth/anthropic/setupToken.ts). An `_` early in the
+    // token must not truncate — or defeat — the match.
+    // NB `Bearer2`, not `Bearer`: the `Bearer ` rule above would redact the token
+    // on its own and mask a broken sk-ant- rule. Do not "fix" this to `Bearer`.
+    const k = 'sk-ant-oat01-Ab_' + 'C1d2E3f4'.repeat(8) + '_zZ'
+    const out = redactSecrets(`Authorization: Bearer2 ${k}`)
+    expect(out).not.toContain(k)
+    expect(out).toBe('Authorization: Bearer2 sk-ant-<redacted>')
+  })
+
   it('redacts bare OpenAI sk-… keys (realistic length)', () => {
     const k = 'sk-proj-' + 'Zz0011AaBb'.repeat(5)
     const out = redactSecrets(`key=${k}`)
