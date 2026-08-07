@@ -103,12 +103,27 @@ describe('ensureAgentId (idempotent registration)', () => {
     expect(d.register).toHaveBeenCalledOnce()
   })
 
-  it('uses an operator-set env agent id without registering or reading the store', async () => {
+  it('uses an operator-set env agent id without registering', async () => {
     const d = deps({ envAgentId: 'ag_env' })
     const r = await ensureAgentId(d)
     expect(r).toEqual({ source: 'env', agentId: 'ag_env' })
     expect(d.register).not.toHaveBeenCalled()
-    expect(d.readStored).not.toHaveBeenCalled()
+    expect(d.setEnv).not.toHaveBeenCalled() // store holds no matching creds
+  })
+
+  it('loads the persisted apiKey when the env agent id matches the stored one (else registerVoteOnPlatform silently no-ops on every restart, leaving votes unattributed)', async () => {
+    const stored = { agentId: 'ag_env', apiKey: 'sk_stored' }
+    const d = deps({ envAgentId: 'ag_env', readStored: vi.fn(() => stored) })
+    const r = await ensureAgentId(d)
+    expect(r).toEqual({ source: 'env', agentId: 'ag_env' })
+    expect(d.setEnv).toHaveBeenCalledWith(stored)
+    expect(d.register).not.toHaveBeenCalled()
+  })
+
+  it('does not leak a different agent\u2019s stored apiKey when env overrides the id', async () => {
+    const d = deps({ envAgentId: 'ag_env', readStored: vi.fn(() => ({ agentId: 'ag_other', apiKey: 'sk_other' })) })
+    expect(await ensureAgentId(d)).toEqual({ source: 'env', agentId: 'ag_env' })
+    expect(d.setEnv).not.toHaveBeenCalled()
   })
 
   it('reuses persisted creds (sets env, does not register)', async () => {
