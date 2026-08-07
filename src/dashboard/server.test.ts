@@ -411,10 +411,25 @@ describe('onboarding API', () => {
 })
 
 describe('GET /api/datanets', () => {
+  // The reader is INJECTED here on purpose: the default handler shells out to the real
+  // `reppo` CLI, whose retry+backoff on a missing/erroring CLI burnt ~1.5–2.6s of the 5s
+  // default testTimeout and made this file time out intermittently under parallel load.
+  // A rejecting reader is exactly the "no usable CLI" case this asserts, minus the wait.
+  let ddir: string
+  let dh: DashboardHandle
+  beforeEach(async () => {
+    ddir = mkdtempSync(join(tmpdir(), 'orq-dn-'))
+    dh = await startDashboard(ddir, 0, { listDatanets: () => Promise.reject(new Error('reppo: command not found')) })
+  })
+  afterEach(async () => { await dh.close(); rmSync(ddir, { recursive: true, force: true }) })
+
   it('returns an id→name object; tolerates a missing reppo CLI by serving {}', async () => {
-    const r = await get('/api/datanets')
-    expect(r.status).toBe(200)
-    expect(typeof JSON.parse(r.body)).toBe('object') // {} in tests (no CLI on PATH with creds)
+    const t0 = Date.now()
+    const res = await fetch(`http://127.0.0.1:${dh.port}/api/datanets`)
+    const body = await res.text()
+    expect(Date.now() - t0).toBeLessThan(250) // no CLI spawn, no retry backoff
+    expect(res.status).toBe(200)
+    expect(typeof JSON.parse(body)).toBe('object') // {} — no prior success to fall back to
   })
 })
 
