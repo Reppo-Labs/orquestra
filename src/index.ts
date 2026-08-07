@@ -118,7 +118,7 @@ async function setupNode(config: StrategyConfig, executor: WalletExecutor, agent
         const r = await executor.lock({
           amountReppo: plan.lockAmount,
           durationSeconds: plan.durationSeconds,
-          idempotencyKey: stakeTopUpKey(config.stake),
+          idempotencyKey: stakeTopUpKey(config.stake, plan.lockAmount),
         })
         console.error(`orquestra: veREPPO lock ${r.status}` + (r.txHash ? ` (${r.txHash})` : '') + (r.detail ? ` — ${r.detail}` : ''))
         // Seed the latch ONLY on a confirmed lock, so cycle-1 doesn't re-attempt the same target

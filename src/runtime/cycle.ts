@@ -45,7 +45,7 @@ async function maybeTopUpStake(config: StrategyConfig, cycleId: string, deps: Cy
     const r = await deps.executor.lock({
       amountReppo: plan.lockAmount,
       durationSeconds: plan.durationSeconds,
-      idempotencyKey: stakeTopUpKey(config.stake),
+      idempotencyKey: stakeTopUpKey(config.stake, plan.lockAmount),
     })
     // Latch ONLY on a confirmed lock. A FAILED lock (insufficient REPPO/gas, RPC blip) must stay
     // retryable — latching it off left the node with zero veREPPO and no on-screen reason until a
