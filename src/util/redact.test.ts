@@ -123,6 +123,17 @@ describe('redactSecrets', () => {
     expect(redactSecrets(s)).toBe(s)
   })
 
+  it('redacts a reppo platform agent apiKey (agent_…)', () => {
+    const s = 'register-agent: could not parse credentials from output: apiKey: agent_cqj3ljok99m_wy3p83yr31d'
+    const out = redactSecrets(s)
+    expect(out).not.toContain('agent_cqj3ljok99m_wy3p83yr31d')
+    expect(out).toContain('apiKey: agent_<redacted>') // context kept for debugging
+  })
+
+  it('does not mangle short agent_ prose', () => {
+    expect(redactSecrets('missing agent_id field')).toBe('missing agent_id field')
+  })
+
   it('leaves ordinary content untouched', () => {
     expect(redactSecrets('plain error, nothing secret; pod 925')).toBe('plain error, nothing secret; pod 925')
   })

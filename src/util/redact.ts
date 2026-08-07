@@ -51,6 +51,12 @@ export function redactSecrets(s: string): string {
     // separators: provider docs are inconsistent on the Virtuals prefix, and matching
     // only `_` would silently leak a real `acp-…` key. Length floor avoids prose like "inf_".
     .replace(/\b(inf|acp)[_-][A-Za-z0-9]{12,}/gi, (m) => `${m.slice(0, 4)}<redacted>`)
+    // Reppo platform agent api keys (`agent_…`), used as the Bearer token for platform
+    // calls. The register-agent CLI prints one in plain text, and a parse failure folds
+    // that output into an error message — redact it here too as defense in depth.
+    // Underscores are part of the token, so the class includes `_`; the {8,} floor keeps
+    // prose like "agent_id" untouched.
+    .replace(/\bagent_[A-Za-z0-9_]{8,}/g, 'agent_<redacted>')
     // LLM provider API keys, now promoted to first-class env vars (LLM_KEY_*). The node
     // never logs keys deliberately, but a misconfigured provider SDK can fold a key into an
     // error string — redact at the boundary as defense-in-depth.

@@ -3,6 +3,7 @@ import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { getDb, type SqliteDb } from '../dashboard/db.js'
 import { runReppoStdout } from './exec.js'
+import { redactSecrets } from '../util/redact.js'
 
 const LEGACY_AGENT = 'agent.json'
 
@@ -87,7 +88,10 @@ export function parseRegisterAgentOutput(stdout: string): AgentCreds {
   }
   const id = stdout.match(/\bid:\s*(\S+)/i)?.[1] ?? ''
   const apiKey = stdout.match(/\bapiKey:\s*(\S+)/i)?.[1] ?? ''
-  if (!id) throw new Error(`register-agent: could not parse credentials from output: ${stdout.slice(0, 200)}`)
+  // The output can carry the apiKey (`agent_…`, a persistent Bearer token) even when the
+  // `id:` line is missing — and src/index.ts logs this message verbatim. Redact before
+  // folding it in: keep the excerpt useful for debugging, without the secret.
+  if (!id) throw new Error(`register-agent: could not parse credentials from output: ${redactSecrets(stdout.slice(0, 200))}`)
   return { agentId: id, apiKey }
 }
 
