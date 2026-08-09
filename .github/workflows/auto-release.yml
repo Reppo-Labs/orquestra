@@ -107,6 +107,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the computed version into the image's package.json — the node reports it
+          # as telemetry's orquestraVersion. package.json in git stays 0.1.0 (releases are
+          # tag-driven and nothing is committed back to main), so without this every node
+          # reported 0.1.0 and telemetry could not attribute an error to a release.
+          build-args: |
+            ORQUESTRA_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

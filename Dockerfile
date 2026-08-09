@@ -51,6 +51,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # results; 0.8.0 added datanet rubric metadata + epoch data.
 COPY package*.json ./
 RUN npm ci --omit=dev
+# Stamp the release version into the package.json this image ships. The node reports it
+# as telemetry's `orquestraVersion` (src/telemetry/payload.ts reads ../../package.json
+# from dist/), and the repo's package.json is pinned at 0.1.0 because releases are
+# TAG-driven (auto-release.yml computes vX.Y.Z from git tags and never commits back to
+# main). Without this every node in the fleet reported "0.1.0" regardless of the release
+# it was running, so telemetry could not tell v0.4.10 from v0.4.54 — errors could not be
+# correlated to a release, nor a fix confirmed as rolled out.
+# Unset (a local `docker build`) leaves package.json untouched, so dev builds are
+# unchanged and still report 0.1.0 — which is honest for an unreleased build.
+ARG ORQUESTRA_VERSION
+RUN if [ -n "$ORQUESTRA_VERSION" ]; then \
+      npm pkg set "version=$ORQUESTRA_VERSION" \
+      && echo "stamped version $(node -p "require('./package.json').version")"; \
+    fi
 COPY --from=build /app/dist ./dist
 # The dashboard bind is NOT set here on purpose: the code defaults to 127.0.0.1
 # (loopback), so a bare `docker run -p 7070:7070 <image>` does NOT expose the
