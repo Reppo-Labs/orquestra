@@ -6,6 +6,7 @@
 // Raw JSON-RPC eth_call (no extra dep), mirroring src/reppo/emissionsOnchain.ts.
 
 import { networkAddresses, isRobinhood } from './network.js'
+import { rpcFetch } from './rpcEndpoints.js'
 
 export const SUBNET_MANAGER_MAINNET = '0x2629a8083065938b533b117704935d727270ee7a'
 
@@ -27,7 +28,7 @@ const SEL_RBV1 = {
 const word = (v: bigint): string => v.toString(16).padStart(64, '0')
 
 async function ethCall(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<string> {
-  const res = await fetchImpl(url, {
+  const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data }, 'latest'] }),

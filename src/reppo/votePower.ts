@@ -6,6 +6,7 @@
 // epochEnd(epoch) is read alongside so the caller can pace spending over the time left.
 // Raw JSON-RPC, no extra dep — mirrors src/reppo/epochVotes.ts.
 import { networkAddresses } from './network.js'
+import { rpcFetch } from './rpcEndpoints.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
@@ -23,7 +24,7 @@ const addrWord = (a: string): string => a.replace(/^0x/i, '').toLowerCase().padS
  *  zero budget (that would silently stop all voting on an RPC blip). Plain view
  *  getters with no legitimate revert path — every failure is a plain throw. */
 async function ethCallUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
-  const res = await fetchImpl(url, {
+  const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data }, 'latest'] }),

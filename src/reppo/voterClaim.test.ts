@@ -223,3 +223,51 @@ describe('queryVoterClaimableOnchain', () => {
     expect(await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: f })).toEqual([])
   })
 })
+
+describe('queryVoterClaimableOnchain — a transient gate-read failure is NOT a zero', () => {
+  // Both gates used to swallow EVERY failure into 0 (`catch { return 0n }` / `.catch(() =>
+  // '0x')`). A 5xx therefore read as "the wallet cast no votes here" → the (pod,epoch) was
+  // skipped → nothing looked claimable → the watermark advanced PAST it. One RPC blip
+  // permanently burned a real voter reward, with no error anywhere. Same fail-open rule as
+  // the rest of the node: unread ≠ zero.
+  const failSel = (inner: typeof fetch, sel: string): typeof fetch => (async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; params?: [{ data?: string }] }
+    if (body.method === 'eth_call' && body.params?.[0]?.data?.slice(0, 10) === sel) {
+      return new Response('upstream error', { status: 500 })
+    }
+    return (inner as unknown as (u: string, i?: RequestInit) => Promise<Response>)(url, init)
+  }) as unknown as typeof fetch
+
+  const opts = {
+    current: 107n, votedEpochs: new Set([105]), votedPodEpochs: new Set(['105:50']),
+    claimableEpochs: new Set(['105:50']),
+  }
+
+  it('propagates a transient votesCasted (active-epoch gate) failure and leaves the watermark alone', async () => {
+    const store: Record<string, number> = {}
+    const cache: VoterScanCache = { getThrough: (p) => store[p] ?? 0, setThrough: (p, e) => { store[p] = e } }
+    await expect(
+      queryVoterClaimableOnchain('rpc', W, ['50'], cache, { fetchImpl: failSel(fakeFetch(opts), SEL.votesCasted) }),
+    ).rejects.toThrow()
+    expect(store['50']).toBeUndefined() // epoch 105 stays re-checkable next cycle
+  })
+
+  it('propagates a transient per-pod vote-gate (voterUp) failure and leaves the watermark alone', async () => {
+    const store: Record<string, number> = {}
+    const cache: VoterScanCache = { getThrough: (p) => store[p] ?? 0, setThrough: (p, e) => { store[p] = e } }
+    await expect(
+      queryVoterClaimableOnchain('rpc', W, ['50'], cache, { fetchImpl: failSel(fakeFetch(opts), SEL.voterUp) }),
+    ).rejects.toThrow()
+    expect(store['50']).toBeUndefined()
+  })
+
+  it('a genuine REVERT on a gate read still means zero (nothing recorded) — no false alarm', async () => {
+    const revertUp = (async (url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string; params?: [{ data?: string }] }
+      const sel = body.params?.[0]?.data?.slice(0, 10)
+      if (body.method === 'eth_call' && (sel === SEL.voterUp || sel === SEL.voterDown)) return jsonErr('execution reverted')
+      return (fakeFetch(opts) as unknown as (u: string, i?: RequestInit) => Promise<Response>)(url, init)
+    }) as unknown as typeof fetch
+    expect(await queryVoterClaimableOnchain('rpc', W, ['50'], undefined, { fetchImpl: revertUp })).toEqual([])
+  })
+})

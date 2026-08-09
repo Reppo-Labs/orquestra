@@ -6,6 +6,7 @@
 // the catalog's lifetime upVoteVolume/downVoteVolume can't answer that (cumulative).
 import { networkAddresses } from './network.js'
 import { tryAggregate, isMulticallAvailable } from './multicall.js'
+import { rpcFetch } from './rpcEndpoints.js'
 
 // Function selectors (stable; computed via `cast sig`).
 const SEL = {
@@ -22,7 +23,7 @@ const word = (v: bigint): string => v.toString(16).padStart(64, '0')
  *  claim probes, these are plain view getters with no legitimate revert path, so no
  *  revert/transient split is needed — every failure is a plain throw. */
 async function ethCallUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
-  const res = await fetchImpl(url, {
+  const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data }, 'latest'] }),

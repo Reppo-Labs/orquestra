@@ -43,6 +43,13 @@ describe('withRpcUrl', () => {
     delete process.env.REPPO_RPC_URL
     expect(withRpcUrl(['vote'])).toEqual(['vote'])
   })
+  it('passes only the PRIMARY endpoint when RPC_URL is a fallback list — --rpc-url takes one url', () => {
+    // The node's own on-chain reads fail over across the whole list (rpcEndpoints.ts), but
+    // handing the CLI "a,b" would make every CLI invocation fail on a malformed url.
+    process.env.RPC_URL = 'https://a.example/rpc, https://b.example/rpc'
+    delete process.env.REPPO_RPC_URL
+    expect(withRpcUrl(['vote'])).toEqual(['vote', '--rpc-url', 'https://a.example/rpc'])
+  })
 })
 
 describe('isTransientReppoError', () => {

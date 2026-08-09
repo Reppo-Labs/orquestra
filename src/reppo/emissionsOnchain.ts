@@ -13,6 +13,7 @@
 import type { ClaimableEmission } from './queryEmissionsDue.js'
 import { networkAddresses } from './network.js'
 import { tryAggregate, isMulticallAvailable, type Call3Result } from './multicall.js'
+import { rpcFetch } from './rpcEndpoints.js'
 
 export const POD_MANAGER_MAINNET = '0x5C563f853eb4db33005A5C1aD9290e8560254A80'
 export const VE_REPPO_MAINNET = '0x0EFBE19Cb7B07D934D01990a8989E9CaA98b9009'
@@ -29,9 +30,25 @@ const SEL = {
   voterUp: '0x08856f83',         // getVotersUpVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
   voterDown: '0x8c03a3e7',       // getVotersDownVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
 }
-/** Read a uint256 view via eth_call → bigint (0 on revert/empty). */
+/** Read a uint256 view via eth_call → bigint. Empty returndata ('0x') and a contract
+ *  REVERT are genuine zeros. A TRANSIENT failure (HTTP 5xx, rate limit, timeout, all
+ *  endpoints down) is NOT: it propagates.
+ *
+ *  This used to be a blanket `catch { return 0n }`, which quietly cost money. The only
+ *  caller is the voter scan's per-pod vote gate (voterUp/voterDown): a fabricated 0 there
+ *  reads as "the wallet cast no votes on this pod at this epoch", so the (pod,epoch) is
+ *  skipped AND — because nothing was found claimable — the watermark advances past it.
+ *  One RPC blip therefore burned a real, claimable voter reward PERMANENTLY. Same
+ *  fail-open discipline as every other read in the node: an UNREAD value must never
+ *  become a zero that silences work. */
 async function readUint(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<bigint> {
-  try { const r = await ethCall(fetchImpl, url, to, data); return r && r !== '0x' ? BigInt(r) : 0n } catch { return 0n }
+  try {
+    const r = await ethCall(fetchImpl, url, to, data)
+    return r && r !== '0x' ? BigInt(r) : 0n
+  } catch (e) {
+    if (e instanceof RpcRevertError) return 0n // contract answered: nothing recorded
+    throw e // transient: abort the scan before any watermark advances
+  }
 }
 /** Left-pad an address to a 32-byte ABI word. */
 const addrWord = (addr: string): string => addr.toLowerCase().replace(/^0x/, '').padStart(64, '0')
@@ -94,7 +111,7 @@ const isRevert = (code: number | undefined, msg: string): boolean =>
   code === 3 || /revert|invalid opcode|out of gas|always failing/i.test(msg)
 
 async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<unknown> {
-  const res = await fetchImpl(url, {
+  const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
@@ -316,7 +333,12 @@ export async function queryVoterClaimableOnchain(
     eps.forEach((ep, i) => { if (res[i].success && isTrue(res[i].returnData)) activeEpochs.push(ep) })
   } else {
     for (let ep = scanFrom; ep <= lastClosed; ep++) {
-      const cast = await ethCall(fetchImpl, rpcUrl, pm, SEL.votesCasted + w + word(ep)).catch(() => '0x')
+      // Same fail-open rule as readUint: only a contract REVERT reads as "not active".
+      // A transient failure must propagate — swallowing it dropped the epoch from
+      // activeEpochs, so every pod's claim at that epoch was skipped while the watermark
+      // still advanced past it (a permanently lost voter claim from one RPC blip).
+      const cast = await ethCall(fetchImpl, rpcUrl, pm, SEL.votesCasted + w + word(ep))
+        .catch((e: unknown) => { if (e instanceof RpcRevertError) return '0x'; throw e })
       if (isTrue(cast)) activeEpochs.push(ep)
     }
   }

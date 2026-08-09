@@ -1179,3 +1179,70 @@ describe('runCycle rewards-pool runway', () => {
     expect((d.executor.executeVote as any).mock.calls.length).toBe(2)  // both datanets voted
   })
 })
+
+
+describe('runCycle — silent RPC failures are surfaced to the operator', () => {
+  // Operator report: "RPC eth_getLogs failures are silent. Claims fail every cycle but
+  // voting still works — looks like nothing is wrong." The scans THROW (correct: the epoch
+  // stays re-checkable), but the throw only reached stderr, which nobody reads behind an
+  // SSH-tunneled dashboard. Each of these now writes a wallet-global skip row.
+  const skips = (rec: ReturnType<typeof vi.fn>): { datanetId: string; reason: string }[] =>
+    rec.mock.calls.map((c) => c[0]).filter((e) => e.kind === 'skip')
+      .map((e) => ({ datanetId: e.datanetId as string, reason: e.reason as string }))
+
+  it('records a skip row when the OWNER emissions scan throws (eth_getLogs down)', async () => {
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record }),
+      reads: fakeReads({ getEmissionsDue: async () => { throw new Error('RPC eth_getLogs HTTP 400') } }),
+    })
+    const report = await runCycle(config, 'cyc-claimfail', d)
+    const row = skips(record).find((s) => /owner emissions scan failed/.test(s.reason))
+    expect(row).toBeDefined()
+    expect(row?.reason).toContain('HTTP 400')
+    expect(row?.datanetId).toBe('')                        // wallet-global: buildHealth ignores it
+    expect(report.datanets.every((n) => n.error === undefined)).toBe(true) // per-datanet work unaffected
+  })
+
+  it('records a skip row when the VOTER emissions scan throws', async () => {
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record }),
+      onchain: onchainReads({ wallet: walletReads({ getVoterEmissionsDue: async () => { throw new Error('fetch failed') } }) }),
+    })
+    await runCycle(config, 'cyc-voterfail', d)
+    expect(skips(record).some((s) => /voter emissions scan failed/.test(s.reason))).toBe(true)
+  })
+
+  it('records a skip row when the vote-power budget read fails — but voting still proceeds (fail-open)', async () => {
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record }),
+      onchain: onchainReads({ wallet: walletReads({
+        getVotePowerBudget: async () => { throw new Error('all 2 configured RPC endpoints failed') },
+      }) }),
+    })
+    await runCycle(config, 'cyc-vpfail', d)
+    expect(skips(record).some((s) => /vote-power budget read failed/.test(s.reason))).toBe(true)
+    // CRITICAL: an unread budget must never gate voting — both datanets still voted.
+    expect((d.executor.executeVote as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2)
+  })
+
+  it('redacts a credentialed RPC url out of the surfaced reason (it rides to the dashboard)', async () => {
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record }),
+      reads: fakeReads({ getEmissionsDue: async () => { throw new Error('failed: --rpc-url https://x.alchemy.com/v2/SECRETKEY') } }),
+    })
+    await runCycle(config, 'cyc-redact', d)
+    const row = skips(record).find((s) => /owner emissions scan failed/.test(s.reason))
+    expect(row?.reason).not.toContain('SECRETKEY')
+  })
+
+  it('a healthy cycle records NO scan-failure rows (no false alarms)', async () => {
+    const record = vi.fn()
+    const d = deps({ activity: fakeActivity({ record }) })
+    await runCycle(config, 'cyc-healthy', d)
+    expect(skips(record).some((s) => /emissions scan failed|vote-power budget read failed/.test(s.reason))).toBe(false)
+  })
+})

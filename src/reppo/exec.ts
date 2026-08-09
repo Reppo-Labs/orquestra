@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { redactSecrets } from '../util/redact.js'
+import { primaryRpcEndpoint } from './rpcEndpoints.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -17,9 +18,13 @@ export function reppoEnv(): NodeJS.ProcessEnv {
 /** Append `--rpc-url <url>` when RPC_URL (or REPPO_RPC_URL) is set in env.
  *  The public Base RPC (mainnet.base.org) rate-limits under a full cycle's worth of
  *  datanet queries; pointing at a private RPC removes the per-datanet INTERNAL_ERROR
- *  skips. No env set → args unchanged (CLI falls back to its own default RPC). */
+ *  skips. No env set → args unchanged (CLI falls back to its own default RPC).
+ *  RPC_URL may now be a COMMA-SEPARATED fallback list (src/reppo/rpcEndpoints.ts), but the
+ *  CLI's --rpc-url takes exactly ONE url — pass the PRIMARY only. Handing it the whole list
+ *  would make every CLI call fail on a malformed url; the node's own on-chain reads still
+ *  fail over across the full list. */
 export function withRpcUrl(args: string[]): string[] {
-  const url = (process.env.RPC_URL ?? process.env.REPPO_RPC_URL ?? '').trim()
+  const url = primaryRpcEndpoint(process.env.RPC_URL ?? process.env.REPPO_RPC_URL)
   return url ? [...args, '--rpc-url', url] : args
 }
 
