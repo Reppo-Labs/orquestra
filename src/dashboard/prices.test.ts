@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { parseTokenPrices, createTokenPricer, roiPercent } from './prices.js'
+import { parseTokenPrices, createTokenPricer, roiPercent, failureBackoffMs } from './prices.js'
 import type { TokenFlow } from './pnl.js'
 
 const WOOD_ADDR = '0xf8bc08092c06db6148114dcf82af881f1085f92b'
 const ADDR_WORD = '0x' + WOOD_ADDR.slice(2).padStart(64, '0')
 
 const geckoBody = (prices: Record<string, string>) => ({ data: { attributes: { token_prices: prices } } })
+
+/** Mirrors PRICE_TTL_MS in prices.ts (not exported — the success TTL is internal). */
+const PRICE_TTL = 5 * 60_000
 
 /** fetch stub: eth_call requests (POST) get the WOOD address word; GeckoTerminal
  *  GETs are answered by `gecko` (throw to simulate an outage). Counts gecko hits. */
@@ -37,6 +40,20 @@ describe('parseTokenPrices', () => {
   it('tolerates malformed bodies', () => {
     expect(parseTokenPrices(null).size).toBe(0)
     expect(parseTokenPrices({ data: {} }).size).toBe(0)
+  })
+})
+
+describe('failureBackoffMs', () => {
+  it('starts short so a cold-start blip is not a full minute of "price unavailable"', () => {
+    expect(failureBackoffMs(1)).toBe(5_000)
+    expect(failureBackoffMs(2)).toBe(10_000)
+  })
+
+  it('doubles up to a 60s ceiling so a real outage never burns the free tier', () => {
+    expect(failureBackoffMs(3)).toBe(20_000)
+    expect(failureBackoffMs(4)).toBe(40_000)
+    expect(failureBackoffMs(5)).toBe(60_000)
+    expect(failureBackoffMs(99)).toBe(60_000)
   })
 })
 
@@ -98,6 +115,36 @@ describe('createTokenPricer', () => {
     // percentage off the priced remainder would overstate the return.
     expect(out.spentUsd).toBeNull()
     expect(out.roiPct).toBeNull()
+  })
+
+  it('recovers ~5s after a cold-start failure, not 60s (restart blip)', async () => {
+    // The live symptom: the first fetch after `docker compose up` raced container
+    // networking, failed, and blanked every price card for a full minute.
+    let t = 0
+    let down = true
+    const f = fakeFetch(() => { if (down) throw new Error('egress not ready'); return geckoBody({ [WOOD_ADDR]: '0.05' }) })
+    const pricer = createTokenPricer({ fetchImpl: f.impl, env: process.env, now: () => t })
+    expect((await pricer.priceTokenFlows(flows, econ)).netUsd).toBeNull()
+    down = false
+    t += 4_000 // still inside the first backoff — no refetch yet
+    expect((await pricer.priceTokenFlows(flows, econ)).netUsd).toBeNull()
+    expect(f.count()).toBe(1)
+    t += 2_000 // past 5s — retries and recovers
+    expect((await pricer.priceTokenFlows(flows, econ)).netUsd).toBeCloseTo(-2.9)
+  })
+
+  it('a success resets the backoff, so a later blip is short again', async () => {
+    let t = 0
+    let down = false
+    const f = fakeFetch(() => { if (down) throw new Error('down'); return geckoBody({ [WOOD_ADDR]: '0.05' }) })
+    const pricer = createTokenPricer({ fetchImpl: f.impl, env: process.env, now: () => t })
+    await pricer.priceTokenFlows(flows, econ) // ok → fails = 0
+    down = true
+    t += PRICE_TTL + 1
+    expect((await pricer.priceTokenFlows(flows, econ)).netUsd).toBeNull() // 1st failure → 5s
+    down = false
+    t += 6_000
+    expect((await pricer.priceTokenFlows(flows, econ)).netUsd).toBeCloseTo(-2.9)
   })
 
   it('caches spots — a second call inside the TTL does not refetch', async () => {
