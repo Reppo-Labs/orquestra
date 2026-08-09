@@ -63,8 +63,19 @@ Fill in `.env` (every variable is documented inline). Minimum to start:
 
 - `REPPO_PRIVATE_KEY` — your dedicated wallet
 - `LLM_PROVIDER` + `LLM_API_KEY`
-- `RPC_URL` — your private Base RPC (recommended)
+- `RPC_URL` — **set this.** `.env.example` ships it pointing at the public Base RPC so a
+  fresh node works out of the box; a private endpoint (Alchemy/QuickNode/Ankr) is
+  strongly preferred because the public one rate-limits. See the warning below.
 - `PINATA_JWT` — only if minting
+
+> **`RPC_URL` decides whether your votes carry real weight.** The node sizes each vote
+> from the wallet's *actual* per-epoch voting power (`votingPowerOf` −
+> `votesCastedByVoterForEpoch`), and that read requires this RPC. With no RPC configured
+> the node falls back to legacy sizing — conviction (1–10) × 1e18 — which is **dust next
+> to any locked stake**, so a large veREPPO position earns near-zero curation share.
+> The node warns on stderr every cycle while in this mode, and the dashboard shows which
+> sizing is in effect. This is the single most common reason a well-funded node appears
+> to vote yet earns nothing.
 
 These are the only things you set by hand. **Your strategy is configured in the
 dashboard, not here.**
@@ -340,6 +351,7 @@ alpine tar czf /out/orquestra-backup.tgz -C /data .`
 | `PUBLIC_API_UNREACHABLE` in logs | A transient reppo.ai blip. The node retries automatically; a one-off is harmless. Persistent = check the node's internet/DNS. |
 | Datanet skips with `INTERNAL_ERROR` / `429` / `rate limit` | The public Base RPC is rate-limiting. The node now retries these with backoff, but a busy cycle can still exhaust the retries — set `RPC_URL` to a private endpoint (Alchemy/QuickNode) for a clean run. |
 | `eth_getLogs HTTP 400` in logs | The on-chain emissions scan hit an RPC `getLogs` range cap. Non-fatal: the claim phase skips that cycle and votes/mints continue. The node now chunks to ≤10k blocks; if it persists, set `RPC_URL` to a higher-capacity endpoint. |
+| Votes land but earn ~nothing / on-chain weight looks like `1` wei | `RPC_URL` is unset, so the node cannot read your per-epoch voting power and falls back to legacy conviction × 1e18 sizing — dust next to a locked stake. Set `RPC_URL` and restart. Look for `votes use legacy conviction×1e18 sizing` on stderr, and check the sizing shown on the dashboard. **Do not patch the image to fix this** — native veREPPO sizing is built in (`src/voter/weight.ts`) and only needs the RPC. |
 | 0 votes every cycle | Nothing new to vote on (all current pods already voted, yours, or skipped mid-range). Normal between fresh pods. |
 | Mints score low / nothing mints | The strictness gate is rejecting candidates. Don't loosen it just to force mints — that publishes low-value data that gets downvoted. |
 | `claimable: 0` despite upvotes | Emissions lag — wait for the epoch to finalize (§6). |
