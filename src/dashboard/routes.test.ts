@@ -263,4 +263,32 @@ describe('write handlers', () => {
     expect(r.body).toMatchObject({ saved: true })
     expect(JSON.parse(readConfigText(dir)!).cadenceHours).toBe(6)
   })
+  it('/api/onboarding/confirm PERSISTS the onboarding-chosen defaultModel (operator bug: it was dropped)', async () => {
+    const r = await call('POST', '/api/onboarding/confirm', {
+      body: {
+        datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
+        lockReppo: 0, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+        mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'model choice',
+        defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
+      },
+    })
+    expect(r.status).toBe(200)
+    expect(JSON.parse(readConfigText(dir)!).defaultModel).toEqual({ provider: 'usepod', model: 'deepseek-v3.2' })
+  })
+
+  it('/api/onboarding/confirm 400s a defaultModel whose provider has no key here, and writes nothing', async () => {
+    const before = readConfigText(dir)
+    const r = await call('POST', '/api/onboarding/confirm', {
+      ctx: ctx({ availableProviders: ['usepod'] }),
+      body: {
+        datanets: [{ id: '9', vote: true, mint: false, strictness: 'balanced' }],
+        lockReppo: 0, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+        mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'unkeyed',
+        defaultModel: { provider: 'openai', model: 'gpt-5.2' },
+      },
+    })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toContain('has no API key on this node')
+    expect(readConfigText(dir)).toBe(before) // refused BEFORE the write
+  })
 })

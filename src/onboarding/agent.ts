@@ -6,6 +6,7 @@ import type { DatanetSummary } from '../reppo/listDatanets.js'
 import type { WalletBalance } from '../reppo/queryBalance.js'
 import type { DatanetRubric } from '../rubric/types.js'
 import { reppoNetwork, type ReppoNetwork } from '../reppo/network.js'
+import { KNOWN_MODELS, type LlmProvider } from '../llm/model.js'
 import { OnboardingAnswersSchema, validateAnswers } from './schema.js'
 
 /** What one onboarding turn needs — no prompter, so HTTP and CLI both fit. */
@@ -14,6 +15,10 @@ export interface OnboardingToolDeps {
   listDatanets(): Promise<DatanetSummary[]>
   getDatanetDetails(datanetId: string): Promise<DatanetRubric | { error: string }>
   getBalance(): Promise<WalletBalance>
+  /** Providers with a credential on this node (the env key registry's keys). Used to
+   *  refuse a finalize whose defaultModel this node could not resolve. Omitted ⇒
+   *  availability unknown ⇒ the check fails open (see checkProviderAvailable). */
+  availableProviders?: LlmProvider[]
 }
 
 export interface OnboardingAgentDeps extends OnboardingToolDeps {
@@ -30,6 +35,7 @@ PERSONALIZED MINT STRATEGY — this is what makes each operator's node unique an
   - how strict, and how many items per cycle (topN).
 Pass these as that datanet's adapterParams { focus, angle, topN, minImportance } in finalize. Capture the operator's overall approach as freeform 'notes' (saved as the strategy brief, used for both minting and voting).
 ACCESS FEE FUNDING: some datanets charge their one-time access fee in a NON-REPPO token (e.g. EXY). get_datanet_details returns an 'accessFeeNote' for these — relay it to the operator so they know to fund this node's wallet with that token; otherwise the node can enable the datanet but the first grant will fail until funded. REPPO-fee datanets need no special note.
+DEFAULT MODEL: ask which LLM the node should use as its default for scoring and deliberation, and pass it as 'defaultModel' { provider, model } in finalize. Offer ONLY the providers listed in the MODELS AVAILABLE note below — those are the ones this node holds a key for; any other provider cannot be resolved and finalize will reject it. If no such note is present, or the operator has no preference, OMIT defaultModel entirely — the node then uses its environment default. Never invent a provider name.
 You may RECOMMEND choices from the catalog economics, but always confirm each decision with the operator before finishing. When the operator confirms, call finalize with the complete structured answers. Keep messages short.
 After each topic is settled, call update_draft with the fields agreed so far — the operator's UI renders a live draft of the configuration from these calls.
 Use get_wallet_balance to look up the operator's REPPO/veREPPO/ETH/USDC holdings when they express amounts relative to their balance (e.g. '80% of my REPPO').
@@ -115,7 +121,9 @@ export function buildOnboardingTools(
       description: 'Validate + save the operator-confirmed strategy. Call only after the operator confirms.',
       parameters: OnboardingAnswersSchema,
       execute: async (answers) => {
-        const res = validateAnswers(answers)
+        // Availability-aware: a defaultModel whose provider is unkeyed here comes back as a
+        // tool error the assistant can relay and re-ask on — never a silently saved config.
+        const res = validateAnswers(answers, deps.availableProviders)
         if (!res.ok) return { saved: false, error: res.error }
         onFinalize(res.answers)
         return { saved: true }
@@ -134,11 +142,27 @@ NETWORK OVERRIDE — this node runs on Robinhood Chain (REPPO_NETWORK=robinhood)
 - NO REPPO TOKEN ON THIS CHAIN: never ask about locking REPPO — set lockReppo 0. Voting power is MIRRORED from the operator's Base veREPPO position: tell them to lock on Base and sync at https://robinhood.reppo.ai (and re-sync after changing the Base lock).
 - FEES & MINT BUDGET: each datanet charges its OWN token (e.g. WOOD on datanet 3) for access/publishing, plus gas ETH on Robinhood Chain. On this network, mintReppoMax denominates the DATANET FEE TOKEN, not REPPO — ask the operator how much of that token (e.g. WOOD) the node may spend on publishing fees over the horizon, and pass that number as mintReppoMax. NEVER suggest 0 for a minting node (0 = no minting). The wallet must hold that token; relay each datanet's fee token and per-mint publishing fee from get_datanet_details.`
 
+/** The keyed-providers note appended to SYSTEM. Without it the assistant has no way to know
+ *  which providers this node can actually resolve, so it would either skip the model question
+ *  or guess a provider finalize must then reject. Empty list ⇒ no note ⇒ SYSTEM's instruction
+ *  to omit defaultModel applies (env default wins) — availability unknown is never "none". */
+export function modelsAvailableAddendum(providers: LlmProvider[]): string {
+  if (providers.length === 0) return ''
+  const lines = providers.map((p) => `  - ${p}: ${(KNOWN_MODELS[p] ?? []).join(', ') || 'any model id this provider serves'}`)
+  const head = 'MODELS AVAILABLE — this node holds a key for these providers only. Known model ids per provider (the operator may name another id the provider serves):'
+  return `\n${head}\n${lines.join('\n')}`
+}
+
 /** The opening transcript every onboarding conversation starts from.
  *  Network-aware: robinhood nodes get the addendum that swaps out the
- *  Base-specific adapter/lock/fee guidance. */
-export function seedOnboardingMessages(network: ReppoNetwork = reppoNetwork()): CoreMessage[] {
-  const system = network === 'robinhood' ? SYSTEM + ROBINHOOD_SYSTEM_ADDENDUM : SYSTEM
+ *  Base-specific adapter/lock/fee guidance. `availableProviders` adds the
+ *  keyed-provider note the default-model question needs. */
+export function seedOnboardingMessages(
+  network: ReppoNetwork = reppoNetwork(),
+  availableProviders: LlmProvider[] = [],
+): CoreMessage[] {
+  const base = network === 'robinhood' ? SYSTEM + ROBINHOOD_SYSTEM_ADDENDUM : SYSTEM
+  const system = base + modelsAvailableAddendum(availableProviders)
   return [
     { role: 'system', content: system },
     { role: 'user', content: 'Begin onboarding. Greet me briefly and ask what I want my node to do.' },
@@ -168,7 +192,7 @@ export async function runOnboardingTurn(deps: OnboardingToolDeps, messages: Core
 
 /** Run the conversational onboarding to completion; returns the finalized answers. */
 export async function runConversationalOnboarding(deps: OnboardingAgentDeps): Promise<OnboardingAnswers> {
-  const messages = seedOnboardingMessages()
+  const messages = seedOnboardingMessages(reppoNetwork(), deps.availableProviders ?? [])
   deps.prompter.info('orquestra onboarding — chat with the assistant. Type "quit" to cancel.\n')
 
   // Hard cap on conversation turns so a model that never finalizes can't spin forever.

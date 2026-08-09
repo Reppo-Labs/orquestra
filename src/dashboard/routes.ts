@@ -179,9 +179,10 @@ async function datanetNames(listDatanets: () => Promise<DatanetSummary[]>): Prom
 }
 
 /** Production turn-runner: same live deps the CLI onboarding uses. */
-function defaultOnboardingTurn(model: LanguageModel): (m: CoreMessage[]) => Promise<OnboardingTurnResult> {
+function defaultOnboardingTurn(model: LanguageModel, availableProviders?: LlmProvider[]): (m: CoreMessage[]) => Promise<OnboardingTurnResult> {
   return (messages) => runOnboardingTurn({
     model,
+    availableProviders,
     listDatanets: () => listDatanetsJson(),
     getDatanetDetails: async (id) => {
       try { return await getDatanetRubric(id) } catch (e) { return { error: (e as Error).message } }
@@ -335,7 +336,7 @@ const pnl: RouteHandler = async ({ dataDir }) => {
 
 const onboardingChat: RouteHandler = async ({ dataDir, opts, session }, req) => {
   const chatModel = opts.resolveChatModel?.() ?? null
-  const turn = opts.onboardingTurn ?? (chatModel ? defaultOnboardingTurn(chatModel) : null)
+  const turn = opts.onboardingTurn ?? (chatModel ? defaultOnboardingTurn(chatModel, opts.availableProviders) : null)
   if (!turn) return json(503, { error: 'onboarding chat unavailable — node started without an LLM model' })
   const b = req.body as { message?: string; reset?: boolean }
   if (b?.reset) {
@@ -343,7 +344,9 @@ const onboardingChat: RouteHandler = async ({ dataDir, opts, session }, req) => 
     clearOnboardingSession(dataDir)
     return json(200, { reset: true })
   }
-  if (session.messages.length === 0) session.messages = seedOnboardingMessages()
+  // Seeded with this node's keyed providers so the assistant can offer a default model
+  // the runtime can actually resolve (and never invents an unkeyed provider).
+  if (session.messages.length === 0) session.messages = seedOnboardingMessages(undefined, opts.availableProviders ?? [])
   const msg = typeof b?.message === 'string' ? b.message.trim() : ''
   if (msg) session.messages.push({ role: 'user', content: msg })
   const r = await turn(session.messages)
@@ -362,10 +365,12 @@ const onboardingChat: RouteHandler = async ({ dataDir, opts, session }, req) => 
   return json(200, { reply: r.text, draft: session.draft, finalized: session.finalized } satisfies OnboardingChatView)
 }
 
-const onboardingConfirm: RouteHandler = ({ dataDir, session }, req) => {
+const onboardingConfirm: RouteHandler = ({ dataDir, opts, session }, req) => {
   // The single onboarding write path: validated answers → assembled config →
   // persisted exactly like the CLI flow. The waiting node sees the file appear.
-  const v = validateAnswers(req.body)
+  // availableProviders is passed so a defaultModel this node has no key for is REFUSED
+  // here (400 the operator can act on) rather than persisted and silently overridden.
+  const v = validateAnswers(req.body, opts.availableProviders)
   if (!v.ok) return json(400, { error: v.error })
   persistOnboarding(dataDir, buildStrategyConfig(v.answers))
   session.messages = []; session.draft = null; session.finalized = null

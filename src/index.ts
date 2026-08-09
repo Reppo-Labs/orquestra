@@ -65,7 +65,8 @@ async function onboard(): Promise<void> {
   // buildProviderKeyRegistry folds the legacy LLM_API_KEY into the default provider's
   // slot, so registry.get(provider) is the right key from either source.
   const provider = (process.env.LLM_PROVIDER ?? 'anthropic') as LlmProvider
-  const apiKey = buildProviderKeyRegistry(process.env).get(provider) ?? ''
+  const registry = buildProviderKeyRegistry(process.env)
+  const apiKey = registry.get(provider) ?? ''
   if (!apiKey) {
     console.error('orquestra: onboarding needs an LLM key — set LLM_KEY_<PROVIDER> (or LLM_PROVIDER + LLM_API_KEY) and re-run.')
     process.exitCode = 1
@@ -82,6 +83,9 @@ async function onboard(): Promise<void> {
         try { return await getDatanetRubric(id) } catch (e) { return { error: (e as Error).message } }
       },
       getBalance: () => queryBalanceJson(),
+      // Same availability rule as the dashboard: the interview may only offer (and
+      // finalize may only accept) a default model whose provider is keyed here.
+      availableProviders: [...registry.keys()],
     })
     persistOnboarding(DATA_DIR, buildStrategyConfig(answers))
     // Disclose telemetry while the operator is still reading. Satisfies the notice gate,

@@ -23,6 +23,7 @@ const ANSWERS: OnboardingAnswers = {
   cadenceHours: 6,
   notes: 'vote-only test run',
   nodeName: 'test-node',
+  defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' },
 }
 
 const { chatMock, confirmMock } = vi.hoisted(() => ({
@@ -107,5 +108,19 @@ describe('<Onboarding /> render + confirm path', () => {
 
     // A successful confirm advances the stepper to Start(4).
     expect(await screen.findByText(/saved — the node starts its first cycle shortly/)).toBeInTheDocument()
+  })
+  it('shows the chosen default model on the review sheet and sends it with confirm', async () => {
+    // Operator bug: the model was selected during the interview but never reached the
+    // saved strategy. The review sheet must show it, and confirm must carry it.
+    const user = userEvent.setup()
+    render(<Onboarding status={AVAILABLE} netNames={{}} onDone={() => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Start onboarding' }))
+
+    const confirmBtn = await screen.findByRole('button', { name: 'Start the node' })
+    expect(screen.getByText('usepod / deepseek-v3.2')).toBeInTheDocument()
+
+    await user.click(confirmBtn)
+    const sent = confirmMock.mock.calls[0][0] as OnboardingAnswers
+    expect(sent.defaultModel).toEqual({ provider: 'usepod', model: 'deepseek-v3.2' })
   })
 })

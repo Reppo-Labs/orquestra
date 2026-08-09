@@ -1,5 +1,6 @@
 // src/onboarding/types.ts
 import type { StrictnessLevel } from '../config/schema.js'
+import type { LlmProvider } from '../llm/model.js'
 
 export interface AdapterParams {
   focus?: string
@@ -19,6 +20,9 @@ export interface DatanetChoice {
 
 export interface OnboardingAnswers {
   datanets: DatanetChoice[]
+  /** Node default LLM model chosen at onboarding → StrategyConfig.defaultModel.
+   *  Absent → the env LLM_PROVIDER default (config/schema.ts leaves it optional). */
+  defaultModel?: { provider: LlmProvider; model: string }
   lockReppo: number
   lockDurationDays: number
   voteRateMaxPerCycle: number

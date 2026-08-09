@@ -24,6 +24,9 @@ export function buildStrategyConfig(a: OnboardingAnswers): StrategyConfig {
     claimEmissions: true,
     datanets,
     notes: a.notes,
+    // The onboarding-chosen node default model. Omitted when absent so the config keeps
+    // falling back to the env LLM_PROVIDER default (schema leaves defaultModel optional).
+    ...(a.defaultModel ? { defaultModel: a.defaultModel } : {}),
     ...(a.nodeName?.trim() ? { nodeName: a.nodeName.trim() } : {}),
   })
 }
