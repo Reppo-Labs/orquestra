@@ -55,6 +55,7 @@ A cycle (`src/runtime/cycle.ts → runCycle`) iterates configured datanets and, 
 - ESM throughout (`"type": "module"`, `NodeNext`). **Import with `.js` extensions** even from `.ts` sources.
 - TypeScript `strict`. Tests are colocated `*.test.ts` next to source (vitest, `node` environment); cross-CLI-boundary integration tests live in `test/` with JSON/XML fixtures in `test/fixtures/`.
 - Node ≥ 22.5 (uses `node:sqlite`).
+- **All node diagnostics go to `stderr` via `console.error`** (112 call sites vs 2 `console.log`). `stdout` is reserved for CLI *results* — the telemetry notice and `telemetry` subcommand output. This is deliberate, not accidental: in a container `stdout` is a pipe and therefore **block-buffered**, so `console.log` output can be delayed or lost on exit, while `stderr` is unbuffered and appears in `docker logs` immediately. An operator debugging a running node reported that added `console.log` calls "never appear in docker logs" for exactly this reason. Use `console.error` for anything you want to see; redact first with `src/util/redact.ts`.
 
 ## Agent skills
 
