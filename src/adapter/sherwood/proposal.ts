@@ -116,8 +116,15 @@ export interface SynthDeps {
  *  models instead of losing the datanet's only mint source for the cycle. */
 const SYNTH_MODES = ['tool', 'json'] as const
 
+/** A provider that cannot do this generation mode AT ALL (Anthropic has no
+ *  json-mode object generation). Distinct from a schema miss: retrying is
+ *  pointless, and reporting it would bury the real failure from `tool` mode. */
+const unsupportedMode = (e: unknown): boolean =>
+  e instanceof Error && /not supported/i.test(e.message)
+
 const defaultGenerate = (model: LanguageModel) =>
   async ({ system, prompt }: { system: string; prompt: string }): Promise<ProposalOut> => {
+    let toolErr: unknown
     let lastErr: unknown
     // Two attempts per mode: a schema miss is often nondeterministic, so retry the
     // portable mode before paying the mode switch.
@@ -126,10 +133,18 @@ const defaultGenerate = (model: LanguageModel) =>
         try {
           const { object } = await generateObject({ model, schema: ProposalSchema, mode, system, prompt })
           return object
-        } catch (e) { lastErr = e }
+        } catch (e) {
+          toolErr ??= e
+          if (unsupportedMode(e)) break // this provider has no such mode — stop retrying it
+          lastErr = e
+        }
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+    // Prefer a real generation failure over "mode not supported", so the operator
+    // sees WHY synthesis failed. Observed live: claude-opus-4-7 misses this schema
+    // in tool mode where claude-sonnet-4-5 does not — the model is the lever.
+    const err = lastErr ?? toolErr
+    throw err instanceof Error ? err : new Error(String(err))
   }
 
 const hasDigit = (s: string): boolean => /[0-9]/.test(s)
