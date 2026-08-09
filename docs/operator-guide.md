@@ -65,7 +65,10 @@ Fill in `.env` (every variable is documented inline). Minimum to start:
 - `LLM_PROVIDER` + `LLM_API_KEY`
 - `RPC_URL` — **set this.** `.env.example` ships it pointing at the public Base RPC so a
   fresh node works out of the box; a private endpoint (Alchemy/QuickNode/Ankr) is
-  strongly preferred because the public one rate-limits. See the warning below.
+  strongly preferred because the public one rate-limits. Accepts a **comma-separated
+  list** for failover — put your private endpoint first and the public one last:
+  `RPC_URL=https://base-mainnet.g.alchemy.com/v2/KEY,https://mainnet.base.org`.
+  See the warning below.
 - `PINATA_JWT` — only if minting
 
 > **`RPC_URL` decides whether your votes carry real weight.** The node sizes each vote
@@ -349,7 +352,8 @@ alpine tar czf /out/orquestra-backup.tgz -C /data .`
 |---|---|
 | Dashboard won't load | Check the SSH tunnel is up and you're hitting `localhost:7070`. `docker ps` should show `healthy`. |
 | `PUBLIC_API_UNREACHABLE` in logs | A transient reppo.ai blip. The node retries automatically; a one-off is harmless. Persistent = check the node's internet/DNS. |
-| Datanet skips with `INTERNAL_ERROR` / `429` / `rate limit` | The public Base RPC is rate-limiting. The node now retries these with backoff, but a busy cycle can still exhaust the retries — set `RPC_URL` to a private endpoint (Alchemy/QuickNode) for a clean run. |
+| Datanet skips with `INTERNAL_ERROR` / `429` / `rate limit` | The public Base RPC is rate-limiting. The node now retries these with backoff, but a busy cycle can still exhaust the retries — set `RPC_URL` to a private endpoint (Alchemy/QuickNode) for a clean run. `RPC_URL` also takes a comma-separated fallback list, so a rate-limited or downed peer is routed around instead of failing the read. |
+| Claims never happen but voting looks fine | A failed emissions scan (downed/rate-limited RPC peer, `getLogs` range cap) skips the whole claim phase for that cycle. This is now an explicit **skip row in the dashboard Activity feed** — it is no longer stderr-only. Unclaimed emissions stay claimable and are retried next cycle; a persistent one means fixing `RPC_URL` (add fallback endpoints). |
 | `eth_getLogs HTTP 400` in logs | The on-chain emissions scan hit an RPC `getLogs` range cap. Non-fatal: the claim phase skips that cycle and votes/mints continue. The node now chunks to ≤10k blocks; if it persists, set `RPC_URL` to a higher-capacity endpoint. |
 | Votes land but earn ~nothing / on-chain weight looks like `1` wei | `RPC_URL` is unset, so the node cannot read your per-epoch voting power and falls back to legacy conviction × 1e18 sizing — dust next to a locked stake. Set `RPC_URL` and restart. Look for `votes use legacy conviction×1e18 sizing` on stderr, and check the sizing shown on the dashboard. **Do not patch the image to fix this** — native veREPPO sizing is built in (`src/voter/weight.ts`) and only needs the RPC. |
 | 0 votes every cycle | Nothing new to vote on (all current pods already voted, yours, or skipped mid-range). Normal between fresh pods. |
