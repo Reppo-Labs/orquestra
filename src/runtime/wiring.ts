@@ -527,6 +527,9 @@ export function buildTick(w: CycleWiring, deps: CycleDeps, opts: TickOpts = {}):
       snap.llm = snapshotLlmUsage()
       // Per-datanet economics: fresh each cycle from the report (see Snapshot doc).
       snap.datanetEconomics = report.datanetEconomics
+      // Vote sizing + per-epoch vote-power budget: same fresh-each-cycle discipline, and
+      // it REUSES the read the vote pass already did (no second RPC round-trip per cycle).
+      if (report.votePower) snap.votePower = report.votePower
       writeSnapshot(w.dataDir, snap)
     } catch (e) {
       console.error(`orquestra: snapshot write failed (non-fatal): ${(e as Error).message}`)

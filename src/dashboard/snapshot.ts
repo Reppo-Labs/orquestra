@@ -38,6 +38,38 @@ export interface Snapshot {
    *  on-chain tx, so an empty gas tank silently stalls the whole node (each attempt fails
    *  per-datanet and the cycle carries on). Optional for back-compat with pre-feature rows. */
   lowGas?: boolean
+  /** How THIS cycle sized its votes, plus the per-epoch vote-power budget behind it.
+   *  Copied verbatim from the cycle report — fresh each cycle, deliberately NOT merged
+   *  over the previous snapshot: a stale "you have power left" is worse than an absent
+   *  one, and the sizing mode describes the cycle that just ran. Absent = the node has
+   *  no vote-enabled datanet, or the row predates the field. */
+  votePower?: VotePowerView
+}
+
+/** Which sizing the vote pass actually used this cycle. `ve-reppo` is the real thing
+ *  (src/voter/weight.ts sizes from votingPower − votesCasted); both `legacy-*` modes
+ *  mean every vote landed as conviction×1e18 dust next to the wallet's stake, which is
+ *  invisible to an operator who never reads stderr. The two degraded causes are NOT
+ *  interchangeable: `no-rpc` is a permanent misconfiguration (RPC_URL unset) that only
+ *  the operator can fix, `read-failed` is this cycle's RPC blip and self-heals. */
+export type VoteSizingMode = 've-reppo' | 'legacy-no-rpc' | 'legacy-read-failed'
+
+/** The wallet's per-epoch vote-power budget as the dashboard sees it.
+ *  Amounts are raw 18-dec DECIMAL STRINGS: they are bigints on the read path
+ *  (src/reppo/votePower.ts) and bigint does not survive JSON.stringify into the
+ *  snapshot table. They are ABSENT — never 0 — whenever the read did not happen or
+ *  failed, so an RPC blip renders as "unread", not as a wallet with no power. */
+export interface VotePowerView {
+  sizing: VoteSizingMode
+  /** full veREPPO voting power (the TOTAL — not what is still spendable). */
+  votingPowerWei?: string
+  /** votes already cast THIS epoch: votesCastedByVoterForEpoch, read on-chain. This is
+   *  the value operators were cross-checking with external scripts — it is the proof
+   *  that a cast vote carried real weight. */
+  votesCastedWei?: string
+  /** still spendable this epoch: votingPower − votesCasted, floored at 0. */
+  remainingWei?: string
+  epoch?: number
 }
 
 /** Warn threshold for the wallet's ETH balance. Base txs are cheap (a vote lands well
