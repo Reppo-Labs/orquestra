@@ -1,6 +1,7 @@
 // src/onboarding/schema.ts
 import { z } from 'zod'
 import { Strictness } from '../config/schema.js'
+import { LlmProviderEnum, type LlmProvider } from '../llm/model.js'
 import { buildStrategyConfig } from './build.js'
 import type { OnboardingAnswers } from './types.js'
 
@@ -38,6 +39,14 @@ export const OnboardingAnswersSchema = z.object({
   horizonDays: z.number().int().positive(),
   cadenceHours: z.number().min(0.1), // fractional ok (0.5 = 30 min); floor matches config schema
   notes: z.string().default(''),
+  // Node default LLM model. Optional: absent → the env LLM_PROVIDER default. The
+  // provider must be a KNOWN provider here; whether it is actually KEYED on this node
+  // is a separate, env-dependent check (see checkProviderAvailable) because the shape
+  // schema is also the LLM tool schema and must stay environment-independent.
+  defaultModel: jsonLenient(z.object({
+    provider: LlmProviderEnum,
+    model: z.string().trim().min(1),
+  })).optional(),
   // Display name the node registers on the Reppo platform (leaderboard, stats).
   // Optional: absent/blank → orquestra-<wallet slice> default at registration.
   nodeName: z.string().trim().max(64).optional(),
@@ -45,10 +54,37 @@ export const OnboardingAnswersSchema = z.object({
 
 export type ValidateResult = { ok: true; answers: OnboardingAnswers } | { ok: false; error: string }
 
-/** Validate raw answers two ways: shape (zod) + full StrategyConfig assembly. */
-export function validateAnswers(raw: unknown): ValidateResult {
+/** Reject a default model whose provider has no credential on THIS node, so onboarding
+ *  cannot persist a model the runtime would silently fall back away from (effectiveDefault
+ *  would swap it for the env default every cycle — exactly the "it looks saved, it isn't"
+ *  class of bug this check exists to prevent). Rejected loudly rather than dropped: a
+ *  silent drop is what made the original bug invisible.
+ *
+ *  FAIL-OPEN on an UNKNOWN provider list (undefined/empty): availability comes from the
+ *  env key registry, and a caller that cannot enumerate it (CLI without wiring, tests)
+ *  must not have every model choice refused. An unread availability is not "unavailable". */
+export function checkProviderAvailable(
+  defaultModel: { provider: LlmProvider } | undefined,
+  availableProviders?: LlmProvider[],
+): { ok: true } | { ok: false; error: string } {
+  if (!defaultModel || !availableProviders?.length) return { ok: true }
+  if (availableProviders.includes(defaultModel.provider)) return { ok: true }
+  return {
+    ok: false,
+    error: `defaultModel.provider: ${defaultModel.provider} has no API key on this node — ` +
+      `set LLM_KEY_${defaultModel.provider.toUpperCase().replace(/-/g, '_')} in the environment, ` +
+      `or choose one of: ${availableProviders.join(', ')}`,
+  }
+}
+
+/** Validate raw answers three ways: shape (zod), default-model provider availability on
+ *  this node, and full StrategyConfig assembly. `availableProviders` is the env key
+ *  registry's providers; omit it where availability is unknown (see checkProviderAvailable). */
+export function validateAnswers(raw: unknown, availableProviders?: LlmProvider[]): ValidateResult {
   const parsed = OnboardingAnswersSchema.safeParse(raw)
   if (!parsed.success) return { ok: false, error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') }
+  const avail = checkProviderAvailable(parsed.data.defaultModel, availableProviders)
+  if (!avail.ok) return { ok: false, error: avail.error }
   try {
     buildStrategyConfig(parsed.data) // throws if the assembled config is invalid
     return { ok: true, answers: parsed.data }

@@ -69,3 +69,56 @@ describe('OnboardingAnswersSchema adapterParams', () => {
     expect(OnboardingAnswersSchema.parse({ ...base, datanets: [d] }).datanets[0].adapterParams).toBeUndefined()
   })
 })
+
+describe('OnboardingAnswersSchema + validateAnswers defaultModel', () => {
+  const base = {
+    datanets: [{ id: '2', vote: true, mint: false, strictness: 'balanced' as const }],
+    lockReppo: 500, lockDurationDays: 30, voteRateMaxPerCycle: 25,
+    mintReppoMax: 100, horizonDays: 30, cadenceHours: 6, notes: 'n',
+  }
+
+  it('accepts and preserves a defaultModel through validateAnswers', () => {
+    const r = validateAnswers({ ...base, defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' } })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.answers.defaultModel).toEqual({ provider: 'usepod', model: 'deepseek-v3.2' })
+  })
+
+  it('accepts a JSON-STRINGIFIED defaultModel (LLM tool calls stringify nested objects)', () => {
+    const r = validateAnswers({ ...base, defaultModel: JSON.stringify({ provider: 'usepod', model: 'qwen-3.5' }) })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.answers.defaultModel?.model).toBe('qwen-3.5')
+  })
+
+  it('rejects an unknown provider', () => {
+    expect(validateAnswers({ ...base, defaultModel: { provider: 'mistral-inc', model: 'x' } }).ok).toBe(false)
+  })
+
+  it('rejects a blank model id (config schema requires min(1))', () => {
+    expect(validateAnswers({ ...base, defaultModel: { provider: 'usepod', model: '  ' } }).ok).toBe(false)
+  })
+
+  it('treats defaultModel as optional', () => {
+    const r = validateAnswers(base)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.answers.defaultModel).toBeUndefined()
+  })
+
+  it('REFUSES a provider this node holds no key for (never persist an unresolvable model)', () => {
+    const r = validateAnswers({ ...base, defaultModel: { provider: 'openai', model: 'gpt-5.2' } }, ['usepod', 'google'])
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('has no API key on this node')
+  })
+
+  it('accepts a provider that IS keyed on this node', () => {
+    expect(validateAnswers({ ...base, defaultModel: { provider: 'google', model: 'gemini-3-flash-preview' } }, ['usepod', 'google']).ok).toBe(true)
+  })
+
+  it('FAILS OPEN when the provider list is unknown/empty — unread availability is not "unavailable"', () => {
+    expect(validateAnswers({ ...base, defaultModel: { provider: 'openai', model: 'gpt-5.2' } }, []).ok).toBe(true)
+    expect(validateAnswers({ ...base, defaultModel: { provider: 'openai', model: 'gpt-5.2' } }).ok).toBe(true)
+  })
+
+  it('does not gate answers that carry no defaultModel at all', () => {
+    expect(validateAnswers(base, ['usepod']).ok).toBe(true)
+  })
+})

@@ -41,6 +41,10 @@ function DraftSheet({ draft, names }: { draft: OnboardingDraft; names: Record<st
     <>
       <div className="ob-section">node</div>
       <Field label="name" value={draft.nodeName} />
+      {/* Shown because this is the value the node will actually run on — the operator
+          should be able to see the model choice land before confirming, not discover
+          afterwards that it never made it into the strategy. */}
+      <Field label="model" value={draft.defaultModel ? `${draft.defaultModel.provider} / ${draft.defaultModel.model}` : undefined} />
       <div className="ob-section">datanets</div>
       {nets.length === 0 && <div className="muted">none chosen yet — they appear as you decide</div>}
       {nets.map((d) => (

@@ -51,3 +51,16 @@ describe('buildStrategyConfig adapterParams', () => {
     expect(p.adapterParams).toBeUndefined()
   })
 })
+
+describe('buildStrategyConfig defaultModel', () => {
+  // Operator bug: a model chosen during onboarding never reached the persisted config,
+  // so the dashboard showed a selection the node did not use.
+  it('maps defaultModel into the config', () => {
+    const cfg = buildStrategyConfig({ ...answers(), defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' } })
+    expect(cfg.defaultModel).toEqual({ provider: 'usepod', model: 'deepseek-v3.2' })
+  })
+
+  it('omits defaultModel when the operator did not choose one (env default keeps winning)', () => {
+    expect(buildStrategyConfig(answers()).defaultModel).toBeUndefined()
+  })
+})

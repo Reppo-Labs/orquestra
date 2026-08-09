@@ -1,7 +1,9 @@
 // src/onboarding/agent.test.ts
 import { describe, it, expect, vi } from 'vitest'
 import { MockLanguageModelV1 } from 'ai/test'
-import { runConversationalOnboarding, runOnboardingTurn, seedOnboardingMessages, buildOnboardingTools, summarizeAccessFee, SYSTEM, type OnboardingAgentDeps } from './agent.js'
+import { runConversationalOnboarding, runOnboardingTurn, seedOnboardingMessages, buildOnboardingTools, modelsAvailableAddendum, summarizeAccessFee, SYSTEM, type OnboardingAgentDeps } from './agent.js'
+import type { OnboardingAnswers } from './types.js'
+import type { LlmProvider } from '../llm/model.js'
 import type { Prompter } from './types.js'
 import type { DatanetRubric } from '../rubric/types.js'
 
@@ -235,5 +237,49 @@ describe('non-REPPO access fee surfacing in onboarding', () => {
     const res = await tools.get_datanet_details.execute({ datanetId: '42' }, { toolCallId: 'c', messages: [] } as never)
     expect((res as { error?: string }).error).toBe('RPC down')
     expect((res as { accessFeeNote?: string }).accessFeeNote).toBeUndefined()
+  })
+})
+
+describe('onboarding default-model selection', () => {
+  const dummy = null as unknown as OnboardingAgentDeps['model']
+
+  it('finalize captures a defaultModel and it survives validation', async () => {
+    const captured: OnboardingAnswers[] = []
+    const tools = buildOnboardingTools(deps(dummy), (a) => captured.push(a))
+    const res = await tools.finalize.execute(
+      { ...validAnswers, defaultModel: { provider: 'usepod', model: 'deepseek-v3.2' } },
+      { toolCallId: 'a', messages: [] } as never,
+    )
+    expect(res).toMatchObject({ saved: true })
+    expect(captured[0].defaultModel).toEqual({ provider: 'usepod', model: 'deepseek-v3.2' })
+  })
+
+  it('finalize REFUSES a provider this node has no key for, and captures nothing', async () => {
+    const captured: OnboardingAnswers[] = []
+    const d = { ...deps(dummy), availableProviders: ['usepod'] as LlmProvider[] }
+    const tools = buildOnboardingTools(d, (a) => captured.push(a))
+    const res = await tools.finalize.execute(
+      { ...validAnswers, defaultModel: { provider: 'openai', model: 'gpt-5.2' } },
+      { toolCallId: 'a', messages: [] } as never,
+    ) as { saved: boolean; error?: string }
+    expect(res.saved).toBe(false)
+    expect(res.error).toContain('has no API key on this node')
+    expect(captured).toHaveLength(0)
+  })
+
+  it('the seed lists ONLY this node\'s keyed providers, so the assistant cannot offer an unkeyed one', () => {
+    const [sys] = seedOnboardingMessages(undefined, ['usepod', 'google'])
+    const content = String(sys.content)
+    expect(content).toContain('MODELS AVAILABLE — this node holds a key')
+    expect(content).toContain('usepod')
+    expect(content).toContain('google')
+    expect(content).not.toContain('- openai')
+  })
+
+  it('omits the models note entirely when availability is unknown (SYSTEM then says omit defaultModel)', () => {
+    expect(modelsAvailableAddendum([])).toBe('')
+    // SYSTEM references the note by name; what must be absent is the note ITSELF.
+    expect(String(seedOnboardingMessages()[0].content)).not.toContain('MODELS AVAILABLE — this node holds a key')
+    expect(SYSTEM).toContain('OMIT defaultModel entirely')
   })
 })
