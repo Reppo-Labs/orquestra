@@ -21,8 +21,23 @@ const FETCH_TIMEOUT_MS = 10_000
 /** Spot prices are display-grade; refetching more often than this just burns the
  *  free tier (30 calls/min) on dashboard polls. */
 const PRICE_TTL_MS = 5 * 60_000
-/** After a failed fetch, don't retry before this — the dashboard polls /api/pnl. */
+/** Ceiling for the post-failure backoff — the dashboard polls /api/pnl, so a sustained
+ *  outage must settle at roughly one attempt per minute. */
 const FAILURE_TTL_MS = 60_000
+/** ...but the FIRST failure only waits this long. A node restart races its own network
+ *  (container egress/DNS not ready yet), so the very first fetch after `docker compose up`
+ *  routinely fails for a second or two. A flat 60s penalty turned that blip into a full
+ *  minute of "price unavailable" — every dollar AND percentage card blank — on every
+ *  deploy. Consecutive failures double from here up to FAILURE_TTL_MS, so a real outage
+ *  still backs off and never burns the free tier (30 calls/min). */
+const FAILURE_TTL_MIN_MS = 5_000
+
+/** Backoff after `fails` consecutive failures: 5s, 10s, 20s, 40s, then 60s forever.
+ *  Exported for testing — the cold-start recovery window is the point of this module's
+ *  failure path, not an implementation detail. */
+export function failureBackoffMs(fails: number): number {
+  return Math.min(FAILURE_TTL_MS, FAILURE_TTL_MIN_MS * 2 ** Math.max(0, fails - 1))
+}
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 
@@ -93,7 +108,9 @@ export function createTokenPricer(deps: TokenPricerDeps = {}) {
   const env = deps.env ?? process.env
   const now = deps.now ?? Date.now
   const addressBySymbol = new Map<string, string | null>()
-  let priceCache: { at: number; ok: boolean; prices: Map<string, number> } | null = null
+  /** `fails` = consecutive failed fetches, driving failureBackoffMs; reset to 0 on any
+   *  success so a later blip starts from the short backoff again. */
+  let priceCache: { at: number; ok: boolean; prices: Map<string, number>; fails: number } | null = null
 
   /** symbol → token address on this network; null when unresolvable. */
   async function resolveAddress(symbol: string, economics: Pick<DatanetYield, 'datanetId' | 'nativeTokenSymbol'>[]): Promise<string | null> {
@@ -120,7 +137,7 @@ export function createTokenPricer(deps: TokenPricerDeps = {}) {
   }
 
   async function fetchPrices(slug: string, addresses: string[]): Promise<Map<string, number>> {
-    if (priceCache && now() - priceCache.at < (priceCache.ok ? PRICE_TTL_MS : FAILURE_TTL_MS)) {
+    if (priceCache && now() - priceCache.at < (priceCache.ok ? PRICE_TTL_MS : failureBackoffMs(priceCache.fails))) {
       return priceCache.prices
     }
     const ctrl = new AbortController()
@@ -132,10 +149,10 @@ export function createTokenPricer(deps: TokenPricerDeps = {}) {
       )
       if (!res.ok) throw new Error(`GeckoTerminal HTTP ${res.status}`)
       const prices = parseTokenPrices(await res.json())
-      priceCache = { at: now(), ok: true, prices }
+      priceCache = { at: now(), ok: true, prices, fails: 0 }
       return prices
     } catch {
-      priceCache = { at: now(), ok: false, prices: new Map() }
+      priceCache = { at: now(), ok: false, prices: new Map(), fails: (priceCache?.fails ?? 0) + 1 }
       return priceCache.prices
     } finally {
       clearTimeout(t)
