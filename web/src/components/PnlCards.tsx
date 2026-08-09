@@ -14,6 +14,10 @@ function VeReppoLabel() {
           proportionally more voting power. The result can exceed the amount
           of REPPO you locked.
         </p>
+        <p style={{ margin: '6px 0 0' }}>
+          This card is the TOTAL. The share still spendable in the current epoch is
+          <b> Vote power left</b>, under Gas &amp; vote power.
+        </p>
       </Tip>
     </span>
   )
@@ -52,7 +56,7 @@ export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapsho
   const loading = pnl === null && snapshot === null
   const skel = <span className="skel" aria-hidden="true" />
   if (loading) {
-    const labels: ReactNode[] = ['Net REPPO', 'Spent (mint)', 'Gas (ETH)', <LlmCostLabel key="llm" />, 'REPPO balance', <VeReppoLabel key="ve" />, 'Epoch']
+    const labels: ReactNode[] = ['Net REPPO', 'Spent (mint)', 'Gas spent (ETH)', <LlmCostLabel key="llm" />, 'REPPO balance', <VeReppoLabel key="ve" />, 'Epoch']
     return (
       <div className="cards stagger">
         {labels.map((k, i) => (
@@ -70,10 +74,14 @@ export function PnlCards({ pnl, snapshot }: { pnl: Pnl | null; snapshot: Snapsho
   const cards: [ReactNode, ReactNode, boolean?, string?][] = [
     ['Net REPPO', pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—', true],
     ['Spent (mint)', pnl ? fmt(pnl.spentReppo) : '—'],
-    ['Gas (ETH)', pnl ? fmt(pnl.gasSpentEth) : '—'],
+    // "Gas spent", not "Gas": this is lifetime burn. What an operator actually needs
+    // before a stall is the REMAINING balance, which lives in the Gas & vote power block.
+    ['Gas spent (ETH)', pnl ? fmt(pnl.gasSpentEth) : '—'],
     [<LlmCostLabel key="llm" />, llm.v, false, llm.sub],
     ['REPPO balance', snapshot ? fmt(snapshot.balance.reppo) : '—'],
-    [<VeReppoLabel key="ve" />, snapshot ? fmt(snapshot.balance.veReppo) : '—'],
+    // TOTAL power — explicitly labelled, because it was routinely misread as "budget I
+    // can still spend this epoch" (that number is in the Gas & vote power block).
+    [<VeReppoLabel key="ve" />, snapshot ? fmt(snapshot.balance.veReppo) : '—', false, 'total power, not this epoch\u2019s budget'],
     ['Epoch', ep ? String(ep.epoch) : '—', false, ep ? `${Math.max(0, Math.round(ep.secondsRemaining / 3600))}h left` : undefined],
   ]
   // Cost-by-model drilldown: costliest first, unpriced models last (still counted).

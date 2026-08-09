@@ -305,6 +305,18 @@ textarea { resize: vertical; font-family: var(--body); min-height: 0; }
 .dot.off { background: var(--faint); }
 .skipreason { color: var(--warn); font-size: 12px; padding: 4px 0; }
 
+/* Operator alert strip (low gas, degraded vote sizing). Same shape as .earn-banner
+   but warn-toned: these are conditions that silently stall the node, so they must
+   read as a warning rather than as another status line. */
+.alert-banner {
+  display: flex; align-items: center; gap: 10px; font-size: 12px;
+  color: var(--muted); padding: 11px 15px; border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--r-md); background: var(--panel); margin-bottom: 12px;
+  font-variant-numeric: tabular-nums; flex-wrap: wrap; row-gap: 6px;
+}
+.alert-banner .bseg { display: inline-flex; align-items: center; gap: 6px; }
+.alert-banner .status { color: var(--warn); font-weight: 500; }
+
 /* ── Tooltip ──────────────────────────────────────────────────────────── */
 /* margin-left: every call site renders the ⓘ straight after its label text —
    spacing lives here once instead of in each label. */

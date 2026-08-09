@@ -263,6 +263,46 @@ describe('runCycle vote-weight budget', () => {
     const intents = (d.executor.executeVote as any).mock.calls.map((c: any[]) => c[0])
     for (const i of intents) expect(i.voteWeightWei).toBeUndefined()
   })
+
+  // report.votePower is what the dashboard renders (wiring copies it onto the snapshot).
+  // Until it existed, the sizing actually in effect was a single stderr line among
+  // hundreds — an operator could not see that every vote was landing as dust.
+  it('reports the live per-epoch budget as decimal strings (bigint would not survive JSON)', async () => {
+    const d = deps({ onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: budget(59_400n * REPPO) }) }) })
+    const report = await runCycle(config, 'cyc-vp-live', d)
+    expect(report.votePower).toEqual({
+      sizing: 've-reppo',
+      votingPowerWei: (59_400n * REPPO).toString(),
+      votesCastedWei: '0',
+      remainingWei: (59_400n * REPPO).toString(),
+      epoch: 117,
+    })
+    expect(JSON.parse(JSON.stringify(report.votePower))).toEqual(report.votePower) // JSON-safe
+  })
+
+  it('reports legacy-no-rpc sizing WITHOUT amounts — unread must never render as zero', async () => {
+    const report = await runCycle(config, 'cyc-vp-norpc', deps())
+    expect(report.votePower).toEqual({ sizing: 'legacy-no-rpc' })
+  })
+
+  it('reports a failed read as its own cause (self-heals) rather than as a missing RPC', async () => {
+    const d = deps({
+      onchain: onchainReads({ wallet: walletReads({ getVotePowerBudget: vi.fn(async () => { throw new Error('rpc down') }) }) }),
+    })
+    const report = await runCycle(config, 'cyc-vp-failed', d)
+    expect(report.votePower).toEqual({ sizing: 'legacy-read-failed' })
+  })
+
+  it('omits votePower entirely when no datanet has voting enabled (nothing was read)', async () => {
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '2': { vote: false, mint: false, strictness: 'balanced' } },
+    })
+    const report = await runCycle(cfg, 'cyc-vp-novote', deps())
+    expect(report.votePower).toBeUndefined()
+  })
 })
 
 describe('runCycle', () => {

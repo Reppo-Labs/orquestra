@@ -9,6 +9,7 @@ import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult, VoteIntent, ClaimIntent } from '../wallet/intents.js'
 import type { ClaimableEmission, VotePowerBudget } from '../reppo/reader.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
+import type { VotePowerView } from '../dashboard/snapshot.js'
 import { redactSecrets } from '../util/redact.js'
 import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
 import { selectVotes } from '../voter/select.js'
@@ -395,6 +396,10 @@ export interface CycleReport {
   /** Per-datanet emission economics computed this cycle (vote-scoring datanets only).
    *  Fresh each cycle — the dashboard snapshot copies it verbatim, no merge-over-previous. */
   datanetEconomics: DatanetYield[]
+  /** Which sizing this cycle's votes used + the per-epoch vote-power budget behind it.
+   *  Absent when no datanet has voting enabled (nothing was read, nothing to report).
+   *  The dashboard snapshot copies it verbatim — see Snapshot.votePower. */
+  votePower?: VotePowerView
 }
 
 /** One swarm cycle: for each configured datanet, vote (if enabled + capable) and
@@ -440,11 +445,22 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // read) — fail-open, exactly like the yield and rewards-pool reads: an unknown budget
   // never gates scoring, it only loses the sizing.
   let votePower: { votingPowerWei: bigint; remainingWei: bigint } | null = null
+  // The same fact, shaped for the dashboard (src/dashboard/snapshot.ts VotePowerView).
+  // stderr already carried all of this; the snapshot is what an operator actually reads.
+  let votePowerView: VotePowerView | undefined
   if (voteWeights.size > 0) {
     if (deps.onchain?.wallet?.getVotePowerBudget) {
+      votePowerView = { sizing: 'legacy-read-failed' } // upgraded on a successful read below
       try {
         const budget = await deps.onchain.wallet.getVotePowerBudget()
         votePower = { votingPowerWei: budget.votingPowerWei, remainingWei: budget.remainingWei }
+        votePowerView = {
+          sizing: 've-reppo',
+          votingPowerWei: budget.votingPowerWei.toString(),
+          votesCastedWei: budget.votesCastedWei.toString(),
+          remainingWei: budget.remainingWei.toString(),
+          epoch: budget.epoch,
+        }
         voteWeigher = createVoteWeigher({
           remainingWei: budget.remainingWei,
           secondsRemainingInEpoch: Math.max(0, budget.epochEndsAtSec - Math.floor(Date.now() / 1000)),
@@ -460,6 +476,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         console.error(redactSecrets(`orquestra: vote-power budget read failed — votes fall back to legacy conviction sizing this cycle: ${(e as Error).message}`))
       }
     } else {
+      votePowerView = { sizing: 'legacy-no-rpc' }
       console.error('orquestra: votes use legacy conviction×1e18 sizing (dust vs the locked stake) — set RPC_URL so votes are sized from the wallet\'s real voting power')
     }
   }
@@ -765,5 +782,5 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     }))
   }
 
-  return { datanets, claims, emissionsDue, datanetEconomics }
+  return { datanets, claims, emissionsDue, datanetEconomics, ...(votePowerView ? { votePower: votePowerView } : {}) }
 }

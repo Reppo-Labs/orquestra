@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { DashData } from '../api'
 import { fmt, epochLabel, sign } from '../lib/format'
+import { gasView, votePowerView } from '../lib/nodeCapacity'
 import { Tip } from './Tip'
 import { RunNowButton } from './RunNowButton'
 import reppoLogo from '../assets/reppo-logo.png'
@@ -28,6 +29,11 @@ export function Nav({ data, asof, tab, onTab, activityCount, onRefresh }: {
   const snap = data?.snapshot
   const pnl = data?.pnl
   const cfg = data?.config
+  // Gas and this epoch's REMAINING vote power ride the ticker because they are the two
+  // states that stall the node while every other number still looks healthy. Unread
+  // stays 'unread' — a 0 here would read as an empty wallet / no voting power.
+  const gas = gasView(snap ?? null)
+  const vp = votePowerView(snap ?? null)
   const ticks: { k: ReactNode; id: string; v: ReactNode }[] = [
     { id: 'Epoch', k: 'Epoch', v: snap ? epochLabel(snap.epoch) : '—' },
     { id: 'Net REPPO', k: 'Net REPPO', v: pnl ? <span className={sign(pnl.netReppo)}>{fmt(pnl.netReppo)}</span> : '—' },
@@ -44,10 +50,24 @@ export function Nav({ data, asof, tab, onTab, activityCount, onRefresh }: {
               proportionally more voting power. The result can exceed the amount
               of REPPO you locked.
             </p>
+            <p style={{ margin: '6px 0 0' }}>
+              This is your TOTAL power. What is still spendable this epoch is
+              <b> Power left</b>.
+            </p>
           </Tip>
         </span>
       ),
       v: snap ? fmt(snap.balance.veReppo) : '—',
+    },
+    {
+      id: 'Vote power left',
+      k: 'Power left',
+      v: !snap ? '—' : vp.remaining === null ? <span className="faint">unread</span> : <span className={vp.degraded ? 'neg' : ''}>{fmt(vp.remaining)}</span>,
+    },
+    {
+      id: 'Gas',
+      k: 'Gas',
+      v: !snap || gas.eth === null ? '—' : <span className={gas.low ? 'neg' : ''}>{fmt(gas.eth)}</span>,
     },
     { id: 'Claimable', k: 'Claimable', v: pnl ? <span className={pnl.claimableReppo > 0 || (pnl.claimablePairs ?? 0) > 0 ? 'pos' : ''}>{(pnl.claimablePairs ?? 0) > 0 && pnl.claimableReppo === 0 ? `${pnl.claimablePairs} pending` : fmt(pnl.claimableReppo)}</span> : '—' },
     { id: 'Cadence', k: 'Cadence', v: cfg ? `${cfg.cadenceHours}h` : '—' },

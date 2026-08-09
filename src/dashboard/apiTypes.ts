@@ -21,7 +21,7 @@ import type { OnboardingAnswers } from '../onboarding/types.js'
 // ── domain re-exports (wire shape == domain shape) ────────────────────────────────
 export type { Pnl, TokenFlow } from './pnl.js'
 export type { TokenPnlView, TokenPnlSummary } from './prices.js'
-export type { Snapshot, SnapshotBudget } from './snapshot.js'
+export type { Snapshot, SnapshotBudget, VotePowerView, VoteSizingMode } from './snapshot.js'
 export type { ActivityEntry } from './activityLog.js'
 export type { PanelTranscript, PanelistVerdict } from '../panel/types.js'
 export type { HealthReport, DatanetHealth, KindCounts, TxRate } from './health.js'
