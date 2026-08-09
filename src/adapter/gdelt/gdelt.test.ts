@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseGdelt, buildGdeltQuery, withRetry } from './gdelt.js'
+import { parseGdelt, buildGdeltQuery, withRetry, fetchGeoEvents, resetGdeltCooldown } from './gdelt.js'
 
 const raw = JSON.parse(readFileSync(join(__dirname, '../../../test/fixtures/gdelt-doc.json'), 'utf-8'))
 
@@ -79,5 +79,31 @@ describe('withRetry', () => {
       (e) => !(e instanceof Error && e.message.includes('429')),
     )).rejects.toThrow('429 Too Many Requests')
     expect(calls).toBe(1) // no retries
+  })
+})
+
+describe('fetchGeoEvents 429 cooldown', () => {
+  const q = { query: 'geopolitics', timespanHours: 24, maxRecords: 10 }
+  const t0 = 1_700_000_000_000
+
+  it('stops calling GDELT for the cooldown window after a 429, then resumes', async () => {
+    resetGdeltCooldown()
+    let calls = 0
+    const fail429 = async () => { calls++; throw new Error('curl: (22) ... 429') }
+
+    // First call really hits GDELT and gets banned. 429 is never retried.
+    await expect(fetchGeoEvents(q, t0, fail429)).rejects.toThrow('429')
+    expect(calls).toBe(1)
+
+    // An hour later the node cycles again — it must NOT touch the network, because
+    // probing is what keeps GDELT's penalty window alive.
+    await expect(fetchGeoEvents(q, t0 + 60 * 60 * 1000, fail429)).rejects.toThrow(/backing off/)
+    expect(calls).toBe(1)
+
+    // Once the window has lapsed, normal service resumes.
+    const ok = async () => JSON.stringify({ articles: [{ url: 'https://x.test/a', title: 'A' }] })
+    const arts = await fetchGeoEvents(q, t0 + 7 * 60 * 60 * 1000, ok)
+    expect(arts).toHaveLength(1)
+    resetGdeltCooldown()
   })
 })

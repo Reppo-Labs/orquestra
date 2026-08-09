@@ -107,17 +107,44 @@ export interface SynthDeps {
   model?: LanguageModel
 }
 
+/** Structured-output modes, tried in order. `tool` is the portable default
+ *  (Anthropic/OpenAI/Google all support it), but ProposalSchema is deep and
+ *  heavily optional, and some models — observed live on claude-opus-4-7 —
+ *  return a tool call that misses the schema and fail the whole synthesis with
+ *  "No object generated: response did not match schema". `json` mode constrains
+ *  the SAME zod schema without the tool-call indirection, so it recovers those
+ *  models instead of losing the datanet's only mint source for the cycle. */
+const SYNTH_MODES = ['tool', 'json'] as const
+
+/** A provider that cannot do this generation mode AT ALL (Anthropic has no
+ *  json-mode object generation). Distinct from a schema miss: retrying is
+ *  pointless, and reporting it would bury the real failure from `tool` mode. */
+const unsupportedMode = (e: unknown): boolean =>
+  e instanceof Error && /not supported/i.test(e.message)
+
 const defaultGenerate = (model: LanguageModel) =>
   async ({ system, prompt }: { system: string; prompt: string }): Promise<ProposalOut> => {
+    let toolErr: unknown
     let lastErr: unknown
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        // `mode: 'tool'` works across Anthropic/OpenAI/Google (same as gdelt).
-        const { object } = await generateObject({ model, schema: ProposalSchema, mode: 'tool', system, prompt })
-        return object
-      } catch (e) { lastErr = e }
+    // Two attempts per mode: a schema miss is often nondeterministic, so retry the
+    // portable mode before paying the mode switch.
+    for (const mode of SYNTH_MODES) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const { object } = await generateObject({ model, schema: ProposalSchema, mode, system, prompt })
+          return object
+        } catch (e) {
+          toolErr ??= e
+          if (unsupportedMode(e)) break // this provider has no such mode — stop retrying it
+          lastErr = e
+        }
+      }
     }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
+    // Prefer a real generation failure over "mode not supported", so the operator
+    // sees WHY synthesis failed. Observed live: claude-opus-4-7 misses this schema
+    // in tool mode where claude-sonnet-4-5 does not — the model is the lever.
+    const err = lastErr ?? toolErr
+    throw err instanceof Error ? err : new Error(String(err))
   }
 
 const hasDigit = (s: string): boolean => /[0-9]/.test(s)
