@@ -50,6 +50,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # vX.Y.Z -> X.Y.Z. Must match auto-release.yml's format EXACTLY: both feed
+      # ORQUESTRA_VERSION, which lands in telemetry's orquestraVersion, and a fleet
+      # split between "0.4.54" and "v0.4.54" would fragment every version rollup.
+      - name: Strip the v prefix
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       # Derive tags from the git tag: vX.Y.Z -> X.Y.Z + latest. The image name is
       # lowercased (GHCR requires it; the org is "Reppo-Labs").
       - name: Compute image tags
@@ -70,6 +77,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the tag's version into the image's package.json — the node reports it as
+          # telemetry's orquestraVersion. Mirrors auto-release.yml; here the version comes
+          # from the pushed tag (refs/tags/vX.Y.Z) rather than a computed bump.
+          build-args: |
+            ORQUESTRA_VERSION=${{ steps.ver.outputs.version }}
           # Layer cache across releases — the arm64 QEMU build is slow without it.
           cache-from: type=gha
           cache-to: type=gha,mode=max
