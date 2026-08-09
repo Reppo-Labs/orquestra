@@ -270,6 +270,44 @@ describe('synthesizeProposals', () => {
     expect(cands).toEqual([])
   })
 
+  it('replays validator rejections to the model and mints the repaired batch', async () => {
+    // Live failure mode: every proposal stated a dollar amount in entry_rule even
+    // though the system prompt forbids it, wiping out a whole 6h cycle.
+    const prompts: string[] = []
+    let call = 0
+    const cands = await synthesizeProposals(input(), {
+      generate: async ({ prompt }) => {
+        prompts.push(prompt)
+        call++
+        return call === 1
+          ? { strategies: [{ ...good, entry_rule: 'enter when TVL exceeds $250000' }] }
+          : { strategies: [good] }
+      },
+    })
+    expect(call).toBe(2)
+    expect(cands).toHaveLength(1)
+    // The retry must tell the model exactly what it broke, not just ask again.
+    expect(prompts[1]).toMatch(/rejected/i)
+    expect(prompts[1]).toMatch(/states a dollar amount/)
+  })
+
+  it('does not burn a repair round when a proposal already survived', async () => {
+    let call = 0
+    await synthesizeProposals(input(), {
+      generate: async () => { call++; return { strategies: [good, { ...good, entry_rule: 'enter above $5' }] } },
+    })
+    expect(call).toBe(1)
+  })
+
+  it('gives up after ONE repair round rather than looping on a model that keeps failing', async () => {
+    let call = 0
+    const cands = await synthesizeProposals(input(), {
+      generate: async () => { call++; return { strategies: [{ ...good, entry_rule: 'enter when TVL exceeds $250000' }] } },
+    })
+    expect(call).toBe(2)
+    expect(cands).toEqual([])
+  })
+
   it('a synthesis failure yields [] — never throws into the cycle', async () => {
     const cands = await synthesizeProposals(input(), { generate: async () => { throw new Error('model down') } })
     expect(cands).toEqual([])
