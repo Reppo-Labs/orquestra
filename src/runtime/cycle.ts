@@ -457,7 +457,14 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             : {}),
         })
       } catch (e) {
-        console.error(redactSecrets(`orquestra: vote-power budget read failed — votes fall back to legacy conviction sizing this cycle: ${(e as Error).message}`))
+        // Operator-visible, not just stderr. The dashboard is the only surface an operator
+        // on an SSH tunnel actually reads; a budget read that fails every cycle (dead RPC
+        // peer) otherwise looks like a node that is "quietly fine" while every vote is
+        // sized as legacy dust. Fail-open is preserved: votePower stays null, nothing is
+        // gated on it, and voting continues.
+        const why = redactSecrets(e instanceof Error ? e.message : String(e))
+        console.error(`orquestra: vote-power budget read failed — votes fall back to legacy conviction sizing this cycle: ${why}`)
+        recordSkipActivity(deps, cycleId, '', `vote-power budget read failed — votes fall back to legacy conviction sizing this cycle (check RPC_URL): ${why}`)
       }
     } else {
       console.error('orquestra: votes use legacy conviction×1e18 sizing (dust vs the locked stake) — set RPC_URL so votes are sized from the wallet\'s real voting power')
@@ -736,7 +743,18 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       due = await deps.reads.getEmissionsDue()
     } catch (e) {
-      console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
+      // SURFACE IT. This scan is the whole owner-claim path (eth_getLogs + the claim
+      // probes). When it throws — a downed/rate-limited RPC peer, a getLogs range cap —
+      // the throw is correct (the epoch stays re-checkable next cycle), but until now the
+      // ONLY trace was a stderr line. The operator saw votes landing every cycle and
+      // assumed the node was healthy while claims silently never happened; the money was
+      // only noticed weeks later, claimed by hand. A skip row puts it in the dashboard
+      // Activity feed. datanetId is EMPTY on purpose: this is a wallet-global scan, and
+      // buildHealth ignores empty-datanet rows (like the veREPPO 'stake' breadcrumb) so it
+      // cannot invent a phantom datanet or flip a healthy one to idle.
+      const why = redactSecrets(e instanceof Error ? e.message : String(e))
+      console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${why}`)
+      recordSkipActivity(deps, cycleId, '', `owner emissions scan failed — NO claims were attempted this cycle (unclaimed emissions stay claimable; retried next cycle): ${why}`)
     }
     const seen = await deps.dedup.seenClaims()
     claims.push(...await claimPhase(due, seen, cycleId, deps, {
@@ -756,7 +774,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       voterDue = (await deps.onchain?.wallet?.getVoterEmissionsDue()) ?? []
     } catch (e) {
-      console.error(`orquestra: voter emissions-due query failed, voter-claim skipped this cycle — ${e instanceof Error ? e.message : String(e)}`)
+      // Same reasoning as the owner scan above — a silent voter-claim outage is invisible
+      // next to a cycle full of successful votes.
+      const why = redactSecrets(e instanceof Error ? e.message : String(e))
+      console.error(`orquestra: voter emissions-due query failed, voter-claim skipped this cycle — ${why}`)
+      recordSkipActivity(deps, cycleId, '', `voter emissions scan failed — NO voter claims were attempted this cycle (they stay claimable; retried next cycle): ${why}`)
     }
     claims.push(...await claimPhase(voterDue, seen, cycleId, deps, {
       keyPrefix: 'voter-', idempotencyPrefix: 'claim-voter-',

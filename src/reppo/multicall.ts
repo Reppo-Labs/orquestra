@@ -8,6 +8,8 @@
 // `from: wallet`, revert = "nothing due") would all revert and misclassify claimable
 // epochs. Those stay serial — see openspec change reduce-rpc-calls, design D4.
 
+import { rpcFetch } from './rpcEndpoints.js'
+
 /** Canonical Multicall3 — same address on virtually every EVM chain. */
 export const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11'
 const SEL_AGGREGATE3 = '0x82ad56cb' // aggregate3((address,bool,bytes)[])
@@ -75,7 +77,7 @@ export function decodeAggregate3(resultHex: string): Call3Result[] {
 }
 
 async function ethCallRaw(fetchImpl: typeof fetch, url: string, to: string, data: string): Promise<string> {
-  const res = await fetchImpl(url, {
+  const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data }, 'latest'] }),
@@ -119,7 +121,7 @@ export async function isMulticallAvailable(rpcUrl: string, deps: MulticallDeps =
   const hit = availabilityCache.get(key)
   if (hit !== undefined) return hit
   try {
-    const res = await fetchImpl(rpcUrl, {
+    const res = await rpcFetch(fetchImpl, rpcUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getCode', params: [mc, 'latest'] }),

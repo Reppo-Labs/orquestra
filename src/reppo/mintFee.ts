@@ -5,6 +5,8 @@
 // ledger to the real spend, we read the tx receipt and sum the REPPO that left
 // the signer's wallet — that sum IS the mint fee.
 
+import { rpcFetch } from './rpcEndpoints.js'
+
 /** keccak256("Transfer(address,address,uint256)") — ERC20 Transfer topic0. */
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 
@@ -57,7 +59,7 @@ interface ReadOpts {
  *  non-2xx response or a JSON-RPC error body so a transport failure is distinguishable
  *  from a genuine result. */
 export async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<any> {
-  const res = await fetchImpl(url, {
+  const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
