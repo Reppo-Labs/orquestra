@@ -45,6 +45,38 @@ describe('hyperliquidAdapter', () => {
     expect(win.endTime).toBe(1_700_100_000_000)
   })
 
+  it('keeps the wallets already scored when a 429 hits mid-scan (does not lose the cycle)', async () => {
+    // A late 429 used to throw away every wallet already collected, costing the whole
+    // cycle's mint candidates on the node's most profitable datanet.
+    const good = wallet({ btc: 90, eth: 10 })
+    const fetchFills = vi.fn(async (w: string) => {
+      if (w === '0xAAA') return good
+      throw new Error('HTTP 429 Too Many Requests')
+    })
+    const a = createHyperliquidAdapter({
+      fetchers: { fetchLeaderboard: async () => lb, fetchFills },
+      epochProvider, now,
+      params: { minRoundTrips: 2, minMarkets: 2, minRealizedPnl: 0, minVlm: 100_000, poolSize: 12, ...noDelay },
+    })
+    const cands = await a.discover({ datanetId: '9', rubric, topN: 5 })
+    expect(cands.length).toBe(1)
+    expect(cands[0].podName).toContain('0xAAA')
+    // The scan STOPS at the 429 rather than walking the rest of the pool and
+    // extending Hyperliquid's penalty window.
+    expect(fetchFills).toHaveBeenCalledTimes(2)
+  })
+
+  it('still surfaces the 429 as a datanet error when it cost every candidate', async () => {
+    const a = createHyperliquidAdapter({
+      fetchers: {
+        fetchLeaderboard: async () => lb,
+        fetchFills: async () => { throw new Error('HTTP 429 Too Many Requests') },
+      },
+      epochProvider, now, params: noDelay,
+    })
+    await expect(a.discover({ datanetId: '9', rubric, topN: 5 })).rejects.toThrow(/rate-limited by Hyperliquid/)
+  })
+
   it('gates out low-quality wallets (default gate rejects the thin close-only fixture)', async () => {
     // hl-fills.json is close-only (entry_px null) → 0 complete round-trips → rejected.
     const a = createHyperliquidAdapter({

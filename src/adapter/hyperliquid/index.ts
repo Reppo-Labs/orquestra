@@ -81,8 +81,12 @@ export const HL_DEFAULTS: HlParams = {
   minRoundTrips: 3,
   minMarkets: 2,
   minRealizedPnl: 0,
-  walletDelayMs: 1000,
-  interPageDelayMs: 500,
+  // Pacing: HL's public API 429s on burst, and a 429 costs the rest of the scan
+  // (see discover). A cycle is hourly, so spending ~10s more on spacing to avoid
+  // losing the scan entirely is strongly positive — the penalty window is the
+  // scarce resource here, not wall-clock.
+  walletDelayMs: 1500,
+  interPageDelayMs: 750,
 }
 
 export interface HlFetchers {
@@ -157,9 +161,17 @@ export function createHyperliquidAdapter(deps: HlDeps = {}): DatanetAdapter {
           if (cand) scored.push({ cand, realizedPnl: q.realizedPnl, nTrips: q.nCompleteTrips })
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
-          // 429 from HL means we're in a penalty window — hitting more wallets extends it.
-          // Re-throw to abort discover for this cycle; runCycle logs and skips the datanet.
-          if (msg.includes('429')) throw new Error(`[hl-adapter] rate-limited by Hyperliquid (429) — aborting this cycle to avoid extending the penalty window`)
+          // 429 from HL means we're in a penalty window — hitting MORE wallets extends it,
+          // so stop the scan here either way. But the wallets already scored this cycle are
+          // untainted by the 429: discarding them threw away a whole cycle's mint candidates
+          // whenever the limit hit late in the pool (observed live: ~41% of cycles aborted,
+          // on the node's most profitable datanet). Keep what we have and mint from it;
+          // only surface the rate-limit as a datanet error when it cost us EVERYTHING.
+          if (msg.includes('429')) {
+            if (scored.length === 0) throw new Error(`[hl-adapter] rate-limited by Hyperliquid (429) — aborting this cycle to avoid extending the penalty window`)
+            console.error(`orquestra: [hl-adapter] rate-limited by Hyperliquid (429) after ${scored.length}/${pool.length} wallet(s) — stopping the scan and minting from what was already collected`)
+            break
+          }
           console.warn(`[hl-adapter] wallet ${wallet} skipped:`, msg)
         }
       }

@@ -107,15 +107,27 @@ export interface SynthDeps {
   model?: LanguageModel
 }
 
+/** Structured-output modes, tried in order. `tool` is the portable default
+ *  (Anthropic/OpenAI/Google all support it), but ProposalSchema is deep and
+ *  heavily optional, and some models — observed live on claude-opus-4-7 —
+ *  return a tool call that misses the schema and fail the whole synthesis with
+ *  "No object generated: response did not match schema". `json` mode constrains
+ *  the SAME zod schema without the tool-call indirection, so it recovers those
+ *  models instead of losing the datanet's only mint source for the cycle. */
+const SYNTH_MODES = ['tool', 'json'] as const
+
 const defaultGenerate = (model: LanguageModel) =>
   async ({ system, prompt }: { system: string; prompt: string }): Promise<ProposalOut> => {
     let lastErr: unknown
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        // `mode: 'tool'` works across Anthropic/OpenAI/Google (same as gdelt).
-        const { object } = await generateObject({ model, schema: ProposalSchema, mode: 'tool', system, prompt })
-        return object
-      } catch (e) { lastErr = e }
+    // Two attempts per mode: a schema miss is often nondeterministic, so retry the
+    // portable mode before paying the mode switch.
+    for (const mode of SYNTH_MODES) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const { object } = await generateObject({ model, schema: ProposalSchema, mode, system, prompt })
+          return object
+        } catch (e) { lastErr = e }
+      }
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
   }
