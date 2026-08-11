@@ -80,8 +80,11 @@ export class TelemetryCollectorStack extends Stack {
       createDefaultStage: false,
     })
 
+    // Path is '/reports', NOT '/v1/reports': the 'v1' segment in the public URL comes from
+    // the stage name below. Putting it in both places serves the API at /v1/v1/reports
+    // while the EndpointUrl output promises /v1/reports — every node send 404s silently.
     api.addRoutes({
-      path: '/v1/reports',
+      path: '/reports',
       methods: [apigw.HttpMethod.POST],
       integration: new HttpLambdaIntegration('IngestIntegration', ingest),
     })
