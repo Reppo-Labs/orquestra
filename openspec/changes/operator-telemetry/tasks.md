@@ -66,6 +66,6 @@
 
 - [x] 8.1 Run `npm run typecheck` and `npm test`
 - [x] 8.2 Run a real node end to end with telemetry enabled; confirm via `--show` and collector state that the transmitted payload matches the documented schema — 2026-08-11: both live nodes (Base + Robinhood) reported; DynamoDB rows match schema v1 (bucketed counts, empty errorSignatures, no free text) with TTL ≈90 days
-- [ ] 8.3 Run a real node with telemetry disabled; confirm no collector network call occurs
-- [ ] 8.4 Run a fresh node and confirm the first run displays the notice and transmits nothing
+- [x] 8.3 Run a real node with telemetry disabled; confirm no collector network call occurs — 2026-08-11: live Robinhood node recreated with `ORQUESTRA_TELEMETRY_DISABLED=1` (status showed "disabled by ORQUESTRA_TELEMETRY_DISABLED; the stored setting is unchanged"), completed a full cycle; DynamoDB row count for its install id stayed at 1. Env then removed, node back to enabled
+- [x] 8.4 Run a fresh node and confirm the first run displays the notice and transmits nothing — 2026-08-11: throwaway container with empty `DATA_DIR` and the endpoint set displayed the full notice at boot; consent state recorded `noticeShown: true` with NO install id file yet (identity is created lazily, so the notice run cannot transmit by construction); collector table count unchanged
 - [x] 8.5 Confirm no consumer is wired to aggregates yet — exposure is a later change, gated on a real install count — confirmed at deploy: the hourly aggregate Lambda publishes to no consumer, and `MIN_DISTINCT_INSTALLS = 3` exceeds the current 2-install fleet
