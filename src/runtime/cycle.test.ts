@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { runCycle, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
+import { runCycle, scanFailureHint, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -1284,5 +1284,39 @@ describe('runCycle — silent RPC failures are surfaced to the operator', () => 
     const d = deps({ activity: fakeActivity({ record }) })
     await runCycle(config, 'cyc-healthy', d)
     expect(skips(record).some((s) => /emissions scan failed|vote-power budget read failed/.test(s.reason))).toBe(false)
+  })
+})
+
+describe('scanFailureHint — the claim-skip row names a remedy that can actually work', () => {
+  it('points an archive-depth refusal at the endpoint, not at the two knobs that cannot help', () => {
+    // Both live reports tried a fallback RPC and REPPO_EMISSIONS_FLOOR_EPOCH first. Neither
+    // touches this failure, so the row has to say so or the next operator repeats the loop.
+    const h = scanFailureHint('RPC eth_getLogs HTTP 400 — Archive requests require a paid plan')
+    expect(h).toMatch(/archive-capable/i)
+    expect(h).toMatch(/REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this/)
+  })
+
+  it('says a healthy vote cycle does not clear a credentials failure', () => {
+    // The confusing part of the report: "voting is healthy" reads as "the RPC is fine".
+    const h = scanFailureHint('RPC eth_getLogs HTTP 401 — invalid api key')
+    expect(h).toMatch(/credentials/i)
+    expect(h).toMatch(/healthy vote cycle does not clear this/)
+  })
+
+  it('tells a generic 4xx that failover does not apply, and why', () => {
+    const h = scanFailureHint('RPC eth_getLogs HTTP 400')
+    expect(h).toMatch(/adding a fallback RPC does not help/)
+    expect(h).toMatch(/5xx\/408\/429/)
+  })
+
+  it('stays silent on a 5xx — failover DOES apply there, so the 4xx advice would be wrong', () => {
+    expect(scanFailureHint('RPC eth_getLogs HTTP 503')).toBe('')
+  })
+
+  it('stays silent when it recognises nothing rather than guessing', () => {
+    // A guess dressed as advice is worse than the bare error; the provider body is now
+    // in the message anyway for anything this does not cover.
+    expect(scanFailureHint('socket hang up')).toBe('')
+    expect(scanFailureHint('all 2 configured RPC endpoints failed — a: timeout; b: timeout')).toBe('')
   })
 })

@@ -218,6 +218,32 @@ export interface CycleDeps {
   supportsNonReppoGrants?: boolean
 }
 
+/** Turn an emissions-scan failure into something the operator can ACT on.
+ *
+ *  The scan row used to end at the raw error, which told an operator that claims were
+ *  skipped but nothing about what to do — and the two live reports of this were both
+ *  `eth_getLogs HTTP 400`, where the answer is a provider setting, not a node setting.
+ *  Two operators independently tried a fallback RPC and REPPO_EMISSIONS_FLOOR_EPOCH;
+ *  neither can help, so the hint names what actually can:
+ *    - a fallback URL does NOT apply — rpcEndpoints deliberately fails over only on
+ *      5xx/408/429, since a 4xx is a bad REQUEST that every peer would reject alike;
+ *    - REPPO_EMISSIONS_FLOOR_EPOCH bounds the EPOCH probe, not the getLogs BLOCK range.
+ *  Returns '' when the error carries no recognised signal — a guess dressed as advice is
+ *  worse than the bare error, and the body (see emissionsOnchain.errorBody) is now in the
+ *  message for anything this doesn't cover. */
+export function scanFailureHint(why: string): string {
+  if (/\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b/i.test(why)) {
+    return ' — the RPC provider is refusing historical depth, not width: the first scan reads ~4M blocks back (~3 months of Base) and free tiers often cap archive access. Use an archive-capable endpoint; a fallback URL and REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this (the floor bounds epochs, not blocks)'
+  }
+  if (/\b(api[_ -]?key|unauthorized|forbidden|credential|token required)\b/i.test(why)) {
+    return ' — the RPC provider rejected the credentials on this endpoint. Voting can keep working on a key that the log scan is not entitled to use, so a healthy vote cycle does not clear this'
+  }
+  if (/HTTP 4\d\d\b/.test(why)) {
+    return ' — a 4xx is the provider rejecting the REQUEST, so adding a fallback RPC does not help (failover is for 5xx/408/429 only). Check the provider message above for a block-range or archive limit'
+  }
+  return ''
+}
+
 /** Persist a structured skip row (kind:'skip') — the one shape every skip path shares.
  *  The dashboard health panel and lastSkipReason are derived from these rows. `podId`
  *  scopes a per-pod scoring skip; absent for datanet-level skips. */
@@ -771,7 +797,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // cannot invent a phantom datanet or flip a healthy one to idle.
       const why = redactSecrets(e instanceof Error ? e.message : String(e))
       console.error(`orquestra: emissions-due query failed, claim phase skipped this cycle — ${why}`)
-      recordSkipActivity(deps, cycleId, '', `owner emissions scan failed — NO claims were attempted this cycle (unclaimed emissions stay claimable; retried next cycle): ${why}`)
+      recordSkipActivity(deps, cycleId, '', `owner emissions scan failed — NO claims were attempted this cycle (unclaimed emissions stay claimable; retried next cycle): ${why}${scanFailureHint(why)}`)
     }
     const seen = await deps.dedup.seenClaims()
     claims.push(...await claimPhase(due, seen, cycleId, deps, {
@@ -795,7 +821,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // next to a cycle full of successful votes.
       const why = redactSecrets(e instanceof Error ? e.message : String(e))
       console.error(`orquestra: voter emissions-due query failed, voter-claim skipped this cycle — ${why}`)
-      recordSkipActivity(deps, cycleId, '', `voter emissions scan failed — NO voter claims were attempted this cycle (they stay claimable; retried next cycle): ${why}`)
+      recordSkipActivity(deps, cycleId, '', `voter emissions scan failed — NO voter claims were attempted this cycle (they stay claimable; retried next cycle): ${why}${scanFailureHint(why)}`)
     }
     claims.push(...await claimPhase(voterDue, seen, cycleId, deps, {
       keyPrefix: 'voter-', idempotencyPrefix: 'claim-voter-',
