@@ -14,6 +14,7 @@ import type { ClaimableEmission } from './queryEmissionsDue.js'
 import { networkAddresses } from './network.js'
 import { tryAggregate, isMulticallAvailable, type Call3Result } from './multicall.js'
 import { rpcFetch } from './rpcEndpoints.js'
+import { redactSecrets } from '../util/redact.js'
 
 export const POD_MANAGER_MAINNET = '0x5C563f853eb4db33005A5C1aD9290e8560254A80'
 export const VE_REPPO_MAINNET = '0x0EFBE19Cb7B07D934D01990a8989E9CaA98b9009'
@@ -66,13 +67,31 @@ const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
 const LOG_CHUNK = 9_000n
 const MIN_LOG_CHUNK = 500n
 
-/** Does this error look like the provider rejecting the REQUEST SHAPE (block range too
- *  wide) rather than being down? Providers signal a range cap as HTTP 400/413/414 or a
- *  JSON-RPC error naming the range/limit. Deliberately narrow: 5xx and rate limits must
- *  NOT match (see LOG_CHUNK note). */
+/** Provider wording for "your block range is too wide". Matched against the response body
+ *  now that rpcCall carries it (see errorBody) — the HTTP status alone cannot tell a range
+ *  cap from the other things providers answer 400 to. */
+const RANGE_CAP_TEXT = /\brange\b|\bblocks?\b.*\b(limit|exceed)|limit exceeded|too (large|many|wide)|exceeds/i
+
+/** Wording for a limit that a SMALLER SPAN CANNOT FIX — the provider is refusing the
+ *  DEPTH of the request (archive history) or the credentials, not its width. Halving the
+ *  chunk against one of these just burns five more requests and still fails. */
+const NOT_RANGE_TEXT = /\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b|\b(api[_ -]?key|unauthorized|forbidden|credential|token required)\b/i
+
+/** Does this error look like the provider rejecting the block range as TOO WIDE (⇒ halving
+ *  the chunk can fix it) rather than being down or refusing the request for a reason width
+ *  can't change? Deliberately narrow: 5xx and rate limits must NOT match (see LOG_CHUNK).
+ *
+ *  This used to treat EVERY HTTP 400/413/414 as a range cap, because the error carried no
+ *  body to check. That made an archive-tier or auth 400 — which no chunk size fixes —
+ *  indistinguishable from a real cap, so the scan halved 9000→500 and threw anyway, five
+ *  wasted round-trips per cycle with the true cause nowhere in the log. With the body in
+ *  hand, an explicit non-range signal now wins over the status code; a bare status with no
+ *  usable body keeps the old benefit-of-the-doubt behaviour, since halving is cheap and a
+ *  range cap is still the most common 4xx here. */
 const isRangeCapError = (e: unknown): boolean => {
   const msg = e instanceof Error ? e.message : String(e)
-  return /HTTP 4(00|13|14)\b/.test(msg) || /\brange\b|limit exceeded|too (large|many|wide)|exceeds/i.test(msg)
+  if (NOT_RANGE_TEXT.test(msg)) return false
+  return /HTTP 4(00|13|14)\b/.test(msg) || RANGE_CAP_TEXT.test(msg)
 }
 
 const word = (v: bigint): string => v.toString(16).padStart(64, '0')
@@ -110,13 +129,39 @@ export class RpcRevertError extends Error {
 const isRevert = (code: number | undefined, msg: string): boolean =>
   code === 3 || /revert|invalid opcode|out of gas|always failing/i.test(msg)
 
+/** Longest provider explanation carried on an HTTP-error message. Long enough for every
+ *  real one seen in the wild ("eth_getLogs is limited to a 10,000 range", "Archive
+ *  requests require a personal token"), short enough that a provider HTML error page
+ *  can't flood the log or the dashboard row it rides on. */
+const MAX_ERROR_BODY_CHARS = 300
+
+/** The provider's own explanation for a non-2xx response, as a ` — <why>` suffix.
+ *
+ *  WHY THIS EXISTS: this used to throw a bare `RPC ${method} HTTP ${status}`, discarding
+ *  the body. Every provider explains a 400 there and NONE of it reached the operator, so
+ *  two independent "eth_getLogs HTTP 400 every cycle" reports were undiagnosable — the
+ *  status alone cannot separate a range cap from an archive-tier limit from a bad key,
+ *  and those need three different fixes. Best-effort and never throws: a body that can't
+ *  be read leaves the message exactly as it was. Redacted because provider API keys live
+ *  in URLs that error bodies happily echo back, and this string reaches the dashboard. */
+async function errorBody(res: Response): Promise<string> {
+  try {
+    const raw = (await res.text()).trim()
+    if (!raw) return ''
+    const flat = raw.replace(/\s+/g, ' ').slice(0, MAX_ERROR_BODY_CHARS)
+    return ` — ${redactSecrets(flat)}`
+  } catch {
+    return ''
+  }
+}
+
 async function rpcCall(fetchImpl: typeof fetch, url: string, method: string, params: unknown[]): Promise<unknown> {
   const res = await rpcFetch(fetchImpl, url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   })
-  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`) // transient (server/network)
+  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}${await errorBody(res)}`) // transient (server/network)
   const json = (await res.json()) as { result?: unknown; error?: { code?: number; message?: string } }
   if (json?.error) {
     const msg = json.error.message ?? 'unknown'

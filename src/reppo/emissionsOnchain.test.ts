@@ -380,3 +380,85 @@ describe('queryClaimableOnchain — multicall path', () => {
     expect(mc._mc.directSelectors.filter((s) => s === SEL.claim)).toHaveLength(2) // probes stay serial; epoch 100 skipped as claimed
   })
 })
+
+describe('rpcCall — the provider explanation reaches the operator', () => {
+  /** Fetch that answers eth_getLogs with a given HTTP status + body, and every other
+   *  method normally, so a scan reaches the getLogs call before failing. */
+  const failingLogs = (status: number, body: string) => (async (_url: string, init: { body: string }) => {
+    const { method } = JSON.parse(init.body)
+    if (method === 'eth_getLogs') return new Response(body, { status })
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+  }) as unknown as typeof fetch
+
+  it('carries the provider body on an HTTP error, not just the status', async () => {
+    // The whole point: two operators reported a bare "eth_getLogs HTTP 400" and the
+    // provider's own sentence — the only thing that says WHICH limit was hit — was dropped.
+    const f = failingLogs(400, '{"error":{"message":"eth_getLogs is limited to a 10,000 range"}}')
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n))
+      .rejects.toThrow(/limited to a 10,000 range/)
+  })
+
+  it('still names the status when the body is empty (no regression on the old message)', async () => {
+    const f = failingLogs(400, '')
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/HTTP 400/)
+  })
+
+  it('truncates a huge body so an HTML error page cannot flood the log or dashboard row', async () => {
+    const f = failingLogs(400, '<html>' + 'x'.repeat(5_000) + '</html>')
+    const err = await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n).catch((e: Error) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message.length).toBeLessThan(400)
+  })
+
+  it('redacts a provider key echoed back in the body (this string reaches the dashboard)', async () => {
+    // Providers routinely quote the request URL back in an error; the path holds the key.
+    const f = failingLogs(401, 'bad key for https://base-mainnet.g.alchemy.com/v2/SUPERSECRETKEY123')
+    const err = await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n).catch((e: Error) => e)
+    expect((err as Error).message).not.toContain('SUPERSECRETKEY123')
+  })
+})
+
+describe('discoverOwnedPods — a 400 that halving cannot fix fails fast', () => {
+  /** Counts getLogs attempts so we can prove the scan did NOT burn the 5-step shrink. */
+  const countingFetch = (body: string, status = 400) => {
+    const attempts: bigint[] = []
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') {
+        attempts.push(BigInt(params[0].toBlock) - BigInt(params[0].fromBlock) + 1n)
+        return new Response(body, { status })
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+    return { f, attempts }
+  }
+
+  it('does not shrink on an archive-tier 400 — the depth is refused, not the width', async () => {
+    // Halving answers "your range is too WIDE". It cannot answer "you may not read blocks
+    // this OLD", which is what a free tier says to the first-run ~4M-block lookback.
+    const { f, attempts } = countingFetch('{"error":{"message":"Archive requests require a paid plan"}}')
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/Archive/)
+    expect(attempts).toHaveLength(1) // one attempt, then out — no 9000→500 shrink
+  })
+
+  it('does not shrink on an auth 400 either', async () => {
+    const { f, attempts } = countingFetch('{"error":{"message":"invalid api key"}}')
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/invalid api key/)
+    expect(attempts).toHaveLength(1)
+  })
+
+  it('STILL shrinks on a real range-cap 400 (the fix must not disable the adaptation)', async () => {
+    // Guard against over-narrowing: the behaviour the previous fix added has to survive.
+    const { f, attempts } = countingFetch('{"error":{"message":"block range too large"}}')
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/HTTP 400/)
+    expect(attempts.length).toBeGreaterThan(1) // shrank 9000 → … → 500 before giving up
+    expect(attempts[attempts.length - 1]).toBeLessThan(attempts[0])
+  })
+
+  it('keeps the benefit of the doubt on a bare 400 with no usable body', async () => {
+    // Unknown 400 → assume range cap, because halving is cheap and a cap is the common case.
+    const { f, attempts } = countingFetch('')
+    await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/HTTP 400/)
+    expect(attempts.length).toBeGreaterThan(1)
+  })
+})
