@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sendTelemetry, sendTelemetryInBackground, ENDPOINT_ENV } from './send.js'
+import { sendTelemetry, sendTelemetryInBackground, ENDPOINT_ENV, DEFAULT_ENDPOINT } from './send.js'
 import { markNoticeShown, setTelemetryEnabled, OPT_OUT_ENV } from './consent.js'
 
 let dirs: string[] = []
@@ -53,10 +53,17 @@ describe('the gate is checked before anything is built or sent', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('no configured endpoint means inert, not failed', async () => {
+  it('no env endpoint falls back to the compiled-in default collector', async () => {
     const fetchImpl = stubFetch(ok)
-    expect(await sendTelemetry(ready(), { env: {}, fetchImpl })).toBe('no-endpoint')
-    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(await sendTelemetry(ready(), { env: {}, fetchImpl })).toBe('sent')
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(String(fetchImpl.mock.calls[0][0])).toBe(DEFAULT_ENDPOINT)
+  })
+
+  it('the env var still overrides the default endpoint', async () => {
+    const fetchImpl = stubFetch(ok)
+    expect(await sendTelemetry(ready(), { env: env(), fetchImpl })).toBe('sent')
+    expect(String(fetchImpl.mock.calls[0][0])).toBe('https://collector.test/v1')
   })
 })
 

@@ -443,8 +443,9 @@ async function start(): Promise<void> {
       cachedReader.beginCycle()
       // Fire-and-forget, at tick START deliberately: it is off the cycle's critical path,
       // and the counts then describe everything through the PREVIOUS completed cycle
-      // rather than racing this one's writes. Gated on notice + enabled inside; a node
-      // with no ORQUESTRA_TELEMETRY_ENDPOINT does nothing at all. See telemetry/send.ts.
+      // rather than racing this one's writes. Gated on notice + enabled inside; the
+      // collector endpoint is compiled in (ORQUESTRA_TELEMETRY_ENDPOINT overrides for
+      // self-hosted collectors). See telemetry/send.ts.
       sendTelemetryInBackground(DATA_DIR)
     },
   }))
