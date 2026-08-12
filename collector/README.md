@@ -49,14 +49,16 @@ npm install
 npx cdk deploy
 ```
 
-Then set the printed endpoint on each node:
+The production endpoint is compiled into the node (`DEFAULT_ENDPOINT` in
+`src/telemetry/send.ts`) — a fresh install reports to it with no configuration. When
+deploying a NEW collector (self-hosted or staging), point nodes at it with:
 
 ```sh
 ORQUESTRA_TELEMETRY_ENDPOINT=https://<api-id>.execute-api.<region>.amazonaws.com/v1/reports
 ```
 
-With that variable unset, nodes build no payload and make no network call — the default
-until an endpoint is deliberately configured.
+Opting out is a consent decision (`orquestra telemetry --off`,
+`ORQUESTRA_TELEMETRY_DISABLED=1`, or the onboarding choice) — never an endpoint one.
 
 ## Threshold
 
