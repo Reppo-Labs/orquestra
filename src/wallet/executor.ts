@@ -168,7 +168,7 @@ export class WalletExecutor {
         }
         this.ledger.reconcileMint(res, r.gasEth, feeUnits)
         this.notify('mint')
-        return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: feeUnits, ...(r.podId ? { podId: r.podId } : {}) }
+        return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: feeUnits, ...(r.podId ? { podId: r.podId } : {}), ...(r.podMetadata ? { podMetadata: r.podMetadata } : {}) }
       }
       // Reconcile mintReppoSpent to the actual fee. Prefer the CLI value (>=0.8.4);
       // else read it from the tx receipt (requires RPC_URL); else KEEP the conservative
@@ -187,7 +187,7 @@ export class WalletExecutor {
       }
       this.ledger.reconcileMint(res, r.gasEth, reppoFee)
       this.notify('mint')
-      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: reppoFee, ...(r.podId ? { podId: r.podId } : {}) }
+      return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: reppoFee, ...(r.podId ? { podId: r.podId } : {}), ...(r.podMetadata ? { podMetadata: r.podMetadata } : {}) }
     } catch (e) {
       this.ledger.releaseMint(res)
       let detail = (e as Error).message

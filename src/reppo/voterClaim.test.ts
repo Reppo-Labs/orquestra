@@ -149,13 +149,70 @@ describe('queryVoterClaimableOnchain — multicall path', () => {
     expect(mc._mc.directSelectors.filter((s) => s === SEL.claimVoter)).toHaveLength(2)
   })
 
-  it('an inner gate failure reads as "not active / no votes", matching serial catch semantics', async () => {
+  it('a zero votesCasted reads as "not active", so nothing is probed', async () => {
     // votedEpochs empty → every votesCasted inner call returns 0 → no active epochs → no claims
     const mc = mcWrap(fakeFetch({ current: 107n, votedEpochs: new Set(), votedPodEpochs: new Set(), claimableEpochs: new Set() }))
     expect(await queryVoterClaimableOnchain('rpc-mc2', W, ['50'], undefined, { fetchImpl: mc })).toEqual([])
     expect(mc._mc.directSelectors).not.toContain(SEL.claimVoter) // nothing probed
   })
+
+  // A FAILED aggregate3 sub-call is not an answer. These views have no legitimate revert
+  // path, so success=false means the batch is malformed / the provider is unhealthy —
+  // folding it into "no votes" silently skipped real claims AND let the watermark advance
+  // past them, which is unrecoverable. Both gates must abort the scan instead.
+  it('aborts when a votesCasted sub-call fails, instead of reading it as "not active"', async () => {
+    const inner = fakeFetch({
+      current: 107n, votedEpochs: new Set([104, 105]),
+      votedPodEpochs: new Set(['105:50']), claimableEpochs: new Set(['105:50']),
+    })
+    const mc = mcWrap(failSelector(inner, SEL.votesCasted, 105))
+    const cache = memVoterCache()
+    await expect(queryVoterClaimableOnchain('rpc-fail1', W, ['50'], cache, { fetchImpl: mc }))
+      .rejects.toThrow(/votesCastedByVoterForEpoch/)
+    expect(cache.writes).toEqual([]) // watermark untouched — epoch 105 stays re-checkable
+  })
+
+  it('aborts when a voterUp/voterDown sub-call fails, instead of reading it as "no votes"', async () => {
+    const inner = fakeFetch({
+      current: 107n, votedEpochs: new Set([105]),
+      votedPodEpochs: new Set(['105:50']), claimableEpochs: new Set(['105:50']),
+    })
+    const mc = mcWrap(failSelector(inner, SEL.voterUp))
+    const cache = memVoterCache()
+    await expect(queryVoterClaimableOnchain('rpc-fail2', W, ['50'], cache, { fetchImpl: mc }))
+      .rejects.toThrow(/getVotersUpVotesForPodInEpoch/)
+    expect(cache.writes).toEqual([])
+  })
 })
+
+/** Wrap a fake fetch so one selector answers with an RPC error — inside mcWrap that
+ *  becomes an aggregate3 sub-call with success=false. `atEpoch` narrows the failure to a
+ *  single epoch (first arg word) so the rest of the grid still answers normally. */
+function failSelector(inner: typeof fetch, selector: string, atEpoch?: number): typeof fetch {
+  return (async (url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { method: string; params?: [{ data?: string }] }
+    const data = body.params?.[0]?.data ?? ''
+    if (body.method === 'eth_call' && data.slice(0, 10) === selector) {
+      // votesCasted args are (voter, epoch); the per-pod gates are (epoch, pod, voter).
+      const epochWord = selector === SEL.votesCasted ? data.slice(74, 138) : data.slice(10, 74)
+      if (atEpoch === undefined || Number(BigInt('0x' + epochWord)) === atEpoch) {
+        return jsonErr('missing trie node / execution aborted')
+      }
+    }
+    return (inner as unknown as (u: string, i?: RequestInit) => Promise<Response>)(url, init)
+  }) as unknown as typeof fetch
+}
+
+/** VoterScanCache that records every watermark write, so a test can assert none happened. */
+function memVoterCache(): VoterScanCache & { writes: [string, number][] } {
+  const through = new Map<string, number>()
+  const writes: [string, number][] = []
+  return {
+    writes,
+    getThrough: (podId) => through.get(podId) ?? 0,
+    setThrough: (podId, epoch) => { through.set(podId, epoch); writes.push([podId, epoch]) },
+  }
+}
 
 describe('queryVoterClaimableOnchain', () => {
   it('claims an active epoch where the wallet voted the pod and a reward is due', async () => {
