@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { registerVoteOnPlatform, updateAgentOnPlatform } from './platformApi.js'
+import { registerVoteOnPlatform, updateAgentOnPlatform, resolvePodCuid } from './platformApi.js'
 
 const fakeResp = (status: number, body: unknown): Response =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response
@@ -117,5 +117,53 @@ describe('updateAgentOnPlatform', () => {
     } finally {
       vi.unstubAllEnvs()
     }
+  })
+})
+
+describe('resolvePodCuid', () => {
+  // The node only ever holds the on-chain ERC-721 tokenId; every /agents/:id/pods/:podId
+  // route resolves :podId as a platform DATABASE cuid. Posting the tokenId is a lookup in
+  // the wrong id space and the API answers 404 "Pod not found" — which is what happened to
+  // every vote this node registered.
+  const catalog = (pods: unknown[]) => makeFetch(200, { data: { pods } })
+
+  it('maps an on-chain tokenId to the platform cuid', async () => {
+    const f = vi.fn(catalog([
+      { id: 'cmsnfwsdy0000kv04j3472an6', tokenId: 3749 },
+      { id: 'cmsrwxqyq0000l704pgbwhtqb', tokenId: 3750 },
+    ]))
+    expect(await resolvePodCuid('3750', f)).toBe('cmsrwxqyq0000l704pgbwhtqb')
+    expect((f.mock.calls[0] as [string])[0]).toContain('/public/pods')
+  })
+
+  it('serves later lookups from the shared cache — one catalog fetch per cycle', async () => {
+    const f = vi.fn(catalog([{ id: 'cuid-a', tokenId: 1 }, { id: 'cuid-b', tokenId: 2 }]))
+    const cache = new Map<string, string>()
+    expect(await resolvePodCuid('1', f, cache)).toBe('cuid-a')
+    expect(await resolvePodCuid('2', f, cache)).toBe('cuid-b') // populated by the first pass
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports an unindexed pod instead of falling back to the tokenId', async () => {
+    // Guessing here is the original bug: posting the tokenId "works" as a request and
+    // fails as a 404, so the caller learns nothing. A named error is the whole point.
+    const f = vi.fn(catalog([{ id: 'cuid-a', tokenId: 1 }]))
+    await expect(resolvePodCuid('999', f)).rejects.toMatchObject({
+      stage: 'resolve-pod', code: 'POD_NOT_INDEXED',
+    })
+  })
+
+  it('carries the platform status and body when the catalog itself fails', async () => {
+    const f = makeFetch(503, { error: 'upstream unavailable' })
+    await expect(resolvePodCuid('1', f)).rejects.toMatchObject({ stage: 'resolve-pod', httpStatus: 503 })
+  })
+})
+
+describe('registerVoteOnPlatform error shape', () => {
+  it('throws a PlatformApiError carrying the status and body, for the error store', async () => {
+    const f = makeFetch(404, { error: 'Pod not found' })
+    await expect(registerVoteOnPlatform('agent-1', 'cuid-1', '0xtx', 'k', f, 0)).rejects.toMatchObject({
+      stage: 'register', httpStatus: 404,
+    })
   })
 })

@@ -1,6 +1,7 @@
 // src/wallet/intents.ts
 import type { PanelTranscript } from '../panel/types.js'
 import type { ClaimToken } from '../reppo/reader.js'
+import type { PodMetadataResult } from '../reppo/cli.js'
 
 export interface VoteIntent {
   kind: 'vote'
@@ -89,5 +90,13 @@ export interface ExecResult {
   feePaid?: string
   /** the token the access fee was paid in, from a grant-access result (reppo >=0.8.5). */
   feeToken?: { symbol: string; address: string; decimals: number }
+  /** mint-pod Phase-2 outcome — whether the CLI's platform metadata POST succeeded, which
+   *  is what makes the pod VISIBLE in the webapp. Present on mint results only.
+   *
+   *  NOTE the deliberate asymmetry: `status` stays 'executed' when this reports a failure.
+   *  The mint IS executed — the tx is final and the fee is spent — so flipping it to
+   *  'error' would poison mint dedup and re-mint a pod that already exists on-chain. The
+   *  cycle records the failure separately (platformErrors) instead. */
+  podMetadata?: PodMetadataResult
   detail?: string
 }

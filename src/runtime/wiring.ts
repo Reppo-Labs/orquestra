@@ -35,7 +35,8 @@ import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
-import { registerVoteOnPlatform } from '../reppo/platformApi.js'
+import { registerVoteOnPlatform, resolvePodCuid } from '../reppo/platformApi.js'
+import { recordPlatformError } from '../reppo/platformErrors.js'
 import { isRobinhood } from '../reppo/network.js'
 
 // One notice per process, not one per vote: robinhood votes are durable on-chain
@@ -202,6 +203,22 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     (activitySnapshot ??= readActivity(w.dataDir, { limit: 100_000 }))
   // Executed-mint pod names (the earn-attribution source), derived once per cycle from
   // the snapshot; consumed per datanet by getPodsAndFilter's own-pod name backstop.
+  // on-chain tokenId → platform pod cuid, for vote registration. Filled from ONE public
+  // catalog fetch and reused by every vote in the cycle; cleared in beginCycle so pods
+  // minted since are resolvable next cycle.
+  const podCuidCache = new Map<string, string>()
+  // Vote registration is fire-and-forget, so a cycle's registrations run CONCURRENTLY.
+  // Without this, every one of them would miss the empty cache at the same instant and
+  // fetch the whole public catalog in parallel. Chaining them means the first fetch fills
+  // the cache and the rest are map hits. Each link swallows the previous link's rejection
+  // (a failed resolve must not poison the next vote's lookup).
+  let podCuidChain: Promise<unknown> = Promise.resolve()
+  const resolveCuidSerialized = (tokenId: string): Promise<string> => {
+    const run = (): Promise<string> => resolvePodCuid(tokenId, fetch, podCuidCache)
+    const next = podCuidChain.then(run, run)
+    podCuidChain = next.catch(() => {})
+    return next
+  }
   let mintedNamesMemo: Set<string> | null = null
   const mintedNames = (): Set<string> =>
     (mintedNamesMemo ??= new Set(
@@ -309,22 +326,31 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       record: (entry) => {
         try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
       },
-      beginCycle: () => { video.beginCycle(); activitySnapshot = null; mintedNamesMemo = null },
+      beginCycle: () => { video.beginCycle(); activitySnapshot = null; mintedNamesMemo = null; podCuidCache.clear() },
       // Cred check deferred to call time so late-arriving or rotated creds take effect
       // without restarting the node (env vars set from SQLite at startup but re-read here).
-      registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+      registerVoteOnPlatform: async (podId: string, txHash: string): Promise<void> => {
         // The vote-indexing API is the reppo.ai (Base) platform — it doesn't know
         // robinhood pods, so every registration would fail-log. Skip with a
         // one-time notice instead of a per-vote error line.
         if (isRobinhood()) {
           warnRobinhoodVotesNotIndexed()
-          return Promise.resolve()
+          return
         }
         const agentId = process.env.REPPO_AGENT_ID
         const apiKey = process.env.REPPO_API_KEY
-        if (!agentId || !apiKey) return Promise.resolve()
-        return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
+        if (!agentId || !apiKey) return
+        // `podId` here is the ON-CHAIN token id (what `reppo vote --pod` takes and what
+        // the whole cycle threads around). The votes route resolves its :podId as a
+        // platform cuid, so it must be translated first — passing the token id straight
+        // through 404'd every single registration. Cache is per-cycle: one catalog fetch
+        // serves every vote in the cycle, cleared in beginCycle so a pod minted since is
+        // picked up next cycle. Failures throw with the platform's own body and are
+        // persisted by the caller.
+        const cuid = await resolveCuidSerialized(podId)
+        await registerVoteOnPlatform(agentId, cuid, txHash, apiKey)
       },
+      platformFailure: (entry) => recordPlatformError(w.dataDir, entry),
     },
     reads: {
       getRubric: (id) => io.getRubric(id),

@@ -39,6 +39,21 @@ CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
 -- (kind='vote' AND podId IS NOT NULL) would full-scan activity otherwise.
 CREATE INDEX IF NOT EXISTS idx_activity_kind_pod ON activity(kind, podId);
 
+-- Failed calls to the Reppo PLATFORM REST API (reppo.ai / robinhood.reppo.ai) — the
+-- indexing surface that makes an on-chain action visible in the webapp. Separate from
+-- the activity table on purpose: an activity row records what the CHAIN did, and a mint or
+-- vote is a complete on-chain success while being invisible in the UI. Folding the two
+-- together is exactly how these failures stayed invisible — the mint said 'executed'
+-- and nothing anywhere held the platform's response. Rows are for investigation, so
+-- the platform's own body is kept verbatim (redacted).
+CREATE TABLE IF NOT EXISTS platform_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL, cycleId TEXT, kind TEXT NOT NULL, datanetId TEXT,
+  podId TEXT, txHash TEXT, stage TEXT, httpStatus INTEGER, code TEXT,
+  message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_platform_errors_ts ON platform_errors(ts);
+
 CREATE TABLE IF NOT EXISTS earn_status (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, cycleId TEXT, data TEXT NOT NULL
 );

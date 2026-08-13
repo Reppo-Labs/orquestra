@@ -1320,3 +1320,107 @@ describe('scanFailureHint — the claim-skip row names a remedy that can actuall
     expect(scanFailureHint('all 2 configured RPC endpoints failed — a: timeout; b: timeout')).toBe('')
   })
 })
+
+// ── platform (webapp indexing) failures: on-chain success, invisible in the UI ──────
+// Both of these are non-fatal by design — the chain already recorded the action. The bug
+// was that "non-fatal" meant stderr only, so two operator reports ("my pods don't show
+// up", "my votes don't show up") arrived against nodes whose activity logs said every
+// mint and vote was clean, with no evidence to investigate.
+describe('runCycle platform-registration failures', () => {
+  const mintOnly = StrategyConfigSchema.parse({
+    horizonDays: 30, cadenceHours: 6,
+    stake: { lockReppo: 0, lockDurationDays: 30 },
+    budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+    datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+  })
+
+  it('persists the platform response when a minted pod was never registered', async () => {
+    const platformFailure = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: vi.fn(), platformFailure }),
+      executor: {
+        executeVote: vi.fn(),
+        executeMint: vi.fn(async () => ({
+          ok: true, status: 'executed', txHash: '0xmint', podId: '3750',
+          podMetadata: { published: false, stage: 'register', httpStatus: 500, error: { code: 'PLATFORM_API_ERROR', message: '{"error":"Internal Server Error"}' } },
+        })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(mintOnly, 'c-mintplat', d)
+    expect(platformFailure).toHaveBeenCalledTimes(1)
+    expect(platformFailure.mock.calls[0][0]).toMatchObject({
+      kind: 'mint', datanetId: '9', podId: '3750', txHash: '0xmint',
+      stage: 'register', httpStatus: 500, code: 'PLATFORM_API_ERROR',
+      message: '{"error":"Internal Server Error"}',
+    })
+  })
+
+  it('keeps the mint status executed but flags the row as not visible', async () => {
+    // Status must NOT flip to 'error': the tx is final and the fee is spent, so an error
+    // status would poison mint dedup and re-mint a pod that already exists on-chain.
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record, platformFailure: vi.fn() }),
+      executor: {
+        executeVote: vi.fn(),
+        executeMint: vi.fn(async () => ({
+          ok: true, status: 'executed', txHash: '0xmint', podId: '3750',
+          podMetadata: { published: false, stage: 'ipfs-pin', error: { message: 'could not reach Pinata' } },
+        })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(mintOnly, 'c-mintplat2', d)
+    const mint = record.mock.calls.map((c) => c[0]).find((e) => e.kind === 'mint')
+    expect(mint.status).toBe('executed')
+    expect(mint.detail).toMatch(/NOT visible in the webapp/)
+    expect(d.dedup.recordMint).toHaveBeenCalled() // still deduped — the pod exists
+  })
+
+  it('records nothing extra when the pod published cleanly', async () => {
+    const platformFailure = vi.fn()
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record, platformFailure }),
+      executor: {
+        executeVote: vi.fn(),
+        executeMint: vi.fn(async () => ({
+          ok: true, status: 'executed', txHash: '0xmint', podId: '3750',
+          podMetadata: { published: true, stage: 'register', httpStatus: 200 },
+        })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(mintOnly, 'c-mintok', d)
+    expect(platformFailure).not.toHaveBeenCalled()
+    expect(record.mock.calls.map((c) => c[0]).find((e) => e.kind === 'mint').detail).toBeUndefined()
+  })
+
+  it('persists the platform response when a cast vote could not be indexed', async () => {
+    const platformFailure = vi.fn()
+    const voteOnly = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    const d = deps({
+      activity: fakeActivity({
+        record: vi.fn(),
+        platformFailure,
+        registerVoteOnPlatform: vi.fn(async () => {
+          throw Object.assign(new Error('platform registerVote 404: {"error":"Pod not found"}'), {
+            stage: 'register', httpStatus: 404,
+          })
+        }),
+      }),
+    })
+    await runCycle(voteOnly, 'c-voteplat', d)
+    // fire-and-forget: the rejection lands on a later microtask than runCycle's return
+    await new Promise((r) => setTimeout(r, 0))
+    expect(platformFailure).toHaveBeenCalledTimes(1)
+    expect(platformFailure.mock.calls[0][0]).toMatchObject({
+      kind: 'vote', datanetId: '2', podId: 'p1', txHash: '0xvote',
+      stage: 'register', httpStatus: 404,
+      message: 'platform registerVote 404: {"error":"Pod not found"}',
+    })
+  })
+})

@@ -374,8 +374,23 @@ export async function queryVoterClaimableOnchain(
     for (let ep = scanFrom; ep <= lastClosed; ep++) eps.push(ep)
     const res = await tryAggregate(rpcUrl, eps.map((ep) =>
       ({ target: pm, callData: SEL.votesCasted + w + word(ep) })), { fetchImpl })
-    // Mirrors the serial `.catch(() => '0x')`: an inner failure reads as "not active".
-    eps.forEach((ep, i) => { if (res[i].success && isTrue(res[i].returnData)) activeEpochs.push(ep) })
+    // votesCastedByVoterForEpoch is a plain view with NO legitimate revert path, so a
+    // failed sub-call here is a malformed batch (transient), never "the wallet didn't
+    // vote". Abort before any watermark advances — exactly what the owner scan does for
+    // hasPodOwnerClaimedEmissions, and what the serial branch below does.
+    //
+    // This used to read `res[i].success && isTrue(...)`, claiming to mirror a serial
+    // `.catch(() => '0x')` that no longer exists: the serial path was later hardened to
+    // rethrow transients, and this one wasn't. Since multicall is the DEFAULT whenever
+    // Multicall3 is reachable, that made the unfixed branch the production branch. One
+    // failed sub-call dropped the epoch from activeEpochs, so every pod's claim at that
+    // epoch was skipped, and the loop below then advanced the watermark to lastClosed
+    // (nothing looked claimable) — permanently losing real voter emissions from a single
+    // RPC blip. Reported live as unclaimed voter rewards across epochs #121-#125.
+    eps.forEach((ep, i) => {
+      if (!res[i].success) throw new Error('RPC eth_call error: votesCastedByVoterForEpoch reverted in multicall')
+      if (isTrue(res[i].returnData)) activeEpochs.push(ep)
+    })
   } else {
     for (let ep = scanFrom; ep <= lastClosed; ep++) {
       // Same fail-open rule as readUint: only a contract REVERT reads as "not active".
@@ -411,15 +426,25 @@ export async function queryVoterClaimableOnchain(
         ]
       })
       const res = await tryAggregate(rpcUrl, calls, { fetchImpl })
-      // voterUp/Down mirror readUint (failure → 0n); hasUserClaimedEmissions mirrors the
-      // serial ethCall (a revert on a no-revert-path view aborts the scan before any
-      // watermark advances, like a serial transient failure).
-      const uintOr0 = (r: Call3Result): bigint => (r.success && r.returnData !== '0x' ? BigInt(r.returnData) : 0n)
+      // ALL THREE are plain views with no legitimate revert path, so a failed sub-call is
+      // a malformed batch and must abort the scan before any watermark advances.
+      //
+      // voterUp/Down used to fold failure into 0n, described as mirroring readUint — but
+      // readUint returns 0n only on a contract REVERT and rethrows transients, precisely
+      // so an UNREAD vote weight never becomes "this wallet cast no votes here". Folded to
+      // 0n, the up===0n && down===0n gate below skips the pair and the watermark then
+      // advances past it: the same permanent voter-claim loss as the activeEpochs bug above.
+      const uintStrict = (r: Call3Result, label: string): bigint => {
+        if (!r.success) throw new Error(`RPC eth_call error: ${label} reverted in multicall`)
+        return r.returnData !== '0x' ? BigInt(r.returnData) : 0n
+      }
       pairs.forEach(({ pod, ep }, i) => {
         const claimed = res[3 * i + 2]
         if (!claimed.success) throw new Error('RPC eth_call error: hasUserClaimedEmissions reverted in multicall')
         gateByPair!.set(`${pod}|${ep}`, {
-          up: uintOr0(res[3 * i]), down: uintOr0(res[3 * i + 1]), claimed: isTrue(claimed.returnData),
+          up: uintStrict(res[3 * i], 'getVotersUpVotesForPodInEpoch'),
+          down: uintStrict(res[3 * i + 1], 'getVotersDownVotesForPodInEpoch'),
+          claimed: isTrue(claimed.returnData),
         })
       })
     }

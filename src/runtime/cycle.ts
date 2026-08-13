@@ -9,6 +9,7 @@ import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult, VoteIntent, ClaimIntent } from '../wallet/intents.js'
 import type { ClaimableEmission, VotePowerBudget } from '../reppo/reader.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
+import type { PlatformErrorEntry } from '../reppo/platformErrors.js'
 import type { VotePowerView } from '../dashboard/snapshot.js'
 import { redactSecrets } from '../util/redact.js'
 import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
@@ -165,6 +166,11 @@ export interface ActivityStore {
   /** Register the on-chain vote with the Reppo platform API so the frontend can display
    *  it. Fire-and-forget: absence or failure never aborts the cycle. */
   registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
+  /** Persist a failed PLATFORM (webapp indexing) call — a mint or vote that landed
+   *  on-chain but never became visible in the UI. Separate from `record` because the
+   *  activity row is about the CHAIN and stays 'executed'; this is the evidence trail
+   *  for why the action is missing from the webapp. Never throws (see platformErrors.ts). */
+  platformFailure?(entry: PlatformErrorEntry): void
 }
 
 /** The per-datanet / per-cycle reads runCycle decides from — always available (each has
@@ -527,8 +533,23 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // CANNOT_VOTE_FOR_OWN_POD is PERMANENT (we minted the pod; the own-pods query missed it).
     if (r.status === 'executed') {
       deps.dedup.recordVote(datanetId, intent.podId)
+      // Vote indexing is best-effort by design (the chain already recorded the vote), but
+      // "best-effort" used to mean the failure existed only as a stderr line in a
+      // container. Operators reported votes missing from the webapp with nothing on the
+      // node to look at. Persist the platform's own answer; still never await, never throw.
       if (r.txHash) deps.activity.registerVoteOnPlatform?.(intent.podId, r.txHash)
-        .catch((e: unknown) => console.error(redactSecrets(`orquestra: platform vote register failed pod ${intent.podId}: ${(e as Error).message}`)))
+        .catch((e: unknown) => {
+          const err = e as { message?: string; stage?: string; httpStatus?: number; code?: string }
+          deps.activity.platformFailure?.({
+            ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
+            podId: intent.podId, txHash: r.txHash,
+            ...(err.stage ? { stage: err.stage } : {}),
+            ...(err.httpStatus !== undefined ? { httpStatus: err.httpStatus } : {}),
+            ...(err.code ? { code: err.code } : {}),
+            message: err.message ?? String(e),
+          })
+          console.error(redactSecrets(`orquestra: vote cast on-chain but NOT indexed by the platform — it will not appear in the webapp (pod ${intent.podId}): ${err.message ?? String(e)}`))
+        })
     } else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
       console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
       deps.dedup.recordVote(datanetId, intent.podId)
@@ -741,6 +762,24 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             // unconfirmed mint on retry. (This recurred live: each missing-credential error
             // poisoned dedup and required manually clearing the key before retrying.)
             if (r.status === 'executed') deps.dedup.recordMint(datanetId, intent.canonicalKey)
+            // The mint landed on-chain but its platform metadata POST did not: the pod
+            // exists and earns, and is INVISIBLE in the webapp. Keep the platform's own
+            // answer so this is diagnosable — the operator reports were "my pods aren't
+            // showing" against a node whose activity log said every mint was clean.
+            // Deliberately does NOT change r.status: see ExecResult.podMetadata.
+            const meta = r.status === 'executed' ? r.podMetadata : undefined
+            if (meta && !meta.published) {
+              deps.activity.platformFailure?.({
+                ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
+                ...(r.podId ? { podId: r.podId } : {}),
+                ...(r.txHash ? { txHash: r.txHash } : {}),
+                ...(meta.stage ? { stage: meta.stage } : {}),
+                ...(meta.httpStatus !== undefined ? { httpStatus: meta.httpStatus } : {}),
+                ...(meta.error?.code ? { code: meta.error.code } : {}),
+                message: meta.error?.message ?? `pod metadata not published (stage ${meta.stage ?? 'unknown'})`,
+              })
+              console.error(redactSecrets(`orquestra: pod minted on-chain but NOT registered with the platform — it will not appear in the webapp (datanet ${datanetId}, pod ${r.podId ?? '?'}, stage ${meta.stage ?? 'unknown'}${meta.httpStatus ? `, HTTP ${meta.httpStatus}` : ''}): ${meta.error?.message ?? 'no detail'}`))
+            }
             deps.activity.record({
               ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
               canonicalKey: intent.canonicalKey, podName: intent.podName,
@@ -748,7 +787,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
               // mint's score and rationale in Detail (not the canonical-key hash).
               ...(intent.selfScore !== undefined ? { conviction: intent.selfScore } : {}),
               ...(intent.reason ? { reason: intent.reason } : {}),
-              status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+              status: r.status, txHash: r.txHash, gasEth: r.gasEth,
+              // Append the not-visible warning to the row's own detail: the Activity feed
+              // is the surface an operator actually reads, and "minted" with no caveat is
+              // what made an invisible pod look like a healthy one.
+              detail: meta && !meta.published
+                ? [r.detail, `NOT visible in the webapp — platform registration failed (${meta.stage ?? 'unknown'}${meta.httpStatus ? ` HTTP ${meta.httpStatus}` : ''})`].filter(Boolean).join(' | ')
+                : r.detail,
               ...(r.reppoSpent !== undefined ? { reppoSpent: r.reppoSpent } : {}),
               // podId from the on-chain PodMinted event (via mint-pod --json); enables
               // linking mint activity rows to their publisher emissions by pod ID.
