@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { drainErrorSignatures, resetErrorBuffer } from '../telemetry/errorBuffer.js'
 import { runCycle, scanFailureHint, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
@@ -1422,5 +1423,37 @@ describe('runCycle platform-registration failures', () => {
       stage: 'register', httpStatus: 404,
       message: 'platform registerVote 404: {"error":"Pod not found"}',
     })
+  })
+})
+
+describe('runCycle error-signature capture (telemetry)', () => {
+  beforeEach(() => resetErrorBuffer())
+
+  it('fingerprints a datanet failure that the isolation boundary swallows', async () => {
+    // The per-datanet catch is what keeps one bad datanet from killing the cycle — and is
+    // therefore the last place the stack exists. Before this, the fault reached telemetry
+    // as counts.errors+1 and nothing else.
+    const d = deps({
+      reads: fakeReads({ getRubric: vi.fn(async () => { throw new TypeError('rubric parse blew up') }) }),
+    })
+    await runCycle(config, 'c-sig', d)
+    const sigs = drainErrorSignatures()
+    expect(sigs.length).toBeGreaterThan(0)
+    expect(sigs[0].errorClass).toBe('TypeError')
+    expect(JSON.stringify(sigs)).not.toContain('rubric parse blew up') // message never travels
+  })
+
+  it('fingerprints a failed owner-emissions scan — the silent-unclaimed-money path', async () => {
+    const d = deps({
+      reads: fakeReads({ getEmissionsDue: async () => { throw new RangeError('eth_getLogs range cap') } }),
+    })
+    const cfg = StrategyConfigSchema.parse({ ...config, claimEmissions: true })
+    await runCycle(cfg, 'c-sig2', d)
+    expect(drainErrorSignatures().some((s) => s.errorClass === 'RangeError')).toBe(true)
+  })
+
+  it('a clean cycle produces no signatures (guards against a vacuous capture)', async () => {
+    await runCycle(config, 'c-sig3', deps())
+    expect(drainErrorSignatures()).toEqual([])
   })
 })

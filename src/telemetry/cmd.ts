@@ -10,6 +10,7 @@
 // No subcommand here ever transmits. `--show` in particular must not, or an operator
 // inspecting the payload before deciding would be sending it by inspecting it.
 import { buildPayload, serializePayload } from './payload.js'
+import { peekErrorSignatures } from './errorBuffer.js'
 import {
   isDisabledByEnv,
   isTelemetryEnabled,
@@ -55,7 +56,10 @@ export function telemetryCmd(
 
   if (flag === '--show') {
     // Deliberately the same serializer the sender uses. Do not "pretty print" here.
-    io.out(serializePayload(buildPayload(dataDir)))
+    // PEEK, never drain: `telemetry --show` must be a read-only preview. Draining here
+    // would let an operator inspecting the payload silently consume the very signatures
+    // the next real report was going to carry.
+    io.out(serializePayload(buildPayload(dataDir, { errorSignatures: peekErrorSignatures() })))
     return 0
   }
 

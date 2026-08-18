@@ -1,6 +1,7 @@
 // src/wallet/executor.ts
 import { BudgetLedger } from './ledger.js'
 import { isRobinhood } from '../reppo/network.js'
+import { recordErrorSignature } from '../telemetry/errorBuffer.js'
 import type { ReppoCli, LockArgs } from '../reppo/cli.js'
 import type { VoteIntent, MintIntent, ClaimIntent, ExecResult } from './intents.js'
 
@@ -67,6 +68,11 @@ export class WalletExecutor {
       this.notify('lock')
       return { ok: true, status: 'executed', txHash: r.txHash }
     } catch (e) {
+      // Fingerprint the exception BEFORE it is folded to a string. This is the last point
+      // where the class and stack still exist: everything downstream sees only `detail`,
+      // and the activity row it becomes records status='error' with no way back to a line
+      // of code. Telemetry-only, redacted and message-free (see telemetry/signature.ts).
+      recordErrorSignature(e)
       return { ok: false, status: 'error', detail: (e as Error).message }
     }
   }
@@ -99,6 +105,9 @@ export class WalletExecutor {
       // Already having access is success, not failure — report executed so the caller
       // caches it and stops re-attempting the grant every cycle (no fee was charged).
       if (/ACCESS_ALREADY_GRANTED/.test(detail)) return { ok: true, status: 'executed', detail: 'already granted' }
+      // Recorded only past the already-granted branch: that path is success, and
+      // fingerprinting it would fill the fleet's signature budget with a non-fault.
+      recordErrorSignature(e)
       // Every other CLI failure — including a primary-token INSUFFICIENT_TOKEN_BALANCE /
       // INSUFFICIENT_ALLOWANCE (the wallet isn't funded/approved for the fee token) — is a
       // recorded, non-fatal 'error': the cycle records it and skips THIS datanet (per-datanet
@@ -127,6 +136,7 @@ export class WalletExecutor {
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth }
     } catch (e) {
       this.ledger.releaseVote(res)
+      recordErrorSignature(e)
       return { ok: false, status: 'error', detail: (e as Error).message }
     }
   }
@@ -190,6 +200,7 @@ export class WalletExecutor {
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoSpent: reppoFee, ...(r.podId ? { podId: r.podId } : {}), ...(r.podMetadata ? { podMetadata: r.podMetadata } : {}) }
     } catch (e) {
       this.ledger.releaseMint(res)
+      recordErrorSignature(e)
       let detail = (e as Error).message
       // 0x5dd58b8b = TransferAmountExceedsBalance() (cast 4byte): the wallet lacks
       // liquid REPPO for the mint fee. Decode it so the activity log says why.
@@ -218,6 +229,7 @@ export class WalletExecutor {
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed, tokenClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)
+      recordErrorSignature(e)
       return { ok: false, status: 'error', detail: (e as Error).message }
     }
   }
@@ -241,6 +253,7 @@ export class WalletExecutor {
       return { ok: true, status: 'executed', txHash: r.txHash, gasEth: r.gasEth, reppoClaimed, tokenClaimed }
     } catch (e) {
       this.ledger.releaseClaim(res)
+      recordErrorSignature(e)
       return { ok: false, status: 'error', detail: (e as Error).message }
     }
   }

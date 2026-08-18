@@ -10,7 +10,7 @@
 // only free-ish strings the schema permits are error-signature frames — which are length-
 // capped, count-capped, and character-restricted here rather than trusted.
 import { ALLOWLIST_FIELDS, SCHEMA_VERSION } from '../telemetry/payload.js'
-import { MAX_FRAMES } from '../telemetry/signature.js'
+import { MAX_FRAMES, MAX_SIGNATURES } from '../telemetry/signature.js'
 import { MAX_PAYLOAD_BYTES } from './config.js'
 
 export type RejectReason =
@@ -96,7 +96,7 @@ function validSignatures(v: unknown): StoredReport['errorSignatures'] | null {
   if (!Array.isArray(v)) return null
   // Cap the array itself: an unbounded list of valid-looking signatures is a storage
   // amplification vector even when every element passes.
-  if (v.length > MAX_FRAMES * 4) return null
+  if (v.length > MAX_SIGNATURES) return null
   const out: StoredReport['errorSignatures'] = []
   for (const s of v) {
     if (!isPlainObject(s)) return null
