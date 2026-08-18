@@ -67,14 +67,102 @@ export interface TelemetryPayload {
   errorSignatures: ErrorSignature[]
 }
 
-/** Read this package's version. Falls back to 'unknown' rather than throwing — a version
- *  we cannot read is worth reporting as unknown, and is never worth failing a cycle over. */
-function orquestraVersion(): string {
+/** The version in git. Releases are tag-driven and nothing is committed back to main, so
+ *  this literal never moves — the release workflow stamps the real version into the
+ *  IMAGE's package.json (`npm pkg set version=…`, see Dockerfile / auto-release.yml).
+ *  Reading it back therefore means "this build was never stamped". */
+export const UNSTAMPED_VERSION = '0.1.0'
+
+/** Character class the collector accepts for version-shaped fields (validate.ts
+ *  SAFE_VERSION). Enforced here too: a value that fails it is rejected field-by-field at
+ *  ingest, which drops the WHOLE report — counts and signatures with it. */
+const SAFE_VERSION = /^[A-Za-z0-9_.\-+]{1,32}$/
+
+/** Short commit sha of the working tree, read straight from .git — no child process, no
+ *  dependency, and nothing to run in a container (a released image ships no .git, and
+ *  never reaches this path anyway because its package.json is stamped).
+ *
+ *  Returns null for anything unexpected rather than guessing. */
+export function gitShortSha(root: string): string | null {
+  const isSha = (s: string): boolean => /^[0-9a-f]{40}$/.test(s)
+  const read = (...p: string[]): string | null => {
+    try { return readFileSync(join(...p), 'utf-8').trim() } catch { return null }
+  }
   try {
-    const here = dirname(fileURLToPath(import.meta.url))
-    // dist/telemetry/ or src/telemetry/ -> package root
-    const pkg = JSON.parse(readFileSync(join(here, '..', '..', 'package.json'), 'utf-8')) as { version?: string }
-    return typeof pkg.version === 'string' ? pkg.version : 'unknown'
+    // `.git` is a DIRECTORY in a normal clone but a FILE holding `gitdir: <path>` in a
+    // worktree or submodule. Missing this returned a bare '0.0.0-dev' with no commit —
+    // caught by running the built code rather than by a test, because the test supplied
+    // the sha and only the file layout was wrong.
+    const dotGit = join(root, '.git')
+    const pointer = read(dotGit)
+    const gitDir = pointer?.startsWith('gitdir: ') ? pointer.slice(8).trim() : dotGit
+
+    const head = read(gitDir, 'HEAD')
+    if (head === null) return null
+    if (isSha(head)) return head.slice(0, 7) // detached HEAD holds the sha directly
+    const ref = head.startsWith('ref: ') ? head.slice(5).trim() : null
+    if (!ref) return null
+
+    // A worktree keeps HEAD in its own gitdir but shares refs with the common dir, so
+    // both are candidates. Loose ref first, then packed-refs (a freshly-cloned repo).
+    const commonDir = read(gitDir, 'commondir')
+    const dirs = [gitDir, ...(commonDir ? [join(gitDir, commonDir)] : [])]
+    for (const d of dirs) {
+      const loose = read(d, ref)
+      if (loose !== null && isSha(loose)) return loose.slice(0, 7)
+    }
+    for (const d of dirs) {
+      const packed = read(d, 'packed-refs')
+      if (packed === null) continue
+      for (const line of packed.split('\n')) {
+        const [sha, name] = line.trim().split(' ')
+        if (name === ref && isSha(sha)) return sha.slice(0, 7)
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** What code is this node running? Pure — the caller supplies the readings.
+ *
+ *  Resolution order, most to least authoritative:
+ *    1. ORQUESTRA_VERSION — an explicit operator/packager override.
+ *    2. A STAMPED package.json — the released Docker image.
+ *    3. `0.0.0-dev+<sha>` — an unstamped build, identified by its commit.
+ *
+ *  Case 3 is the fix. Unstamped builds used to report the literal `0.1.0`, which is a
+ *  well-formed semver that was never released: in a per-version rollup it silently sorts
+ *  as "some old release" and every source-run node in the fleet collapses into one
+ *  indistinguishable bucket. Measured on the live collector — four of six installs
+ *  reported `0.1.0`, so two thirds of the fleet could not be attributed to any code at
+ *  all. `0.0.0-dev` cannot be mistaken for a release, and the sha says exactly which
+ *  commit. (No new identification: installId is already a per-install UUID.)
+ *
+ *  Falls back rather than throwing — a version we cannot read is worth reporting as
+ *  unknown, and is never worth failing a cycle over. */
+export function resolveVersion(inputs: { override?: string; pkgVersion?: string; sha?: string | null }): string {
+  const override = (inputs.override ?? '').trim()
+  if (SAFE_VERSION.test(override)) return override
+  const v = (inputs.pkgVersion ?? '').trim()
+  if (v !== '' && v !== UNSTAMPED_VERSION) return SAFE_VERSION.test(v) ? v : 'unknown'
+  return inputs.sha ? `0.0.0-dev+${inputs.sha}` : '0.0.0-dev'
+}
+
+/** File-system half of the above: locate the package root, read it, resolve. */
+function orquestraVersion(env: NodeJS.ProcessEnv = process.env): string {
+  try {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..') // dist/telemetry/ or src/telemetry/
+    let pkgVersion: string | undefined
+    try {
+      const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')) as { version?: string }
+      pkgVersion = typeof pkg.version === 'string' ? pkg.version : undefined
+    } catch {
+      // Unreadable package.json is not fatal — the override or the sha may still answer.
+      pkgVersion = undefined
+    }
+    return resolveVersion({ override: env.ORQUESTRA_VERSION, pkgVersion, sha: gitShortSha(root) })
   } catch {
     return 'unknown'
   }

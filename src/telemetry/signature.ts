@@ -24,6 +24,15 @@ import { redactSecrets } from '../util/redact.js'
  *  error. Also bounds payload size against a pathological recursion stack. */
 export const MAX_FRAMES = 5
 
+/** Upper bound on signatures in ONE report, shared by the sender and the collector.
+ *
+ *  This is a hard edge, not a guideline: the collector rejects an over-long array with
+ *  `bad-signature`, which drops the ENTIRE report — counts included. A node erroring ten
+ *  times a cycle would therefore go completely dark in telemetry at exactly the moment it
+ *  became interesting. The buffer that feeds a report dedupes and truncates to this
+ *  number, and the constant lives here so the two sides cannot drift apart. */
+export const MAX_SIGNATURES = MAX_FRAMES * 4
+
 export interface ErrorSignature {
   /** Constructor/name of the thrown value, e.g. 'TypeError'. 'UnknownError' for non-Errors. */
   errorClass: string

@@ -43,7 +43,7 @@ with a one-keystroke opt-out, and telemetry may start from the first cycle.
 | `schemaVersion` | Version of this payload format |
 | `ts` | When the payload was built (ISO 8601) |
 | `installId` | Random UUID, minted on first run, stored in your data dir |
-| `orquestraVersion` | This package's version |
+| `orquestraVersion` | Release version of this build. A build that was never stamped by the release pipeline reports `0.0.0-dev+<short-sha>` — dev builds are never reported as a release version. Override with `ORQUESTRA_VERSION`. |
 | `nodeVersion` | Your Node.js version |
 | `platform` / `arch` | e.g. `darwin` / `arm64` |
 | `counts` | Cycles run; votes and mints attempted vs failed; budget refusals; total errors |

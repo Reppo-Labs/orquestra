@@ -47,6 +47,7 @@ import { telemetryCmd } from './telemetry/cmd.js'
 import { showNoticeIfNeeded } from './telemetry/notice.js'
 import { discloseTelemetry } from './telemetry/onboarding.js'
 import { sendTelemetryInBackground } from './telemetry/send.js'
+import { drainErrorSignatures } from './telemetry/errorBuffer.js'
 
 const DATA_DIR = resolve(process.env.ORQUESTRA_DATA_DIR ?? './data')
 
@@ -446,7 +447,11 @@ async function start(): Promise<void> {
       // rather than racing this one's writes. Gated on notice + enabled inside; the
       // collector endpoint is compiled in (ORQUESTRA_TELEMETRY_ENDPOINT overrides for
       // self-hosted collectors). See telemetry/send.ts.
-      sendTelemetryInBackground(DATA_DIR)
+      // Drain here, at the same tick-start moment as the counts, so a report's signatures
+      // and its counts describe the same window. Drain (not peek): re-sending a signature
+      // every cycle for the process's lifetime would make one transient fault look like a
+      // permanent fleet-wide one.
+      sendTelemetryInBackground(DATA_DIR, { errorSignatures: drainErrorSignatures() })
     },
   }))
   schedulerHandle = handle // now the dashboard "run now" button can trigger an off-schedule cycle

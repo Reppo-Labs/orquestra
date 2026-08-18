@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ALLOWLIST_FIELDS, buildPayload, serializePayload, SCHEMA_VERSION } from './payload.js'
+import { ALLOWLIST_FIELDS, buildPayload, serializePayload, SCHEMA_VERSION, resolveVersion, UNSTAMPED_VERSION, gitShortSha } from './payload.js'
 import { toSignature, MAX_FRAMES } from './signature.js'
 
 let dirs: string[] = []
@@ -148,5 +148,93 @@ describe('error signatures (tasks 2.3, 2.7, 2.8)', () => {
     const err = new Error('pod "Confidential Alpha" rejected')
     const wire = serializePayload(buildPayload(tmp(), { errorSignatures: [toSignature(err)] }))
     expect(wire).not.toContain('Confidential Alpha')
+  })
+})
+
+describe('resolveVersion', () => {
+  // Four of six live installs reported the literal '0.1.0' — a well-formed semver that
+  // was never released, so in a per-version rollup it silently sorts as "some old
+  // release" and every source-run node collapses into one indistinguishable bucket.
+  it('marks an unstamped build as dev and names the commit', () => {
+    expect(resolveVersion({ pkgVersion: UNSTAMPED_VERSION, sha: '9f3a1c2' })).toBe('0.0.0-dev+9f3a1c2')
+  })
+
+  it('is still unmistakably dev when the commit cannot be read', () => {
+    expect(resolveVersion({ pkgVersion: UNSTAMPED_VERSION, sha: null })).toBe('0.0.0-dev')
+  })
+
+  it('passes a stamped release version through untouched', () => {
+    // The release workflow does `npm pkg set version=…` into the image's package.json.
+    expect(resolveVersion({ pkgVersion: '0.4.62', sha: '9f3a1c2' })).toBe('0.4.62')
+  })
+
+  it('lets an explicit override win over everything', () => {
+    expect(resolveVersion({ override: '1.2.3-rc1', pkgVersion: '0.4.62', sha: 'abc1234' })).toBe('1.2.3-rc1')
+  })
+
+  it('ignores an override the collector would reject rather than sending it', () => {
+    // A field failing SAFE_VERSION is rejected at ingest field-by-field, which drops the
+    // WHOLE report — counts and signatures with it. Falling back beats going dark.
+    expect(resolveVersion({ override: 'not a version!', pkgVersion: '0.4.62' })).toBe('0.4.62')
+    expect(resolveVersion({ override: 'x'.repeat(40), pkgVersion: UNSTAMPED_VERSION, sha: 'abc1234' })).toBe('0.0.0-dev+abc1234')
+  })
+
+  it('every outcome satisfies the collector version rule', () => {
+    const SAFE = /^[A-Za-z0-9_.\-+]{1,32}$/
+    for (const v of [
+      resolveVersion({ pkgVersion: UNSTAMPED_VERSION, sha: '9f3a1c2' }),
+      resolveVersion({ pkgVersion: UNSTAMPED_VERSION, sha: null }),
+      resolveVersion({ pkgVersion: '0.4.62' }),
+      resolveVersion({ override: '1.2.3-rc1' }),
+      resolveVersion({ pkgVersion: 'weird version with spaces' }),
+    ]) expect(SAFE.test(v)).toBe(true)
+  })
+})
+
+describe('gitShortSha — repo layouts', () => {
+  let root: string
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'orq-git-')) })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  const SHA = '80f5e14aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+  it('reads a normal clone (.git is a directory, loose ref)', () => {
+    mkdirSync(join(root, '.git', 'refs', 'heads'), { recursive: true })
+    writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(root, '.git', 'refs', 'heads', 'main'), `${SHA}\n`)
+    expect(gitShortSha(root)).toBe('80f5e14')
+  })
+
+  it('reads a fresh clone whose ref is only in packed-refs', () => {
+    mkdirSync(join(root, '.git'), { recursive: true })
+    writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(root, '.git', 'packed-refs'), `# pack-refs with: peeled\n${SHA} refs/heads/main\n`)
+    expect(gitShortSha(root)).toBe('80f5e14')
+  })
+
+  it('reads a detached HEAD', () => {
+    mkdirSync(join(root, '.git'), { recursive: true })
+    writeFileSync(join(root, '.git', 'HEAD'), `${SHA}\n`)
+    expect(gitShortSha(root)).toBe('80f5e14')
+  })
+
+  it('reads a WORKTREE, where .git is a file and refs live in the common dir', () => {
+    // This is not hypothetical: the first build of this code reported a bare '0.0.0-dev'
+    // because it assumed .git was always a directory. Tests passed — they supplied the
+    // sha directly — and only running the built binary exposed it.
+    const common = join(root, 'main-repo', '.git')
+    const wt = join(common, 'worktrees', 'feature')
+    mkdirSync(join(common, 'refs', 'heads'), { recursive: true })
+    mkdirSync(wt, { recursive: true })
+    writeFileSync(join(common, 'refs', 'heads', 'main'), `${SHA}\n`)
+    writeFileSync(join(wt, 'HEAD'), 'ref: refs/heads/main\n')
+    writeFileSync(join(wt, 'commondir'), '../..\n')
+    mkdirSync(join(root, 'wt'), { recursive: true })
+    writeFileSync(join(root, 'wt', '.git'), `gitdir: ${wt}\n`)
+    expect(gitShortSha(join(root, 'wt'))).toBe('80f5e14')
+  })
+
+  it('returns null when there is no git at all (a released image)', () => {
+    expect(gitShortSha(root)).toBeNull()
   })
 })
