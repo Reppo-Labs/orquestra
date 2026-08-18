@@ -53,7 +53,7 @@ export interface StoredReport {
     refusedBudget: number
     errors: number
   }
-  errorSignatures: { errorClass: string; frames: string[] }[]
+  errorSignatures: { errorClass: string; frames: string[]; code?: string }[]
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -100,7 +100,7 @@ function validSignatures(v: unknown): StoredReport['errorSignatures'] | null {
   const out: StoredReport['errorSignatures'] = []
   for (const s of v) {
     if (!isPlainObject(s)) return null
-    const { errorClass, frames } = s
+    const { errorClass, frames, code } = s
     if (typeof errorClass !== 'string' || !SAFE_CLASS.test(errorClass)) return null
     if (!Array.isArray(frames) || frames.length > MAX_FRAMES) return null
     const safe: string[] = []
@@ -108,7 +108,12 @@ function validSignatures(v: unknown): StoredReport['errorSignatures'] | null {
       if (typeof f !== 'string' || !SAFE_FRAME.test(f)) return null
       safe.push(f)
     }
-    out.push({ errorClass, frames: safe })
+    // `code` is OPTIONAL and additive: nodes older than it simply omit it, and the
+    // collector must keep accepting them (see SCHEMA_VERSION in telemetry/payload.ts for
+    // why this is not a schema bump). Held to the same character class as errorClass —
+    // the sender allowlists it, and the collector re-checks rather than trusting that.
+    if (code !== undefined && (typeof code !== 'string' || !SAFE_CLASS.test(code))) return null
+    out.push({ errorClass, frames: safe, ...(code !== undefined ? { code } : {}) })
   }
   return out
 }

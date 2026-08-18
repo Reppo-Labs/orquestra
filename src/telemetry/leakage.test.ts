@@ -9,6 +9,7 @@
 // per-datanet or per-pod breakdown to counts.ts, and a strategy-revealing field starts
 // shipping to every operator by default.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { toSignature } from './signature.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -113,5 +114,44 @@ describe('no leakage from a populated activity log', () => {
     expect(Object.keys(parsed).sort()).toEqual(
       ['arch', 'counts', 'errorSignatures', 'installId', 'nodeVersion', 'orquestraVersion', 'platform', 'schemaVersion', 'ts'],
     )
+  })
+})
+
+describe('leakage — the error code is an allowlist, not a message channel', () => {
+  /** A CLI failure whose message is stuffed with everything the payload forbids. */
+  const hostile = (): Error => {
+    const e = new Error(
+      'Command failed: reppo vote --rpc-url https://base-mainnet.g.alchemy.com/v2/SUPERSECRETKEY123 ' +
+      '--pod 3750 --datanet 3 — wallet 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 ' +
+      'pod "NVDA momentum, strong liquidity signal" earned 1234.5 WOOD — ' +
+      'error: VOTER_LACKS_SUBNET_ACCESS: voter lacks subnet access',
+    )
+    e.stack = `Error: ${e.message}\n    at run (/app/dist/reppo/cli.js:140:11)`
+    return e
+  }
+
+  it('emits the code and NOTHING else from a message full of forbidden values', () => {
+    const wire = JSON.stringify(toSignature(hostile()))
+    expect(JSON.parse(wire).code).toBe('VOTER_LACKS_SUBNET_ACCESS')
+    for (const forbidden of [
+      'SUPERSECRETKEY123', 'alchemy.com',
+      '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+      'NVDA', 'WOOD', 'strong liquidity signal', '1234.5', '3750',
+    ]) {
+      expect(wire).not.toContain(forbidden)
+    }
+  })
+
+  it('a signature object still has only the three known keys', () => {
+    const sig = toSignature(hostile()) as unknown as Record<string, unknown>
+    expect(Object.keys(sig).sort()).toEqual(['code', 'errorClass', 'frames'])
+  })
+
+  it('an unrecognized failure carries no code at all — absent, not empty', () => {
+    const e = new Error('wallet 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 did something odd')
+    e.stack = `Error: ${e.message}\n    at run (/app/dist/reppo/cli.js:140:11)`
+    const sig = toSignature(e) as unknown as Record<string, unknown>
+    expect('code' in sig).toBe(false)
+    expect(JSON.stringify(sig)).not.toContain('0xf39')
   })
 })

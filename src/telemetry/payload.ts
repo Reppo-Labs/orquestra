@@ -31,9 +31,22 @@ import { getInstallId } from './identity.js'
 import { readCounts, type TelemetryCounts } from './counts.js'
 import type { ErrorSignature } from './signature.js'
 
-/** Payload schema version. Bump on ANY change to the field set or to signature
- *  normalization, so the collector can group comparable reports and reject shapes it
- *  does not understand (specs/telemetry-ingest). */
+/** Payload schema version, so the collector can group comparable reports and reject
+ *  shapes it does not understand (specs/telemetry-ingest).
+ *
+ *  Bump on any BREAKING change: a renamed, removed, or retyped field, or a change to
+ *  signature normalization that makes new fingerprints incomparable with old ones.
+ *
+ *  Do NOT bump for a purely ADDITIVE optional field. validateReport pins the version with
+ *  `!==`, so a bump makes the deployed collector reject every node still on the old
+ *  number — that is the entire fleet, from the moment the collector is redeployed until
+ *  the last operator upgrades. For an additive field the compatibility is already total
+ *  in both directions: an old node omits it and still validates, and a new node's extra
+ *  key is ignored by an old collector, which reads signature objects field by field
+ *  rather than rejecting unknown ones. (Unknown TOP-LEVEL keys ARE rejected, so a new
+ *  top-level field is breaking and does need a bump.)
+ *
+ *  `ErrorSignature.code` was added this way and deliberately did not bump. */
 export const SCHEMA_VERSION = 1
 
 /** The complete set of top-level keys permitted on the wire. Adding an entry here is a

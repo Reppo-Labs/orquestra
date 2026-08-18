@@ -51,6 +51,24 @@ describe('errorBuffer', () => {
     expect(JSON.stringify(out)).not.toContain(`fn${MAX_SIGNATURES + 5} `)
   })
 
+  it('keeps CLI faults apart when their stacks are identical', () => {
+    // Regression. Every reppo CLI failure surfaces through the same `run` frame, so a
+    // dedup key of (class, frames) folded three genuinely different faults into one and
+    // kept only the first — undoing the whole point of the code field at the last step.
+    // The other tests in this file use distinct stacks, where the bug cannot show.
+    const cli = (message: string): Error => {
+      const e = new Error(message)
+      e.stack = `Error: ${message}\n    at run (/app/dist/reppo/cli.js:140:11)`
+      return e
+    }
+    recordErrorSignature(cli('error: VOTER_LACKS_SUBNET_ACCESS: no access'))
+    recordErrorSignature(cli('error: INSUFFICIENT_REPPO_BALANCE: wallet empty'))
+    recordErrorSignature(cli('error: UNKNOWN_REVERT_0x5dd58b8b'))
+    recordErrorSignature(cli('error: VOTER_LACKS_SUBNET_ACCESS: no access again')) // same fault
+    const codes = drainErrorSignatures().map((s) => s.code)
+    expect(codes).toEqual(['VOTER_LACKS_SUBNET_ACCESS', 'INSUFFICIENT_REPPO_BALANCE', 'UNKNOWN_REVERT_0x5dd58b8b'])
+  })
+
   it('peek does not consume — `telemetry --show` must be read-only', () => {
     recordErrorSignature(err('TypeError', 'runCycle'))
     expect(peekErrorSignatures()).toHaveLength(1)

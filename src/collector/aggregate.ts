@@ -31,6 +31,8 @@ export interface SignalAggregate {
   signature: string
   errorClass: string
   frames: string[]
+  /** Recognized reppo error code, when the reporting nodes carried one. */
+  code?: string
   installs: number
   /** Total occurrences across those installs. Reported for ranking only; the ADMISSION
    *  decision uses `installs` alone, or a single noisy install could force a signal in. */
@@ -67,8 +69,15 @@ export interface AggregationResult {
 /** Canonical key for a fault. Built from validated `errorClass` and `frames`, which
  *  validate.ts has already constrained to a safe character class — so this string is ours,
  *  not the reporter's. */
-export function signatureKey(errorClass: string, frames: string[]): string {
-  return [errorClass, ...frames].join(' | ')
+export function signatureKey(errorClass: string, frames: string[], code?: string): string {
+  // The code participates in the key on purpose. Every reppo CLI failure shares one stack
+  // (`run (dist/reppo/cli.js:…)`), so keying on (class, frames) alone merges an unfunded
+  // wallet, a missing subnet grant, and a receipt timeout into a single signal that says
+  // only "the CLI said no" — and then ranks that merged blob first by occurrences.
+  // The code segment is OMITTED when absent rather than joined as an empty string: an
+  // empty segment would change the key of every code-less signature, silently splitting
+  // each existing fault into a before-and-after pair across the upgrade window.
+  return [errorClass, ...(code ? [code] : []), ...frames].join(' | ')
 }
 
 function withinWindow(ts: string, nowMs: number, windowDays: number): boolean {
@@ -109,7 +118,7 @@ export function aggregate(reports: PersistedReport[], opts: AggregateOptions = {
   // the key from }. A Map keyed by the derived string, values holding a Set of installs.
   const bySig = new Map<
     string,
-    { errorClass: string; frames: string[]; installs: Set<string>; occurrences: number; first: string; last: string }
+    { errorClass: string; frames: string[]; code?: string; installs: Set<string>; occurrences: number; first: string; last: string }
   >()
 
   for (const r of inWindow) {
@@ -123,11 +132,11 @@ export function aggregate(reports: PersistedReport[], opts: AggregateOptions = {
     fleet.refusedBudget += r.counts.refusedBudget
 
     for (const sig of r.errorSignatures) {
-      const key = signatureKey(sig.errorClass, sig.frames)
+      const key = signatureKey(sig.errorClass, sig.frames, sig.code)
       const existing = bySig.get(key)
       if (existing === undefined) {
         bySig.set(key, {
-          errorClass: sig.errorClass, frames: sig.frames,
+          errorClass: sig.errorClass, frames: sig.frames, ...(sig.code ? { code: sig.code } : {}),
           installs: new Set([r.installId]), occurrences: 1, first: r.receivedAt, last: r.receivedAt,
         })
       } else {
@@ -152,6 +161,7 @@ export function aggregate(reports: PersistedReport[], opts: AggregateOptions = {
       signature: key,
       errorClass: v.errorClass,
       frames: v.frames,
+      ...(v.code ? { code: v.code } : {}),
       installs: v.installs.size,
       occurrences: v.occurrences,
       firstSeen: v.first,
