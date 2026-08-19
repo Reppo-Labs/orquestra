@@ -43,11 +43,11 @@ with a one-keystroke opt-out, and telemetry may start from the first cycle.
 | `schemaVersion` | Version of this payload format |
 | `ts` | When the payload was built (ISO 8601) |
 | `installId` | Random UUID, minted on first run, stored in your data dir |
-| `orquestraVersion` | This package's version |
+| `orquestraVersion` | Release version of this build. A build that was never stamped by the release pipeline reports `0.0.0-dev+<short-sha>` — dev builds are never reported as a release version. Override with `ORQUESTRA_VERSION`. |
 | `nodeVersion` | Your Node.js version |
 | `platform` / `arch` | e.g. `darwin` / `arm64` |
 | `counts` | Cycles run; votes and mints attempted vs failed; budget refusals; total errors |
-| `errorSignatures` | Error class plus normalized stack frames — **never the message** |
+| `errorSignatures` | Error class, normalized stack frames, and — when recognized — a reppo error code (e.g. `VOTER_LACKS_SUBNET_ACCESS`). **Never the message.** The code is matched against a fixed allowlist compiled into the node, so this field can only ever contain a string that already exists in the source; anything unrecognized is omitted. |
 
 `counts` is keyed by action kind and status only — never by datanet, pod, or token.
 

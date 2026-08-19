@@ -12,6 +12,7 @@ import type { ActivityEntry } from '../dashboard/activityLog.js'
 import type { PlatformErrorEntry } from '../reppo/platformErrors.js'
 import type { VotePowerView } from '../dashboard/snapshot.js'
 import { redactSecrets } from '../util/redact.js'
+import { recordErrorSignature } from '../telemetry/errorBuffer.js'
 import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
 import { selectVotes } from '../voter/select.js'
 import { createVotePlanner } from '../voter/plan.js'
@@ -807,6 +808,10 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       datanets.push({ datanetId, votes, mints })
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
+      // The per-datanet isolation boundary swallows anything the datanet threw so the rest
+      // of the cycle survives — which also means this is the last place the stack exists.
+      // Message-free fingerprint for telemetry (see telemetry/signature.ts).
+      recordErrorSignature(e)
       console.error(redactSecrets(`orquestra: datanet ${datanetId} skipped — ${error}`))
       // Record the failure as a skip activity entry too: without it the dashboard's
       // health/idle panels can't tell "erroring every cycle" from "quietly fine".
@@ -831,6 +836,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       due = await deps.reads.getEmissionsDue()
     } catch (e) {
+      recordErrorSignature(e)
       // SURFACE IT. This scan is the whole owner-claim path (eth_getLogs + the claim
       // probes). When it throws — a downed/rate-limited RPC peer, a getLogs range cap —
       // the throw is correct (the epoch stays re-checkable next cycle), but until now the
@@ -862,6 +868,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       voterDue = (await deps.onchain?.wallet?.getVoterEmissionsDue()) ?? []
     } catch (e) {
+      recordErrorSignature(e)
       // Same reasoning as the owner scan above — a silent voter-claim outage is invisible
       // next to a cycle full of successful votes.
       const why = redactSecrets(e instanceof Error ? e.message : String(e))
