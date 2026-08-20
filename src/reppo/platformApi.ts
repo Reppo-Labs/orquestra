@@ -128,6 +128,51 @@ export async function registerVoteOnPlatform(
   return json.data?.id ?? ''
 }
 
+/** PATCH /agents/:agentId/voting-power-sync/:address — mirror the wallet's Base veREPPO
+ *  voting power onto Robinhood Chain.
+ *  Docs: https://docs.reppo.ai/api/agent/custom-agents#sync-voting-power-from-base-to-robinhood
+ *
+ *  Robinhood has no on-chain staking: VeReppoRBV1 is a READ-ONLY MIRROR whose values are
+ *  written by robinhood.reppo.ai, so a lock made on Base is invisible there until this
+ *  call runs. Nothing in orquestra or reppo-cli ever called it, and the node's own skip
+ *  message told the operator to go do it by hand in a browser. Live consequence on a real
+ *  node: 2,862 veREPPO locked on Base, 0 on the mirror, vote scoring skipped every cycle,
+ *  zero votes ever cast.
+ *
+ *  Rate limited per wallet (~10 minutes). A 429 is NOT a failure — it means a sync is
+ *  already in flight or recently done, so the caller treats it as success and simply
+ *  re-reads the mirror.
+ *
+ *  The body is empty: the agent id and address in the path are the whole request. */
+export async function syncVotingPowerOnPlatform(
+  agentId: string,
+  address: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+  try {
+    const res = await fetchImpl(
+      `${platformBase()}/agents/${encodeURIComponent(agentId)}/voting-power-sync/${encodeURIComponent(address)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        signal: ctrl.signal,
+      },
+    )
+    // 429 = "already syncing / synced recently". The mirror is being updated either way,
+    // so treating it as an error would log a scary line every cycle for a healthy node.
+    if (res.status === 429) return
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new PlatformApiError(`platform syncVotingPower ${res.status}: ${body.slice(0, 200)}`, 'register', res.status)
+    }
+  } finally {
+    clearTimeout(t)
+  }
+}
+
 /** PATCH /agents/:agentId — update the agent's platform profile (name/description/thumbnail).
  *  Docs: https://docs.reppo.ai/api/agent/custom-agents#update-an-agent
  *  Auth: the apiKey minted at registration. Throws on any non-2xx so the caller can

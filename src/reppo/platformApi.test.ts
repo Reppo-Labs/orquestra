@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { registerVoteOnPlatform, updateAgentOnPlatform, resolvePodCuid } from './platformApi.js'
+import { registerVoteOnPlatform, updateAgentOnPlatform, resolvePodCuid, syncVotingPowerOnPlatform } from './platformApi.js'
 
 const fakeResp = (status: number, body: unknown): Response =>
   ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response
@@ -165,5 +165,31 @@ describe('registerVoteOnPlatform error shape', () => {
     await expect(registerVoteOnPlatform('agent-1', 'cuid-1', '0xtx', 'k', f, 0)).rejects.toMatchObject({
       stage: 'register', httpStatus: 404,
     })
+  })
+})
+
+describe('syncVotingPowerOnPlatform', () => {
+  // VeReppoRBV1 on robinhood is a READ-ONLY MIRROR of Base veREPPO. Nothing in orquestra
+  // or reppo-cli ever called this, so a wallet with thousands of veREPPO locked on Base
+  // read 0 on robinhood and the node skipped voting forever.
+  it('PATCHes the documented path with the agent key and an empty body', async () => {
+    const f = vi.fn(makeFetch(200, { data: { message: 'ok' } }))
+    await syncVotingPowerOnPlatform('agent-1', '0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64', 'key-xyz', f)
+    const [url, opts] = f.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/agents/agent-1/voting-power-sync/0xb4EC41c93cF2f573f82D8F023B01637Eb5dB4c64')
+    expect(opts.method).toBe('PATCH')
+    expect(opts.body).toBeUndefined() // documented as empty — the path IS the request
+    expect((opts.headers as Record<string, string>)['Authorization']).toBe('Bearer key-xyz')
+  })
+
+  it('treats 429 as success — rate limited means a sync already happened', async () => {
+    // Documented as rate limited per wallet (~10 min). Raising here would log an error
+    // every cycle on a node that is actually healthy.
+    await expect(syncVotingPowerOnPlatform('a', '0xabc', 'k', makeFetch(429, { error: 'rate limited' }))).resolves.toBeUndefined()
+  })
+
+  it('throws with the platform status and body on a real failure', async () => {
+    await expect(syncVotingPowerOnPlatform('a', '0xabc', 'k', makeFetch(401, { error: 'Invalid API key' })))
+      .rejects.toMatchObject({ httpStatus: 401 })
   })
 })

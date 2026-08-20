@@ -1457,3 +1457,68 @@ describe('runCycle error-signature capture (telemetry)', () => {
     expect(drainErrorSignatures()).toEqual([])
   })
 })
+
+describe('runCycle robinhood voting-power mirror', () => {
+  // VeReppoRBV1 is a READ-ONLY MIRROR of Base veREPPO. A wallet can hold thousands of
+  // veREPPO on Base and still read 0 here, and the node used to skip voting forever while
+  // telling the operator to go sync it in a browser. Live: 2,862 veREPPO on Base, 0 on the
+  // mirror, 17 skips, zero votes ever cast.
+  const budget = (votingPowerWei: bigint) => ({
+    votingPowerWei, votesCastedWei: 0n, remainingWei: votingPowerWei,
+    epoch: 136, epochEndsAtSec: Math.floor(Date.now() / 1000) + 3600,
+  })
+
+  /** Wallet reads whose power is 0 until a sync happens, then non-zero. */
+  const healingWallet = (onSync: () => void) => {
+    let synced = false
+    return {
+      wallet: {
+        address: '0xwallet',
+        readTokenBalance: async () => 0n,
+        getVoterEmissionsDue: async () => [],
+        getVotePowerBudget: async () => budget(synced ? 2_862n * 10n ** 18n : 0n),
+      },
+      getEpochVoteVolume: async () => ({ epoch: 136, totalRaw: 0n }),
+      _sync: () => { synced = true; onSync() },
+    }
+  }
+
+  it('mirrors on a zero reading and RE-READS, so the cycle does not run on the stale 0', async () => {
+    const onchain = healingWallet(() => {})
+    const syncVotingPower = vi.fn(async () => { onchain._sync(); return true })
+    const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'], syncVotingPower })
+    const report = await runCycle(config, 'c-sync', d)
+    expect(syncVotingPower).toHaveBeenCalledTimes(1)
+    // The re-read is what matters: without it the cycle keeps the 0 it just fixed.
+    expect(report.votePower?.votingPowerWei).toBe((2_862n * 10n ** 18n).toString())
+  })
+
+  it('does NOT sync when the wallet already has power (no needless API call)', async () => {
+    const syncVotingPower = vi.fn(async () => true)
+    const onchain = {
+      wallet: {
+        address: '0xwallet', readTokenBalance: async () => 0n, getVoterEmissionsDue: async () => [],
+        getVotePowerBudget: async () => budget(500n * 10n ** 18n),
+      },
+      getEpochVoteVolume: async () => ({ epoch: 136, totalRaw: 0n }),
+    }
+    await runCycle(config, 'c-nosync', deps({ onchain: onchain as unknown as CycleDeps['onchain'], syncVotingPower }))
+    expect(syncVotingPower).not.toHaveBeenCalled()
+  })
+
+  it('keeps voting when the mirror is unavailable — degrades to the old behaviour', async () => {
+    // The sync runs only when power ALREADY reads 0, so a failure must cost nothing
+    // beyond what the node had before the sync existed.
+    const onchain = healingWallet(() => {})
+    const syncVotingPower = vi.fn(async () => false) // e.g. creds missing, or the API 500'd
+    const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'], syncVotingPower })
+    await expect(runCycle(config, 'c-syncfail', d)).resolves.toBeDefined()
+    expect(syncVotingPower).toHaveBeenCalledTimes(1)
+  })
+
+  it('is a no-op on a wiring that provides no sync (every non-robinhood node)', async () => {
+    const onchain = healingWallet(() => {})
+    const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'] }) // no syncVotingPower
+    await expect(runCycle(config, 'c-nosyncdep', d)).resolves.toBeDefined()
+  })
+})
