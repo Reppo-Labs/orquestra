@@ -213,6 +213,16 @@ export interface CycleDeps {
   dedup: Dedup
   /** Activity log + per-cycle arming + platform vote registration. */
   activity: ActivityStore
+  /** Mirror the wallet's Base veREPPO voting power onto Robinhood Chain, resolving to
+   *  true when the mirror was (or already had been) updated.
+   *
+   *  Present ONLY on a robinhood node with platform agent credentials — everywhere else
+   *  voting power is read directly from the chain the node votes on and there is nothing
+   *  to mirror. Absence is the normal case and must never gate voting.
+   *
+   *  Never throws: this runs when power already reads 0, so the worst outcome of a failed
+   *  sync is the behaviour the node had before it existed. */
+  syncVotingPower?(): Promise<boolean>
   /** On-chain reads — absent as a unit on an RPC-less node. */
   onchain?: OnchainReads
   executor: WalletExecutor
@@ -460,7 +470,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // have to reconcile two phrasings of one condition.
   const votePowerHint = (vp: { votingPowerWei: bigint; remainingWei: bigint } | null): string =>
     vp !== null && vp.votingPowerWei === 0n
-      ? 'wallet has NO veREPPO voting power — lock REPPO on Base (on robinhood, then sync voting power at https://robinhood.reppo.ai; the node cannot mirror it itself)'
+      ? 'wallet has NO veREPPO voting power — lock REPPO on Base (on robinhood the node mirrors that lock automatically each cycle; a persistent 0 means either nothing is locked on Base, or REPPO_AGENT_ID/REPPO_API_KEY for robinhood.reppo.ai are unset)'
       : 'vote-power budget exhausted for this epoch — resumes next epoch'
 
   const voteWeights = new Map<string, number>()
@@ -483,10 +493,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   let votePowerView: VotePowerView | undefined
   if (voteWeights.size > 0) {
     if (deps.onchain?.wallet?.getVotePowerBudget) {
+      const getBudget = deps.onchain.wallet.getVotePowerBudget.bind(deps.onchain.wallet)
       votePowerView = { sizing: 'legacy-read-failed' } // upgraded on a successful read below
-      try {
-        const budget = await deps.onchain.wallet.getVotePowerBudget()
-        votePower = { votingPowerWei: budget.votingPowerWei, remainingWei: budget.remainingWei }
+      /** Read the wallet's spendable power and (re)build the weigher from it. Extracted so
+       *  the robinhood mirror sync below can re-read after mirroring, instead of the whole
+       *  cycle running on a zero it has just fixed. */
+      const readVotePower = async (): Promise<{ votingPowerWei: bigint; remainingWei: bigint }> => {
+        const budget = await getBudget()
         votePowerView = {
           sizing: 've-reppo',
           votingPowerWei: budget.votingPowerWei.toString(),
@@ -505,6 +518,25 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             ? { spendHorizonSeconds: config.budget.voteSpendHorizonHours * 3600 }
             : {}),
         })
+        return { votingPowerWei: budget.votingPowerWei, remainingWei: budget.remainingWei }
+      }
+      try {
+        votePower = await readVotePower()
+        // ── robinhood mirror self-heal ────────────────────────────────────────────────
+        // VeReppoRBV1 is a READ-ONLY MIRROR of Base veREPPO, written by robinhood.reppo.ai.
+        // A wallet can hold thousands of veREPPO on Base and still read 0 here until that
+        // sync runs, and the node used to just skip voting forever and tell the operator to
+        // open a browser. Zero power is the ONLY trigger — a wallet that genuinely has no
+        // stake syncs a no-op, and a wallet with power never calls this at all.
+        if (votePower.votingPowerWei === 0n && deps.syncVotingPower) {
+          if (await deps.syncVotingPower()) {
+            votePower = await readVotePower() // do not spend the cycle on the stale 0
+            if (votePower.votingPowerWei > 0n) {
+              console.error('orquestra: mirrored Base veREPPO voting power onto robinhood — voting resumes this cycle')
+              recordSkipActivity(deps, cycleId, '', 'mirrored Base veREPPO voting power onto robinhood (VeReppoRBV1 is admin-synced) — voting resumes this cycle')
+            }
+          }
+        }
       } catch (e) {
         // Operator-visible, not just stderr. The dashboard is the only surface an operator
         // on an SSH tunnel actually reads; a budget read that fails every cycle (dead RPC

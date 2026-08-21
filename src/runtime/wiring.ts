@@ -35,9 +35,10 @@ import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
-import { registerVoteOnPlatform, resolvePodCuid } from '../reppo/platformApi.js'
+import { registerVoteOnPlatform, resolvePodCuid, syncVotingPowerOnPlatform } from '../reppo/platformApi.js'
 import { recordPlatformError } from '../reppo/platformErrors.js'
 import { isRobinhood } from '../reppo/network.js'
+import { redactSecrets } from '../util/redact.js'
 
 // One notice per process, not one per vote: robinhood votes are durable on-chain
 // but invisible to the reppo.ai vote index until robinhood gets its own API.
@@ -47,6 +48,20 @@ function warnRobinhoodVotesNotIndexed(): void {
   warnedRobinhoodVotesNotIndexed = true
   console.error(
     'orquestra: robinhood network — votes are NOT indexed on the reppo.ai platform (no robinhood vote API yet); on-chain votes are unaffected.',
+  )
+}
+
+// One notice per process for the robinhood mirror sync being unavailable. This fires on a
+// node that CAN'T self-heal its voting power, so the sentence has to name the fix — the
+// previous behaviour was to skip voting forever and tell the operator to open a browser.
+let warnedNoSyncCreds = false
+function warnRobinhoodSyncCredsMissing(): void {
+  if (warnedNoSyncCreds) return
+  warnedNoSyncCreds = true
+  console.error(
+    'orquestra: robinhood network — voting power cannot be mirrored from Base because REPPO_AGENT_ID / REPPO_API_KEY are unset. '
+    + 'VeReppoRBV1 is a read-only mirror, so votes stay impossible until it is synced. '
+    + 'Run `reppo register-agent --network robinhood` (agent ids are per-platform — a reppo.ai agent does not exist there) and set both vars.',
   )
 }
 
@@ -352,6 +367,37 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       },
       platformFailure: (entry) => recordPlatformError(w.dataDir, entry),
     },
+    // Robinhood only: VeReppoRBV1 is a READ-ONLY MIRROR of Base veREPPO written by
+    // robinhood.reppo.ai, so a lock made on Base is invisible on-chain here until this
+    // PATCH runs. Every other network reads voting power from the chain it votes on and
+    // has nothing to mirror — hence undefined there, which the cycle treats as "skip".
+    //
+    // Credentials are read at CALL time so a node that registers its agent later starts
+    // syncing without a restart, matching registerVoteOnPlatform.
+    ...(isRobinhood() && walletAddress
+      ? {
+          syncVotingPower: async (): Promise<boolean> => {
+            const agentId = process.env.REPPO_AGENT_ID
+            const apiKey = process.env.REPPO_API_KEY
+            if (!agentId || !apiKey) { warnRobinhoodSyncCredsMissing(); return false }
+            try {
+              await syncVotingPowerOnPlatform(agentId, walletAddress, apiKey)
+              return true
+            } catch (e) {
+              // Never throws to the cycle: this runs only when power ALREADY reads 0, so
+              // the worst case is exactly the behaviour that existed before the sync did.
+              console.error(redactSecrets(`orquestra: robinhood voting-power sync failed — voting stays blocked this cycle: ${(e as Error).message}`))
+              recordPlatformError(w.dataDir, {
+                ts: new Date().toISOString(), kind: 'vote',
+                stage: (e as { stage?: string }).stage ?? 'register',
+                ...((e as { httpStatus?: number }).httpStatus !== undefined ? { httpStatus: (e as { httpStatus?: number }).httpStatus } : {}),
+                message: `voting-power sync: ${(e as Error).message}`,
+              })
+              return false
+            }
+          },
+        }
+      : {}),
     reads: {
       getRubric: (id) => io.getRubric(id),
       getPodsAndFilter: async (id) => {
