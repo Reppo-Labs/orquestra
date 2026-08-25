@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, type PodCache, type EpochScanCache } from './emissionsOnchain.js'
+import { tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, advertisedRangeCap, type PodCache, type EpochScanCache } from './emissionsOnchain.js'
 import { MULTICALL3_ADDRESS, resetMulticallAvailabilityCache } from './multicall.js'
 
 // Minimal JSON-RPC mock: routes by method + decodes the selector/args we care about.
@@ -460,5 +460,76 @@ describe('discoverOwnedPods — a 400 that halving cannot fix fails fast', () =>
     const { f, attempts } = countingFetch('')
     await expect(discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 30_000n)).rejects.toThrow(/HTTP 400/)
     expect(attempts.length).toBeGreaterThan(1)
+  })
+
+  /** Live report (2026-08-25): a free tier capping getLogs at TEN blocks worded the cap
+   *  entirely in tier language — "Under the Free tier plan, you can make eth_getLogs
+   *  requests with up to a 10 block range ... Upgrade to PAYG for expanded block range."
+   *  Every one of "plan"/"tier"/"Upgrade" is in NOT_RANGE_TEXT, so the scan filed a WIDTH
+   *  cap as an archive-DEPTH refusal and told the operator to buy an archive endpoint. */
+  const FREE_TIER_10 = '{"error":{"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Upgrade to PAYG for expanded block range."}}'
+
+  it('reads a width cap worded as a tier limit, and says WIDTH — not archive depth', async () => {
+    const { f, attempts } = countingFetch(FREE_TIER_10)
+    const err = await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 4_000_000n).catch((e: Error) => e)
+    expect((err as Error).message).toMatch(/caps eth_getLogs at 10 blocks/)
+    expect((err as Error).message).toMatch(/WIDTH, not archive depth/)
+    expect(attempts).toHaveLength(1) // a 10-block cap needs ~400k requests: refuse, don't grind
+  })
+
+  it('adopts an advertised cap directly instead of halving toward it', async () => {
+    const attempts: bigint[] = []
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') {
+        const span = BigInt(params[0].toBlock) - BigInt(params[0].fromBlock) + 1n
+        attempts.push(span)
+        if (span > 1_000n) return new Response('{"error":{"message":"eth_getLogs is limited to a 1,000 range"}}', { status: 400 })
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: [] }))
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+
+    await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 10_000n)
+    // 9000 → 1000 in ONE step. Halving would have burned 4500/2250/1125 first.
+    expect(attempts.filter((s) => s > 1_000n)).toHaveLength(1)
+    for (const s of attempts.filter((s) => s <= 1_000n)) expect(s).toBeLessThanOrEqual(1_000n)
+  })
+
+  it('honours a tiny cap when the window is small enough to finish inside the request budget', async () => {
+    // The refusal above is a REQUEST budget, not a floor on chunk size: a caught-up node
+    // scanning a few thousand blocks can still work against a 10-block cap.
+    const spans: Array<[bigint, bigint]> = []
+    const f = (async (_url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_getLogs') {
+        const from = BigInt(params[0].fromBlock), to = BigInt(params[0].toBlock)
+        if (to - from + 1n > 10n) return new Response(FREE_TIER_10, { status: 400 })
+        spans.push([from, to])
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: [] }))
+      }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x' }))
+    }) as unknown as typeof fetch
+
+    await discoverOwnedPods(f, 'http://rpc', '0xpm', WALLET, 0n, 1_000n)
+    expect(spans[0][0]).toBe(0n)
+    expect(spans[spans.length - 1][1]).toBe(1_000n)
+    for (let i = 1; i < spans.length; i++) expect(spans[i][0]).toBe(spans[i - 1][1] + 1n)
+  })
+})
+
+describe('advertisedRangeCap — the number a provider states about its own limit', () => {
+  it.each([
+    ['Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range.', 10n],
+    ['eth_getLogs is limited to a 10,000 range', 10_000n],
+    ['query exceeds maximum of 5000 blocks per range', 5_000n],
+  ])('%s → %s', (msg, expected) => {
+    expect(advertisedRangeCap(msg)).toBe(expected)
+  })
+
+  it('returns null when the provider names no number (halving stays the fallback)', () => {
+    expect(advertisedRangeCap('block range too large')).toBeNull()
+    expect(advertisedRangeCap('Archive requests require a paid plan')).toBeNull()
+    expect(advertisedRangeCap('RPC eth_getLogs HTTP 400')).toBeNull()
   })
 })

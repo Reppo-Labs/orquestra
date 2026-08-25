@@ -1297,6 +1297,17 @@ describe('scanFailureHint — the claim-skip row names a remedy that can actuall
     expect(h).toMatch(/REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this/)
   })
 
+  it('calls a tier-worded BLOCK-RANGE cap what it is: width, not archive depth', () => {
+    // Live report: the free tier states its cap ("up to a 10 block range") in the same
+    // words as an archive limit ("Free tier plan", "Upgrade to PAYG"), so the archive
+    // branch claimed it. The operator was told to buy an archive endpoint for a problem
+    // archive access does not touch. The stated number has to win.
+    const h = scanFailureHint('RPC eth_getLogs HTTP 400 — {"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Upgrade to PAYG for expanded block range."}')
+    expect(h).toMatch(/caps eth_getLogs at 10 blocks/)
+    expect(h).toMatch(/WIDTH limit, not archive depth/)
+    expect(h).not.toMatch(/archive-capable/)
+  })
+
   it('says a healthy vote cycle does not clear a credentials failure', () => {
     // The confusing part of the report: "voting is healthy" reads as "the RPC is fine".
     const h = scanFailureHint('RPC eth_getLogs HTTP 401 — invalid api key')

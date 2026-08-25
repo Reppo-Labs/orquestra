@@ -66,6 +66,14 @@ const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
 // next cycle, and mistaking an outage for a cap would shrink-and-hammer a downed node.
 const LOG_CHUNK = 9_000n
 const MIN_LOG_CHUNK = 500n
+/** Ceiling on eth_getLogs requests for one scan window. Only binds when a provider
+ *  advertises a cap far below MIN_LOG_CHUNK (seen live: a free tier capping getLogs at TEN
+ *  blocks, which would need ~400k requests for the 4M-block first scan). Honouring such a
+ *  cap silently would hammer the provider for hours and still be rate-limited out; refusing
+ *  with the number in the message tells the operator the endpoint is the problem. A small
+ *  incremental window still completes under a tiny cap, which is why this is a request
+ *  budget and not a hard floor on the chunk size. */
+const MAX_LOG_REQUESTS = 2_000n
 
 /** Provider wording for "your block range is too wide". Matched against the response body
  *  now that rpcCall carries it (see errorBody) — the HTTP status alone cannot tell a range
@@ -77,6 +85,28 @@ const RANGE_CAP_TEXT = /\brange\b|\bblocks?\b.*\b(limit|exceed)|limit exceeded|t
  *  chunk against one of these just burns five more requests and still fails. */
 const NOT_RANGE_TEXT = /\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b|\b(api[_ -]?key|unauthorized|forbidden|credential|token required)\b/i
 
+/** The exact block-range width a provider advertises when it rejects a getLogs span, or
+ *  null when it names no number. Real wordings this must catch:
+ *    "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range"
+ *    "eth_getLogs is limited to a 10,000 range"
+ *    "maximum of 5000 blocks"
+ *
+ *  WHY A NUMBER AND NOT A BOOLEAN: the first message above is a WIDTH cap (10 blocks) worded
+ *  entirely in tier language ("Free tier plan", "Upgrade to PAYG"), so NOT_RANGE_TEXT matched
+ *  it and the scan classified a width cap as an archive-depth refusal — the operator was then
+ *  told to buy an archive-capable endpoint, which would not have fixed it. An explicitly
+ *  advertised number is unambiguous evidence of width and therefore outranks that wording. It
+ *  also lets the scan jump STRAIGHT to the provider's own limit instead of binary-searching
+ *  toward it, and lets it recognise a cap so small (10 blocks ⇒ ~400k requests for the 4M-block
+ *  first scan) that no chunk size makes the endpoint usable. */
+export const advertisedRangeCap = (msg: string): bigint | null => {
+  const m = msg.match(/(?:up to|limited to|max(?:imum)?(?: of)?)\s+(?:an?\s+)?([\d][\d,_]*)\s*(?:block\s*)?range/i)
+    ?? msg.match(/([\d][\d,_]*)\s*blocks?\b(?=[^.]*\b(?:range|limit|max)\b)/i)
+  if (!m) return null
+  const n = BigInt((m[1] ?? '0').replace(/[,_]/g, ''))
+  return n > 0n ? n : null
+}
+
 /** Does this error look like the provider rejecting the block range as TOO WIDE (⇒ halving
  *  the chunk can fix it) rather than being down or refusing the request for a reason width
  *  can't change? Deliberately narrow: 5xx and rate limits must NOT match (see LOG_CHUNK).
@@ -87,9 +117,11 @@ const NOT_RANGE_TEXT = /\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b|\b(ap
  *  wasted round-trips per cycle with the true cause nowhere in the log. With the body in
  *  hand, an explicit non-range signal now wins over the status code; a bare status with no
  *  usable body keeps the old benefit-of-the-doubt behaviour, since halving is cheap and a
- *  range cap is still the most common 4xx here. */
+ *  range cap is still the most common 4xx here — except when the provider states a NUMBER,
+ *  which is width evidence that outranks tier wording (see advertisedRangeCap). */
 const isRangeCapError = (e: unknown): boolean => {
   const msg = e instanceof Error ? e.message : String(e)
+  if (advertisedRangeCap(msg) !== null) return true // a stated width beats tier wording
   if (NOT_RANGE_TEXT.test(msg)) return false
   return /HTTP 4(00|13|14)\b/.test(msg) || RANGE_CAP_TEXT.test(msg)
 }
@@ -203,6 +235,23 @@ export async function discoverOwnedPods(
         fromBlock: hexBlock(b), toBlock: hexBlock(to),
       }])) as Log[]
     } catch (e) {
+      // The provider named its own limit: adopt it directly rather than halving toward it
+      // (five wasted round-trips), unless honouring it would take more requests than the
+      // whole scan is worth — a 10-block cap cannot serve a 4M-block backfill at any size.
+      // `chunk` is an OFFSET: the window [b, b+chunk] is chunk+1 blocks wide, so a cap of N
+      // blocks means chunk = N-1. Setting chunk = N re-sends a span one block over the cap,
+      // the provider 400s again with the same number, and — since the cap is no longer
+      // smaller than the chunk — the retry falls through to halving, which is the loop this
+      // branch exists to avoid.
+      const cap = advertisedRangeCap(e instanceof Error ? e.message : String(e))
+      if (cap !== null && cap - 1n < chunk) {
+        const needed = (toBlock - b) / cap + 1n
+        if (needed > MAX_LOG_REQUESTS) {
+          throw new Error(`${e instanceof Error ? e.message : String(e)} — this endpoint caps eth_getLogs at ${cap} blocks, so covering ${toBlock - b + 1n} blocks would take ~${needed} requests (limit ${MAX_LOG_REQUESTS}). The cap is on WIDTH, not archive depth: use an RPC endpoint with a wider eth_getLogs range`)
+        }
+        chunk = cap > 1n ? cap - 1n : 1n // 1n: a 1-block cap still makes progress, one block per call
+        continue // retry the SAME window at the provider's stated span
+      }
       if (isRangeCapError(e) && chunk > MIN_LOG_CHUNK) {
         chunk = chunk / 2n < MIN_LOG_CHUNK ? MIN_LOG_CHUNK : chunk / 2n
         continue // retry the SAME window at the smaller span
