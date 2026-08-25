@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, advertisedRangeCap, type PodCache, type EpochScanCache } from './emissionsOnchain.js'
+import {
+  tokenIdFromLog, discoverOwnedPods, queryClaimableOnchain, advertisedRangeCap,
+  highestMintedPodId, discoverOwnedPodsByOwnerOf,
+  type PodCache, type EpochScanCache,
+} from './emissionsOnchain.js'
 import { MULTICALL3_ADDRESS, resetMulticallAvailabilityCache } from './multicall.js'
 
 // Minimal JSON-RPC mock: routes by method + decodes the selector/args we care about.
-const SEL = { hasClaimed: '0x5b778a36', claim: '0x6dd6f4c9', currentEpoch: '0x76671808' }
+const SEL = { hasClaimed: '0x5b778a36', claim: '0x6dd6f4c9', currentEpoch: '0x76671808', ownerOf: '0x6352211e' }
+/** Some address that is NOT our wallet, for pods owned by someone else. */
+const OTHER = '0x00000000000000000000000000000000000000ff'
 const w = (v: number | bigint) => BigInt(v).toString(16).padStart(64, '0')
 
 function makeFetch(opts: {
@@ -12,6 +18,8 @@ function makeFetch(opts: {
   epoch: number
   claimed?: Set<string>     // `${epoch}:${podId}` already claimed
   claimable?: Set<string>   // `${podId}:${epoch}` whose claim does NOT revert
+  minted?: bigint           // highest minted podId; ownerOf reverts above it
+  owned?: Set<number>       // podIds owned by WALLET (others belong to OTHER)
 }): typeof fetch {
   const reply = (result: unknown) => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))
   const revert = () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message: 'execution reverted' } }))
@@ -30,6 +38,12 @@ function makeFetch(opts: {
       if (sel === SEL.claim) {
         const podId = BigInt('0x' + data.slice(10, 74)), epoch = BigInt('0x' + data.slice(74, 138))
         return opts.claimable?.has(`${podId}:${epoch}`) ? reply('0x') : revert()
+      }
+      if (sel === SEL.ownerOf) {
+        const id = BigInt('0x' + data.slice(10, 74))
+        if (opts.minted === undefined || id > opts.minted || id === 0n) return revert() // unminted
+        const owner = opts.owned?.has(Number(id)) ? WALLET : OTHER
+        return reply('0x' + owner.replace(/^0x/, '').toLowerCase().padStart(64, '0'))
       }
     }
     return reply('0x')
@@ -177,6 +191,161 @@ describe('queryClaimableOnchain', () => {
     const f = makeFetch({ epoch: 103, claimed: new Set(['102:5', '101:5', '100:5']) })
     const out = await queryClaimableOnchain('http://rpc', WALLET, memCache(['5'], 1n), { fetchImpl: f })
     expect(out).toEqual([])
+  })
+})
+
+/** PodCache that also carries the ownerOf-sweep watermark. */
+function memCacheWithPodId(initial: string[] = [], lastPodId: bigint | null = null): PodCache & { lastPodId: bigint | null } {
+  const pods = new Set(initial)
+  const c = {
+    lastPodId,
+    getKnownPods: () => [...pods],
+    addPods: (ids: string[]) => ids.forEach((i) => pods.add(i)),
+    getLastBlock: () => 999n, // never used on the sweep path; a value here proves it isn't
+    setLastBlock: () => { throw new Error('setLastBlock must not be called on the ownerOf sweep path') },
+    getLastPodId: () => c.lastPodId,
+    setLastPodId: (id: bigint) => { c.lastPodId = id },
+  }
+  return c
+}
+
+describe('highestMintedPodId — find the ceiling PodManager will not tell us', () => {
+  it('finds the highest minted id by doubling then bisecting', async () => {
+    const f = makeFetch({ epoch: 100, minted: 3713n })
+    expect(await highestMintedPodId(f, 'http://rpc', '0xpm')).toBe(3713n)
+  })
+
+  it('returns the watermark itself when nothing new has been minted (one probe)', async () => {
+    let ownerOfCalls = 0
+    const inner = makeFetch({ epoch: 100, minted: 500n })
+    const f = (async (url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_call' && params[0].data.startsWith(SEL.ownerOf)) ownerOfCalls++
+      return inner(url as never, init as never)
+    }) as unknown as typeof fetch
+    expect(await highestMintedPodId(f, 'http://rpc', '0xpm', 500n)).toBe(500n)
+    expect(ownerOfCalls).toBe(1) // steady state must not re-bisect the whole range
+  })
+
+  it('resumes from a watermark and finds only the new ceiling', async () => {
+    const f = makeFetch({ epoch: 100, minted: 4096n })
+    expect(await highestMintedPodId(f, 'http://rpc', '0xpm', 4000n)).toBe(4096n)
+  })
+
+  it('does NOT read a rate-limited probe as "unminted" — it propagates', async () => {
+    // The exact mistake made while probing this contract by hand: a `-32016 over rate
+    // limit` reply looked identical to a nonexistent token and put the ceiling 1 id too
+    // low. In production that silently drops every pod above the false ceiling, and the
+    // watermark then records the truncated sweep as complete — an unrecoverable loss.
+    const inner = makeFetch({ epoch: 100, minted: 3713n })
+    const f = (async (url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_call' && params[0].data === SEL.ownerOf + w(2048)) {
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32016, message: 'over rate limit' } }))
+      }
+      return inner(url as never, init as never)
+    }) as unknown as typeof fetch
+    await expect(highestMintedPodId(f, 'http://rpc', '0xpm')).rejects.toThrow(/over rate limit/)
+  })
+})
+
+describe('discoverOwnedPodsByOwnerOf — ownership as a view, no logs', () => {
+  it('keeps only the ids this wallet owns', async () => {
+    const f = mcWrap(makeFetch({ epoch: 100, minted: 10n, owned: new Set([2, 5, 9]) }))
+    expect(await discoverOwnedPodsByOwnerOf(f, 'http://rpc', '0xpm', WALLET, 1n, 10n)).toEqual([2n, 5n, 9n])
+  })
+
+  it('treats an unminted id (failed inner call) as not-ours rather than throwing', async () => {
+    const f = mcWrap(makeFetch({ epoch: 100, minted: 3n, owned: new Set([2]) }))
+    expect(await discoverOwnedPodsByOwnerOf(f, 'http://rpc', '0xpm', WALLET, 1n, 8n)).toEqual([2n])
+  })
+
+  it('batches through Multicall3 instead of one request per id', async () => {
+    const f = mcWrap(makeFetch({ epoch: 100, minted: 400n, owned: new Set([399]) }))
+    await discoverOwnedPodsByOwnerOf(f, 'http://rpc', '0xpm', WALLET, 1n, 400n)
+    expect(f._mc.aggregates).toBe(2) // 400 ids at BATCH_SIZE 200
+    expect(f._mc.directSelectors.filter((s) => s === SEL.ownerOf)).toHaveLength(0)
+  })
+})
+
+describe('queryClaimableOnchain — pod discovery without eth_getLogs', () => {
+  // The availability probe is memoized per (rpcUrl, multicall address) for the process —
+  // without this reset a neighbouring suite's "not deployed" verdict decides these tests.
+  beforeEach(() => resetMulticallAvailabilityCache())
+
+  /** Counts eth_getLogs so a test can assert the log path was never touched. */
+  const countingLogs = (inner: typeof fetch) => {
+    const seen = { getLogs: 0 }
+    const f = (async (url: string, init: { body: string }) => {
+      if (JSON.parse(init.body).method === 'eth_getLogs') seen.getLogs++
+      return (inner as unknown as (u: string, i: { body: string }) => Promise<Response>)(url, init)
+    }) as unknown as typeof fetch
+    return { f, seen }
+  }
+
+  it('discovers owned pods by sweeping ownerOf, with no log scan at all', async () => {
+    // The operator-blocking case: on an RPC that caps eth_getLogs, the log path can never
+    // complete, so NOTHING is ever claimed. Ownership is a view — read it instead.
+    const { f: counted, seen } = countingLogs(makeFetch({
+      epoch: 102, minted: 12n, owned: new Set([4, 11]), claimable: new Set(['4:101']),
+    }))
+    const f = mcWrap(counted)
+    const cache = memCacheWithPodId([], null)
+    const out = await queryClaimableOnchain('http://rpc', WALLET, cache, { fetchImpl: f, lookbackEpochs: 2 })
+
+    expect(cache.getKnownPods().sort()).toEqual(['11', '4'])
+    expect(seen.getLogs).toBe(0)
+    expect(cache.lastPodId).toBe(12n)
+    expect(out.map((o) => `${o.podId}:${o.epoch}`)).toEqual(['4:101'])
+  })
+
+  it('resumes from the pod watermark instead of re-sweeping known ids', async () => {
+    const swept: bigint[] = []
+    const inner = makeFetch({ epoch: 102, minted: 14n, owned: new Set([3, 13]) })
+    const f = mcWrap((async (url: string, init: { body: string }) => {
+      const { method, params } = JSON.parse(init.body)
+      if (method === 'eth_call' && params[0].data?.startsWith(SEL.ownerOf)) swept.push(BigInt('0x' + params[0].data.slice(10, 74)))
+      return inner(url as never, init as never)
+    }) as unknown as typeof fetch)
+
+    const cache = memCacheWithPodId(['3'], 10n)
+    await queryClaimableOnchain('http://rpc', WALLET, cache, { fetchImpl: f, lookbackEpochs: 2 })
+
+    expect(swept.filter((id) => id <= 10n && id !== 11n)).toHaveLength(0) // nothing below the watermark re-read
+    expect(cache.getKnownPods().sort()).toEqual(['13', '3'])
+    expect(cache.lastPodId).toBe(14n)
+  })
+
+  it('leaves the watermark alone when the sweep throws (no silent skip of those ids)', async () => {
+    // Advancing on a failed sweep would mark ids as covered that were never read, and the
+    // pods in them would never be claimed again.
+    // Multicall3 IS deployed (eth_getCode answers), but the batch call fails in transport.
+    // Note this cannot go through mcWrap: that helper answers aggregate3 itself, so a 503
+    // handed to it as the inner fetch would never be reached.
+    const inner = makeFetch({ epoch: 102, minted: 20n, owned: new Set([15]) })
+    const f = (async (url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { method: string; params?: [{ to?: string }] }
+      if (body.method === 'eth_getCode') return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: '0x6080' }))
+      if (body.method === 'eth_call' && body.params?.[0]?.to?.toLowerCase() === MULTICALL3_ADDRESS.toLowerCase()) {
+        return new Response('upstream error', { status: 503 })
+      }
+      return inner(url as never, init as never)
+    }) as unknown as typeof fetch
+
+    const cache = memCacheWithPodId([], 5n)
+    await expect(queryClaimableOnchain('http://rpc', WALLET, cache, { fetchImpl: f })).rejects.toThrow(/503/)
+    expect(cache.lastPodId).toBe(5n)
+    expect(cache.getKnownPods()).toEqual([])
+  })
+
+  it('falls back to the log scan when Multicall3 is not deployed', async () => {
+    // Without multicall the sweep would cost one request per id, so the old path wins.
+    const { f, seen } = countingLogs(makeFetch({ block: 50n, logs: [log(42)], epoch: 102, minted: 100n }))
+    const cache = memCache([], null)
+    await queryClaimableOnchain('http://rpc', WALLET, cache, { fetchImpl: f, lookbackEpochs: 2 })
+    expect(seen.getLogs).toBeGreaterThan(0)
+    expect(cache.getKnownPods()).toContain('42')
+    expect(cache.getLastBlock()).toBe(50n)
   })
 })
 
