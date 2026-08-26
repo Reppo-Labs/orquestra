@@ -116,6 +116,13 @@ CREATE TABLE IF NOT EXISTS emit_pods (
 CREATE TABLE IF NOT EXISTS emit_scan (
   id INTEGER PRIMARY KEY CHECK (id = 1), lastBlock TEXT NOT NULL
 );
+-- Watermark for the ownerOf() pod sweep: the highest podId already swept. Separate from
+-- emit_scan on purpose — that row's lastBlock is NOT NULL and means "logs read through
+-- this block", so writing a pod watermark into it would have to invent a block number,
+-- and a fabricated 0 there sends the getLogs fallback scanning from genesis.
+CREATE TABLE IF NOT EXISTS emit_pod_scan (
+  id INTEGER PRIMARY KEY CHECK (id = 1), lastPodId TEXT NOT NULL
+);
 -- Per-pod watermark for the VOTER-emissions scan: the highest CLOSED epoch already scanned
 -- for this pod, so steady-state only checks new epochs (the first run deep-scans full history).
 CREATE TABLE IF NOT EXISTS voter_scan (

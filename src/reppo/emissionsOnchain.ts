@@ -30,6 +30,7 @@ const SEL = {
   votesCasted: '0x3827cb73',     // votesCastedByVoterForEpoch(address voter, uint256 epoch)
   voterUp: '0x08856f83',         // getVotersUpVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
   voterDown: '0x8c03a3e7',       // getVotersDownVotesForPodInEpoch(uint256 epoch, uint256 podId, address voter)
+  ownerOf: '0x6352211e',         // ownerOf(uint256 podId)  (ERC721; reverts for an unminted id)
 }
 /** Read a uint256 view via eth_call → bigint. Empty returndata ('0x') and a contract
  *  REVERT are genuine zeros. A TRANSIENT failure (HTTP 5xx, rate limit, timeout, all
@@ -66,6 +67,14 @@ const INITIAL_LOOKBACK_BLOCKS = 4_000_000n
 // next cycle, and mistaking an outage for a cap would shrink-and-hammer a downed node.
 const LOG_CHUNK = 9_000n
 const MIN_LOG_CHUNK = 500n
+/** Ceiling on eth_getLogs requests for one scan window. Only binds when a provider
+ *  advertises a cap far below MIN_LOG_CHUNK (seen live: a free tier capping getLogs at TEN
+ *  blocks, which would need ~400k requests for the 4M-block first scan). Honouring such a
+ *  cap silently would hammer the provider for hours and still be rate-limited out; refusing
+ *  with the number in the message tells the operator the endpoint is the problem. A small
+ *  incremental window still completes under a tiny cap, which is why this is a request
+ *  budget and not a hard floor on the chunk size. */
+const MAX_LOG_REQUESTS = 2_000n
 
 /** Provider wording for "your block range is too wide". Matched against the response body
  *  now that rpcCall carries it (see errorBody) — the HTTP status alone cannot tell a range
@@ -77,6 +86,28 @@ const RANGE_CAP_TEXT = /\brange\b|\bblocks?\b.*\b(limit|exceed)|limit exceeded|t
  *  chunk against one of these just burns five more requests and still fails. */
 const NOT_RANGE_TEXT = /\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b|\b(api[_ -]?key|unauthorized|forbidden|credential|token required)\b/i
 
+/** The exact block-range width a provider advertises when it rejects a getLogs span, or
+ *  null when it names no number. Real wordings this must catch:
+ *    "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range"
+ *    "eth_getLogs is limited to a 10,000 range"
+ *    "maximum of 5000 blocks"
+ *
+ *  WHY A NUMBER AND NOT A BOOLEAN: the first message above is a WIDTH cap (10 blocks) worded
+ *  entirely in tier language ("Free tier plan", "Upgrade to PAYG"), so NOT_RANGE_TEXT matched
+ *  it and the scan classified a width cap as an archive-depth refusal — the operator was then
+ *  told to buy an archive-capable endpoint, which would not have fixed it. An explicitly
+ *  advertised number is unambiguous evidence of width and therefore outranks that wording. It
+ *  also lets the scan jump STRAIGHT to the provider's own limit instead of binary-searching
+ *  toward it, and lets it recognise a cap so small (10 blocks ⇒ ~400k requests for the 4M-block
+ *  first scan) that no chunk size makes the endpoint usable. */
+export const advertisedRangeCap = (msg: string): bigint | null => {
+  const m = msg.match(/(?:up to|limited to|max(?:imum)?(?: of)?)\s+(?:an?\s+)?([\d][\d,_]*)\s*(?:block\s*)?range/i)
+    ?? msg.match(/([\d][\d,_]*)\s*blocks?\b(?=[^.]*\b(?:range|limit|max)\b)/i)
+  if (!m) return null
+  const n = BigInt((m[1] ?? '0').replace(/[,_]/g, ''))
+  return n > 0n ? n : null
+}
+
 /** Does this error look like the provider rejecting the block range as TOO WIDE (⇒ halving
  *  the chunk can fix it) rather than being down or refusing the request for a reason width
  *  can't change? Deliberately narrow: 5xx and rate limits must NOT match (see LOG_CHUNK).
@@ -87,9 +118,11 @@ const NOT_RANGE_TEXT = /\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b|\b(ap
  *  wasted round-trips per cycle with the true cause nowhere in the log. With the body in
  *  hand, an explicit non-range signal now wins over the status code; a bare status with no
  *  usable body keeps the old benefit-of-the-doubt behaviour, since halving is cheap and a
- *  range cap is still the most common 4xx here. */
+ *  range cap is still the most common 4xx here — except when the provider states a NUMBER,
+ *  which is width evidence that outranks tier wording (see advertisedRangeCap). */
 const isRangeCapError = (e: unknown): boolean => {
   const msg = e instanceof Error ? e.message : String(e)
+  if (advertisedRangeCap(msg) !== null) return true // a stated width beats tier wording
   if (NOT_RANGE_TEXT.test(msg)) return false
   return /HTTP 4(00|13|14)\b/.test(msg) || RANGE_CAP_TEXT.test(msg)
 }
@@ -203,6 +236,23 @@ export async function discoverOwnedPods(
         fromBlock: hexBlock(b), toBlock: hexBlock(to),
       }])) as Log[]
     } catch (e) {
+      // The provider named its own limit: adopt it directly rather than halving toward it
+      // (five wasted round-trips), unless honouring it would take more requests than the
+      // whole scan is worth — a 10-block cap cannot serve a 4M-block backfill at any size.
+      // `chunk` is an OFFSET: the window [b, b+chunk] is chunk+1 blocks wide, so a cap of N
+      // blocks means chunk = N-1. Setting chunk = N re-sends a span one block over the cap,
+      // the provider 400s again with the same number, and — since the cap is no longer
+      // smaller than the chunk — the retry falls through to halving, which is the loop this
+      // branch exists to avoid.
+      const cap = advertisedRangeCap(e instanceof Error ? e.message : String(e))
+      if (cap !== null && cap - 1n < chunk) {
+        const needed = (toBlock - b) / cap + 1n
+        if (needed > MAX_LOG_REQUESTS) {
+          throw new Error(`${e instanceof Error ? e.message : String(e)} — this endpoint caps eth_getLogs at ${cap} blocks, so covering ${toBlock - b + 1n} blocks would take ~${needed} requests (limit ${MAX_LOG_REQUESTS}). The cap is on WIDTH, not archive depth: use an RPC endpoint with a wider eth_getLogs range`)
+        }
+        chunk = cap > 1n ? cap - 1n : 1n // 1n: a 1-block cap still makes progress, one block per call
+        continue // retry the SAME window at the provider's stated span
+      }
       if (isRangeCapError(e) && chunk > MIN_LOG_CHUNK) {
         chunk = chunk / 2n < MIN_LOG_CHUNK ? MIN_LOG_CHUNK : chunk / 2n
         continue // retry the SAME window at the smaller span
@@ -215,10 +265,97 @@ export async function discoverOwnedPods(
   return [...ids]
 }
 
+/** Guard on the doubling probe below: a chain cannot plausibly have minted this many pods,
+ *  so hitting it means `ownerOf` is answering "exists" for everything (wrong contract, or a
+ *  node returning junk) and probing must stop rather than run forever. */
+const MAX_POD_ID_PROBE = 1_000_000_000n
+
+/** Does this podId exist (has an owner)?
+ *
+ *  ONLY an EVM revert answers "no": ownerOf's single revert path is a nonexistent token
+ *  (ERC721NonexistentToken — observed live on Base as `0x7e273289`). Every other failure —
+ *  rate limit, 5xx, timeout — propagates and aborts the sweep.
+ *
+ *  WHY THAT DISTINCTION IS THE WHOLE FUNCTION: while probing this contract by hand, a
+ *  `-32016 over rate limit` reply was read as "absent" and put the highest minted id at
+ *  3712 when 3713 existed. In production that truncation is silent and permanent — pods
+ *  above the false ceiling never enter the cache, so their emissions are never claimed and
+ *  the watermark records the truncated sweep as complete. */
+async function podExists(fetchImpl: typeof fetch, url: string, pm: string, id: bigint): Promise<boolean> {
+  try {
+    return isTrue(await ethCall(fetchImpl, url, pm, SEL.ownerOf + word(id)))
+  } catch (e) {
+    if (e instanceof RpcRevertError) return false
+    throw e
+  }
+}
+
+/** Highest minted podId, by doubling from `knownMin` until a miss, then bisecting.
+ *
+ *  PodManager V2 exposes no totalSupply/tokenOfOwnerByIndex — probed live on Base
+ *  (0x5C563f85…): supportsInterface(ERC721Enumerable) is false and both getters revert, so
+ *  the ceiling has to be found rather than read. ~2·log2(N) eth_calls from scratch (24 for
+ *  N≈3.7k); from a watermark it is normally ONE call that finds nothing new.
+ *
+ *  Assumes ids are minted sequentially with no holes at the boundary — true for this
+ *  contract (ids 1…N dense, spot-checked on Base) and for every sequential ERC721 mint.
+ *  A burn ABOVE the last live id would understate the ceiling by that gap; `knownMin` is
+ *  never advanced past a verified-existing id, so the next cycle re-probes from there. */
+export async function highestMintedPodId(
+  fetchImpl: typeof fetch, url: string, pm: string, knownMin = 0n,
+): Promise<bigint> {
+  let lo = knownMin              // exists (or 0 = "nothing minted yet")
+  let hi = knownMin + 1n
+  while (await podExists(fetchImpl, url, pm, hi)) {
+    lo = hi
+    hi = knownMin + (hi - knownMin) * 2n
+    if (hi - knownMin > MAX_POD_ID_PROBE) throw new Error(`ownerOf sweep: podId probe passed ${MAX_POD_ID_PROBE} — refusing to keep doubling`)
+  }
+  while (hi - lo > 1n) { // invariant: lo exists, hi does not
+    const mid = (lo + hi) / 2n
+    if (await podExists(fetchImpl, url, pm, mid)) lo = mid
+    else hi = mid
+  }
+  return lo
+}
+
+/** Pod ids in [fromId, toId] currently owned by `wallet`, read as ownerOf views through
+ *  Multicall3 (⌈N/200⌉ requests).
+ *
+ *  WHY THIS EXISTS ALONGSIDE discoverOwnedPods: enumerating from Transfer logs forces a
+ *  ~4M-block eth_getLogs backfill on a first run, which is the single most fragile read the
+ *  node makes — free tiers cap the block range (one caps it at TEN blocks, making the scan
+ *  arithmetically impossible) or refuse archive depth outright, and every such failure
+ *  blocks ALL owner claims. Ownership is a view: sweeping ids costs ~19 requests for the
+ *  whole chain instead of 445, needs no archive access and no wide ranges.
+ *
+ *  It is also closer to what the claim pays out on. Logs answer "ever received", which the
+ *  cache never un-learns; ownerOf answers "owns right now", which is what
+ *  claimPodOwnerEmissions checks. Pods that left the wallet simply stop being added. */
+export async function discoverOwnedPodsByOwnerOf(
+  fetchImpl: typeof fetch, url: string, pm: string, wallet: string, fromId: bigint, toId: bigint,
+): Promise<bigint[]> {
+  if (toId < fromId) return []
+  const ids: bigint[] = []
+  for (let id = fromId; id <= toId; id++) ids.push(id)
+  const res = await tryAggregate(url, ids.map((id) => ({ target: pm, callData: SEL.ownerOf + word(id) })), { fetchImpl })
+  const want = addrWord(wallet) // 32-byte word, no 0x — the shape ownerOf returns
+  const strip = (h: string): string => h.replace(/^0x/, '').toLowerCase()
+  // A failed inner call is an unminted id (allowFailure keeps the batch alive) — the only
+  // revert ownerOf has. A transport failure never reaches here: tryAggregate throws.
+  return ids.filter((_, i) => res[i].success && strip(res[i].returnData) === want)
+}
+
 /** Cache callbacks so the orchestrator is testable without the DB. */
 export interface PodCache {
   getKnownPods(): string[]
   addPods(ids: string[]): void
+  /** Watermark for the ownerOf sweep: the highest podId already swept, or null/absent on a
+   *  cache that predates it. OPTIONAL so every existing stand-in (tests, older callers)
+   *  keeps compiling; a cache without it just re-sweeps from id 1 each cycle — correct,
+   *  merely wasteful, and never a silent skip. */
+  getLastPodId?(): bigint | null
+  setLastPodId?(id: bigint): void
   getLastBlock(): bigint | null
   setLastBlock(b: bigint): void
 }
@@ -257,14 +394,34 @@ export async function queryClaimableOnchain(
   const lookback = BigInt(deps.lookbackEpochs ?? 3)
   const floor = BigInt(deps.floorEpoch ?? 1)
 
-  // 1. incremental pod discovery
-  const latest = BigInt((await rpcCall(fetchImpl, rpcUrl, 'eth_blockNumber', [])) as string)
-  const last = cache.getLastBlock()
-  const from = last !== null ? last + 1n : (latest > INITIAL_LOOKBACK_BLOCKS ? latest - INITIAL_LOOKBACK_BLOCKS : 0n)
-  if (from <= latest) {
-    const fresh = await discoverOwnedPods(fetchImpl, rpcUrl, pm, wallet, from, latest)
-    if (fresh.length) cache.addPods(fresh.map(String))
-    cache.setLastBlock(latest)
+  // 1. incremental pod discovery — ownerOf sweep first, Transfer logs as the fallback.
+  //
+  // The log scan needs a ~4M-block eth_getLogs backfill on a first run, and that read is
+  // where owner claims die: a provider capping the block range (one free tier caps it at
+  // TEN blocks) or refusing archive depth fails the whole scan, every cycle, so NOTHING is
+  // ever claimed. The sweep asks the chain who owns each pod instead — plain views, no
+  // history, ~19 requests where the log path needs 445. Logs stay as the fallback for a
+  // chain without Multicall3, where the sweep would cost one request per pod.
+  const canSweep = await isMulticallAvailable(rpcUrl, { fetchImpl })
+  if (canSweep) {
+    const lastId = cache.getLastPodId?.() ?? 0n
+    const maxId = await highestMintedPodId(fetchImpl, rpcUrl, pm, lastId)
+    if (maxId > lastId) {
+      const fresh = await discoverOwnedPodsByOwnerOf(fetchImpl, rpcUrl, pm, wallet, lastId + 1n, maxId)
+      if (fresh.length) cache.addPods(fresh.map(String))
+      // Advance only after the sweep returns: a throw above leaves the watermark where it
+      // was, so the next cycle re-covers the same ids instead of skipping them forever.
+      cache.setLastPodId?.(maxId)
+    }
+  } else {
+    const latest = BigInt((await rpcCall(fetchImpl, rpcUrl, 'eth_blockNumber', [])) as string)
+    const last = cache.getLastBlock()
+    const from = last !== null ? last + 1n : (latest > INITIAL_LOOKBACK_BLOCKS ? latest - INITIAL_LOOKBACK_BLOCKS : 0n)
+    if (from <= latest) {
+      const fresh = await discoverOwnedPods(fetchImpl, rpcUrl, pm, wallet, from, latest)
+      if (fresh.length) cache.addPods(fresh.map(String))
+      cache.setLastBlock(latest)
+    }
   }
 
   // 2. current epoch (veReppo is the authoritative source PodManager defers to)

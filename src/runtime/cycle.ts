@@ -20,6 +20,7 @@ import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 import { isRobinhood } from '../reppo/network.js'
+import { advertisedRangeCap } from '../reppo/emissionsOnchain.js'
 
 /** Top up the wallet's veREPPO toward config.stake.lockReppo at the START of a cycle, on the
  *  HOT-RELOADED config — no restart needed. Locks the difference (an additional lockup) when
@@ -249,6 +250,15 @@ export interface CycleDeps {
  *  worse than the bare error, and the body (see emissionsOnchain.errorBody) is now in the
  *  message for anything this doesn't cover. */
 export function scanFailureHint(why: string): string {
+  // A provider that names a block-range number is capping WIDTH, and it often says so in
+  // tier language ("Under the Free tier plan ... up to a 10 block range. Upgrade to PAYG").
+  // That wording used to fall into the archive-depth branch below and sent an operator
+  // shopping for an archive endpoint — which fixes nothing, because depth was never the
+  // problem. The stated number decides, so this branch must stay ahead of that one.
+  const cap = advertisedRangeCap(why)
+  if (cap !== null) {
+    return ` — the RPC provider caps eth_getLogs at ${cap} blocks per request. That is a WIDTH limit, not archive depth: the scan already narrows its span to whatever a provider advertises, but a cap this small cannot cover the ~4M-block first scan in a sane number of requests. Use an endpoint with a wider eth_getLogs range (a fallback URL and REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this — the floor bounds epochs, not blocks)`
+  }
   if (/\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b/i.test(why)) {
     return ' — the RPC provider is refusing historical depth, not width: the first scan reads ~4M blocks back (~3 months of Base) and free tiers often cap archive access. Use an archive-capable endpoint; a fallback URL and REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this (the floor bounds epochs, not blocks)'
   }
