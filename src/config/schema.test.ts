@@ -173,3 +173,30 @@ describe('StrategyConfig defaultModel', () => {
     expect(cfg.defaultModel).toBeUndefined()
   })
 })
+
+describe('evalWork config block (eval-judge-v1)', () => {
+  const base = {
+    horizonDays: 2, cadenceHours: 1,
+    stake: { lockReppo: 0, lockDurationDays: 0 },
+    budget: { voteRateMaxPerCycle: 10, mintReppoMax: 100 },
+    datanets: {},
+  }
+
+  it('a config written before evalWork existed parses with the lane OFF', () => {
+    const cfg = StrategyConfigSchema.parse(base)
+    expect(cfg.evalWork).toEqual({ enabled: false, maxConcurrent: 2, maxJudgeCallsPerDay: 200 })
+  })
+
+  it('a partial evalWork object fills inner defaults', () => {
+    const cfg = StrategyConfigSchema.parse({ ...base, evalWork: { enabled: true } })
+    expect(cfg.evalWork.enabled).toBe(true)
+    expect(cfg.evalWork.maxConcurrent).toBe(2)
+    expect(cfg.evalWork.maxJudgeCallsPerDay).toBe(200)
+  })
+
+  it('rejects out-of-bounds values (hot-reload falls back to last-good)', () => {
+    expect(() => StrategyConfigSchema.parse({ ...base, evalWork: { maxConcurrent: 0 } })).toThrow()
+    expect(() => StrategyConfigSchema.parse({ ...base, evalWork: { maxConcurrent: 11 } })).toThrow()
+    expect(() => StrategyConfigSchema.parse({ ...base, evalWork: { maxJudgeCallsPerDay: 0 } })).toThrow()
+  })
+})

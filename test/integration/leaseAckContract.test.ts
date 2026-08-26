@@ -80,7 +80,10 @@ describe('lease/ack contract fixtures', () => {
     const calls: { url: string; headers: Record<string, string> | undefined }[] = []
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(url), headers: init?.headers as Record<string, string> | undefined })
-      return new Response(read('corpus-snapshot.json'), { status: 200 })
+      // lease gets an empty 204; the corpus URL gets the snapshot body
+      return String(url).includes(':lease')
+        ? new Response(null, { status: 204 })
+        : new Response(read('corpus-snapshot.json'), { status: 200 })
     })
     const client = new GatewayClient({ baseUrl: 'https://gw', agentId: 'agent-7', apiKey: 'secret', fetchImpl })
     await client.lease()

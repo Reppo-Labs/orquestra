@@ -18,7 +18,9 @@ const SYSTEM =
   'You are an independent evaluation judge on the Reppo network. You score an AI agent\'s ' +
   `output 1-10 against each stated criterion, grounded in the evidence provided. ${EVAL_INJECTION_GUARD}`
 
-const verdictSchema = z.object({
+/** Exported for direct schema tests — the judge tests mock the generator, and a
+ *  mocked generator can never falsify the schema itself. */
+export const verdictSchema = z.object({
   verdicts: z.array(
     z.object({
       criterion: z.string(),
@@ -62,16 +64,31 @@ export async function judgeEval(
   // at settlement and count against this node — strip it here instead).
   const allowed = new Set(evidence.map((e) => e.pod.podId))
   const byCriterion = new Map(out.verdicts.map((v) => [v.criterion.trim().toLowerCase(), v]))
+  // Positional fallback is only sound when the model answered EXACTLY one
+  // verdict per requested criterion — then order carries the pairing even if
+  // the model rephrased the criterion text. With any other count, index i may
+  // belong to a different criterion, and silently relabeling it would attach
+  // score/critique/citations to the wrong claim. Fail instead (routes to
+  // :fail via the worker — observable, and the retry may parse cleanly).
+  const positionalOk = out.verdicts.length === request.criteria.length
+  let strippedCitations = 0
   const verdicts: CriterionVerdict[] = request.criteria.map((criterion, i) => {
-    const v = byCriterion.get(criterion.trim().toLowerCase()) ?? out.verdicts[i]
+    const matched = byCriterion.get(criterion.trim().toLowerCase())
+    const v = matched ?? (positionalOk ? out.verdicts[i] : undefined)
     if (!v) throw new Error(`judge omitted criterion: ${criterion}`)
-    return {
-      criterion,
-      score: v.score,
-      critique: v.critique,
-      citations: (v.citations ?? []).filter((c) => allowed.has(c)),
+    if (!matched) {
+      console.error(`orquestra: evalwork: judge rephrased criterion ${i + 1} ("${v.criterion.slice(0, 60)}") — paired by position`)
     }
+    const raw = v.citations ?? []
+    const citations = raw.filter((c) => allowed.has(c))
+    strippedCitations += raw.length - citations.length
+    return { criterion, score: v.score, critique: v.critique, citations }
   })
+  if (strippedCitations > 0) {
+    // A model that fabricates pod ids is a quality defect the operator should
+    // see (and maybe switch models over) — correct it, but never invisibly.
+    console.error(`orquestra: evalwork: stripped ${strippedCitations} fabricated citation(s) from judge output`)
+  }
   const cited = verdicts.some((v) => v.citations.length > 0)
   return { verdicts, evidenceBasis: cited ? 'citations' : 'model-judgment' }
 }

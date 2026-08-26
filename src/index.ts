@@ -487,6 +487,11 @@ async function start(): Promise<void> {
       })
       console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl} (enabled=${wiring.config.evalWork.enabled})`)
     }
+  } else if (config.evalWork.enabled) {
+    // The config toggle without the env var is a fully inert combination —
+    // say so once at startup instead of leaving the operator to wonder why
+    // enabling eval work does nothing.
+    console.error('orquestra: evalwork enabled in config but EVAL_GATEWAY_URL is not set — eval work will not run')
   }
 
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
@@ -505,7 +510,15 @@ async function start(): Promise<void> {
       console.error(`orquestra: draining in-flight cycle (up to ${SHUTDOWN_DRAIN_MS / 1000}s)…`)
       await Promise.race([inflight, new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS))])
     }
-    if (evalWorker) await evalWorker.stop().catch(() => {})
+    if (evalWorker) {
+      // Same drain discipline as the scheduler above: bounded, so a hung
+      // gateway call cannot push the process past docker's SIGTERM grace
+      // period into an unclean SIGKILL.
+      await Promise.race([
+        evalWorker.stop().catch(() => {}),
+        new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS)),
+      ])
+    }
     if (dash) await dash.close().catch(() => {})
     process.exit(0)
   }

@@ -120,3 +120,161 @@ describe('startEvalWorker', () => {
     await w.stop() // reaching here without an unhandled rejection is the assertion
   })
 })
+
+// ── Review-driven regression tests (PR #205) ─────────────────────────────────
+
+const deferred = <T,>() => {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((r) => (resolve = r))
+  return { promise, resolve }
+}
+
+describe('startEvalWorker (review regressions)', () => {
+  it('a throwing record() never escapes — the node survives (critical #1)', async () => {
+    const client = makeClient([job('j1'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        record: () => {
+          throw new Error('SQLITE_BUSY')
+        },
+      }),
+    )
+    await waitFor(() => client.completed.length === 1)
+    await w.stop() // no unhandled rejection = the assertion
+    expect(client.completed).toHaveLength(1)
+    // record threw AFTER complete succeeded: gateway must NOT get a :fail
+    expect(client.failed).toHaveLength(0)
+  })
+
+  it('no :fail after a successful :complete when bookkeeping errors', async () => {
+    const client = makeClient([job('j1'), null])
+    let calls = 0
+    const w = startEvalWorker(
+      deps({
+        client,
+        record: () => {
+          calls++
+          if (calls === 1) throw new Error('disk full')
+        },
+      }),
+    )
+    await waitFor(() => client.completed.length === 1)
+    await w.stop()
+    expect(client.failed).toHaveLength(0)
+  })
+
+  it(':complete retries transient failures before giving up (idempotent resubmit)', async () => {
+    const client = makeClient([job('j1'), null])
+    const complete = client.complete as ReturnType<typeof vi.fn>
+    complete.mockRejectedValueOnce(new Error('ECONNRESET'))
+    const w = startEvalWorker(deps({ client }))
+    await waitFor(() => client.completed.length === 1)
+    await w.stop()
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(client.failed).toHaveLength(0)
+  })
+
+  it('budget exhausts while a slow judge is in flight: in-flight completes, no further leasing', async () => {
+    // reserve() runs synchronously inside serve() before its first await, so
+    // the loop's next hasBudget() check already sees the spent slot — a second
+    // job is never even leased (no lease/reserve race to burn jobs on).
+    const gate = deferred<void>()
+    const client = makeClient([job('j1'), job('j2'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        budget: budget(1),
+        judge: async (req) => {
+          await gate.promise
+          return {
+            verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
+            evidenceBasis: 'model-judgment' as const,
+          }
+        },
+      }),
+    )
+    // j1 is being served (corpus fetched) and holds the only budget slot
+    await waitFor(() => (client.fetchCorpus as ReturnType<typeof vi.fn>).mock.calls.length === 1)
+    const leaseCallsAtExhaustion = (client.lease as ReturnType<typeof vi.fn>).mock.calls.length
+    await new Promise((r) => setTimeout(r, 30))
+    expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBe(leaseCallsAtExhaustion)
+    expect(client.failed).toHaveLength(0) // nothing leased-then-refused
+    gate.resolve()
+    await waitFor(() => client.completed.length === 1)
+    await w.stop()
+    expect(client.completed).toHaveLength(1) // in-flight completed despite exhaustion
+  })
+
+  it('stop() drains an in-flight job before resolving', async () => {
+    const gate = deferred<void>()
+    const client = makeClient([job('slow'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        judge: async (req) => {
+          await gate.promise
+          return {
+            verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
+            evidenceBasis: 'model-judgment' as const,
+          }
+        },
+      }),
+    )
+    await waitFor(() => (client.fetchCorpus as ReturnType<typeof vi.fn>).mock.calls.length === 1)
+    const stopping = w.stop()
+    gate.resolve()
+    await stopping
+    expect(client.completed).toHaveLength(1)
+  })
+
+  it('respects maxConcurrent: never more than N judges in flight', async () => {
+    const gates = [deferred<void>(), deferred<void>(), deferred<void>()]
+    let running = 0
+    let peak = 0
+    let started = 0
+    const client = makeClient([job('a'), job('b'), job('c'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        getConfig: () => ({ enabled: true, maxConcurrent: 2 }),
+        judge: async (req) => {
+          const gate = gates[started++]!
+          running++
+          peak = Math.max(peak, running)
+          await gate.promise
+          running--
+          return {
+            verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
+            evidenceBasis: 'model-judgment' as const,
+          }
+        },
+      }),
+    )
+    await waitFor(() => started === 2)
+    // capacity reached: give the loop room to (incorrectly) start a third
+    await new Promise((r) => setTimeout(r, 30))
+    expect(peak).toBe(2)
+    gates[0]!.resolve()
+    await waitFor(() => started === 3)
+    gates[1]!.resolve()
+    gates[2]!.resolve()
+    await waitFor(() => client.completed.length === 3)
+    await w.stop()
+    expect(peak).toBe(2)
+  })
+
+  it('a job leased during shutdown is handed back via :fail, not ghosted', async () => {
+    const leaseGate = deferred<LeasedJob>()
+    const client = makeClient([])
+    ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(() => leaseGate.promise)
+    const w = startEvalWorker(deps({ client }))
+    await waitFor(() => (client.lease as ReturnType<typeof vi.fn>).mock.calls.length === 1)
+    const stopping = w.stop()
+    leaseGate.resolve(job('late'))
+    await stopping
+    expect(client.failed).toHaveLength(1)
+    expect(client.failed[0]).toMatchObject({ id: 'late', reason: 'node shutting down' })
+    expect(client.completed).toHaveLength(0)
+  })
+})

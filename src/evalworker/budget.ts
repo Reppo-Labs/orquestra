@@ -30,8 +30,16 @@ export class EvalBudget {
       if (typeof raw.day === 'string' && typeof raw.used === 'number' && raw.used >= 0) {
         return { day: raw.day, used: raw.used }
       }
-    } catch {
-      // missing or corrupt → start fresh (cost bound only; see header)
+      // Parsed but wrong shape: same reset, same visibility requirement.
+      console.error(`orquestra: evalwork: budget file ${this.file} had unexpected shape — resetting day counter (cap may be spent twice today)`)
+    } catch (e) {
+      // Missing file is the normal first run; anything else (corrupt JSON,
+      // EACCES…) still self-heals — cost bound, not fund custody — but NEVER
+      // silently: a disk flipping this file daily would otherwise double the
+      // operator's spend every day with zero trace.
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error(`orquestra: evalwork: budget file ${this.file} unreadable (${(e as Error).message}) — resetting day counter (cap may be spent twice today)`)
+      }
     }
     return { day: utcDay(this.now()), used: 0 }
   }

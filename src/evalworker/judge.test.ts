@@ -76,3 +76,52 @@ describe('judgeEval', () => {
     await expect(judgeEval({} as never, request, evidence)).rejects.toThrow(/omitted criterion/)
   })
 })
+
+describe('verdictSchema (direct — mocks cannot falsify the schema)', () => {
+  it('accepts a valid verdict set', async () => {
+    const { verdictSchema } = await import('./judge.js')
+    const r = verdictSchema.safeParse({
+      verdicts: [{ criterion: 'c', score: 7, critique: 'ok', citations: ['pod:1'] }],
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects out-of-range and non-integer scores', async () => {
+    const { verdictSchema } = await import('./judge.js')
+    expect(verdictSchema.safeParse({ verdicts: [{ criterion: 'c', score: 11, critique: 'x', citations: [] }] }).success).toBe(false)
+    expect(verdictSchema.safeParse({ verdicts: [{ criterion: 'c', score: 0, critique: 'x', citations: [] }] }).success).toBe(false)
+    expect(verdictSchema.safeParse({ verdicts: [{ criterion: 'c', score: 7.5, critique: 'x', citations: [] }] }).success).toBe(false)
+  })
+
+  it('defaults missing citations to empty and requires a critique', async () => {
+    const { verdictSchema } = await import('./judge.js')
+    const ok = verdictSchema.safeParse({ verdicts: [{ criterion: 'c', score: 3, critique: 'why' }] })
+    expect(ok.success && ok.data.verdicts[0]?.citations).toEqual([])
+    expect(verdictSchema.safeParse({ verdicts: [{ criterion: 'c', score: 3, critique: '' }] }).success).toBe(false)
+  })
+})
+
+describe('judgeEval criterion pairing (review regression)', () => {
+  it('pairs by position when the model rephrased but counts match', async () => {
+    mockGen.mockResolvedValueOnce({
+      verdicts: [
+        { criterion: 'Is the entry historically profitable?', score: 7, critique: 'a', citations: [] },
+        { criterion: 'Does sizing survive an adverse candle?', score: 4, critique: 'b', citations: [] },
+      ],
+    })
+    const out = await judgeEval({} as never, request, [])
+    expect(out.verdicts.map((v) => v.score)).toEqual([7, 4])
+    expect(out.verdicts[0]?.criterion).toBe('entry historically profitable')
+  })
+
+  it('throws when rephrased AND counts mismatch — never mispairs', async () => {
+    mockGen.mockResolvedValueOnce({
+      verdicts: [
+        { criterion: 'completely different wording', score: 9, critique: 'a', citations: [] },
+        { criterion: 'sizing survives adverse candle', score: 4, critique: 'b', citations: [] },
+        { criterion: 'a third invented criterion', score: 2, critique: 'c', citations: [] },
+      ],
+    })
+    await expect(judgeEval({} as never, request, [])).rejects.toThrow(/omitted criterion/)
+  })
+})
