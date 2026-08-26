@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { drainErrorSignatures, resetErrorBuffer } from '../telemetry/errorBuffer.js'
 import { runCycle, scanFailureHint, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
@@ -1296,6 +1297,17 @@ describe('scanFailureHint — the claim-skip row names a remedy that can actuall
     expect(h).toMatch(/REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this/)
   })
 
+  it('calls a tier-worded BLOCK-RANGE cap what it is: width, not archive depth', () => {
+    // Live report: the free tier states its cap ("up to a 10 block range") in the same
+    // words as an archive limit ("Free tier plan", "Upgrade to PAYG"), so the archive
+    // branch claimed it. The operator was told to buy an archive endpoint for a problem
+    // archive access does not touch. The stated number has to win.
+    const h = scanFailureHint('RPC eth_getLogs HTTP 400 — {"code":-32600,"message":"Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Upgrade to PAYG for expanded block range."}')
+    expect(h).toMatch(/caps eth_getLogs at 10 blocks/)
+    expect(h).toMatch(/WIDTH limit, not archive depth/)
+    expect(h).not.toMatch(/archive-capable/)
+  })
+
   it('says a healthy vote cycle does not clear a credentials failure', () => {
     // The confusing part of the report: "voting is healthy" reads as "the RPC is fine".
     const h = scanFailureHint('RPC eth_getLogs HTTP 401 — invalid api key')
@@ -1318,5 +1330,206 @@ describe('scanFailureHint — the claim-skip row names a remedy that can actuall
     // in the message anyway for anything this does not cover.
     expect(scanFailureHint('socket hang up')).toBe('')
     expect(scanFailureHint('all 2 configured RPC endpoints failed — a: timeout; b: timeout')).toBe('')
+  })
+})
+
+// ── platform (webapp indexing) failures: on-chain success, invisible in the UI ──────
+// Both of these are non-fatal by design — the chain already recorded the action. The bug
+// was that "non-fatal" meant stderr only, so two operator reports ("my pods don't show
+// up", "my votes don't show up") arrived against nodes whose activity logs said every
+// mint and vote was clean, with no evidence to investigate.
+describe('runCycle platform-registration failures', () => {
+  const mintOnly = StrategyConfigSchema.parse({
+    horizonDays: 30, cadenceHours: 6,
+    stake: { lockReppo: 0, lockDurationDays: 30 },
+    budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+    datanets: { '9': { vote: false, mint: true, strictness: 'aggressive', adapter: 'hyperliquid' } },
+  })
+
+  it('persists the platform response when a minted pod was never registered', async () => {
+    const platformFailure = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: vi.fn(), platformFailure }),
+      executor: {
+        executeVote: vi.fn(),
+        executeMint: vi.fn(async () => ({
+          ok: true, status: 'executed', txHash: '0xmint', podId: '3750',
+          podMetadata: { published: false, stage: 'register', httpStatus: 500, error: { code: 'PLATFORM_API_ERROR', message: '{"error":"Internal Server Error"}' } },
+        })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(mintOnly, 'c-mintplat', d)
+    expect(platformFailure).toHaveBeenCalledTimes(1)
+    expect(platformFailure.mock.calls[0][0]).toMatchObject({
+      kind: 'mint', datanetId: '9', podId: '3750', txHash: '0xmint',
+      stage: 'register', httpStatus: 500, code: 'PLATFORM_API_ERROR',
+      message: '{"error":"Internal Server Error"}',
+    })
+  })
+
+  it('keeps the mint status executed but flags the row as not visible', async () => {
+    // Status must NOT flip to 'error': the tx is final and the fee is spent, so an error
+    // status would poison mint dedup and re-mint a pod that already exists on-chain.
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record, platformFailure: vi.fn() }),
+      executor: {
+        executeVote: vi.fn(),
+        executeMint: vi.fn(async () => ({
+          ok: true, status: 'executed', txHash: '0xmint', podId: '3750',
+          podMetadata: { published: false, stage: 'ipfs-pin', error: { message: 'could not reach Pinata' } },
+        })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(mintOnly, 'c-mintplat2', d)
+    const mint = record.mock.calls.map((c) => c[0]).find((e) => e.kind === 'mint')
+    expect(mint.status).toBe('executed')
+    expect(mint.detail).toMatch(/NOT visible in the webapp/)
+    expect(d.dedup.recordMint).toHaveBeenCalled() // still deduped — the pod exists
+  })
+
+  it('records nothing extra when the pod published cleanly', async () => {
+    const platformFailure = vi.fn()
+    const record = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record, platformFailure }),
+      executor: {
+        executeVote: vi.fn(),
+        executeMint: vi.fn(async () => ({
+          ok: true, status: 'executed', txHash: '0xmint', podId: '3750',
+          podMetadata: { published: true, stage: 'register', httpStatus: 200 },
+        })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(mintOnly, 'c-mintok', d)
+    expect(platformFailure).not.toHaveBeenCalled()
+    expect(record.mock.calls.map((c) => c[0]).find((e) => e.kind === 'mint').detail).toBeUndefined()
+  })
+
+  it('persists the platform response when a cast vote could not be indexed', async () => {
+    const platformFailure = vi.fn()
+    const voteOnly = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '2': { vote: true, mint: false, strictness: 'aggressive' } },
+    })
+    const d = deps({
+      activity: fakeActivity({
+        record: vi.fn(),
+        platformFailure,
+        registerVoteOnPlatform: vi.fn(async () => {
+          throw Object.assign(new Error('platform registerVote 404: {"error":"Pod not found"}'), {
+            stage: 'register', httpStatus: 404,
+          })
+        }),
+      }),
+    })
+    await runCycle(voteOnly, 'c-voteplat', d)
+    // fire-and-forget: the rejection lands on a later microtask than runCycle's return
+    await new Promise((r) => setTimeout(r, 0))
+    expect(platformFailure).toHaveBeenCalledTimes(1)
+    expect(platformFailure.mock.calls[0][0]).toMatchObject({
+      kind: 'vote', datanetId: '2', podId: 'p1', txHash: '0xvote',
+      stage: 'register', httpStatus: 404,
+      message: 'platform registerVote 404: {"error":"Pod not found"}',
+    })
+  })
+})
+
+describe('runCycle error-signature capture (telemetry)', () => {
+  beforeEach(() => resetErrorBuffer())
+
+  it('fingerprints a datanet failure that the isolation boundary swallows', async () => {
+    // The per-datanet catch is what keeps one bad datanet from killing the cycle — and is
+    // therefore the last place the stack exists. Before this, the fault reached telemetry
+    // as counts.errors+1 and nothing else.
+    const d = deps({
+      reads: fakeReads({ getRubric: vi.fn(async () => { throw new TypeError('rubric parse blew up') }) }),
+    })
+    await runCycle(config, 'c-sig', d)
+    const sigs = drainErrorSignatures()
+    expect(sigs.length).toBeGreaterThan(0)
+    expect(sigs[0].errorClass).toBe('TypeError')
+    expect(JSON.stringify(sigs)).not.toContain('rubric parse blew up') // message never travels
+  })
+
+  it('fingerprints a failed owner-emissions scan — the silent-unclaimed-money path', async () => {
+    const d = deps({
+      reads: fakeReads({ getEmissionsDue: async () => { throw new RangeError('eth_getLogs range cap') } }),
+    })
+    const cfg = StrategyConfigSchema.parse({ ...config, claimEmissions: true })
+    await runCycle(cfg, 'c-sig2', d)
+    expect(drainErrorSignatures().some((s) => s.errorClass === 'RangeError')).toBe(true)
+  })
+
+  it('a clean cycle produces no signatures (guards against a vacuous capture)', async () => {
+    await runCycle(config, 'c-sig3', deps())
+    expect(drainErrorSignatures()).toEqual([])
+  })
+})
+
+describe('runCycle robinhood voting-power mirror', () => {
+  // VeReppoRBV1 is a READ-ONLY MIRROR of Base veREPPO. A wallet can hold thousands of
+  // veREPPO on Base and still read 0 here, and the node used to skip voting forever while
+  // telling the operator to go sync it in a browser. Live: 2,862 veREPPO on Base, 0 on the
+  // mirror, 17 skips, zero votes ever cast.
+  const budget = (votingPowerWei: bigint) => ({
+    votingPowerWei, votesCastedWei: 0n, remainingWei: votingPowerWei,
+    epoch: 136, epochEndsAtSec: Math.floor(Date.now() / 1000) + 3600,
+  })
+
+  /** Wallet reads whose power is 0 until a sync happens, then non-zero. */
+  const healingWallet = (onSync: () => void) => {
+    let synced = false
+    return {
+      wallet: {
+        address: '0xwallet',
+        readTokenBalance: async () => 0n,
+        getVoterEmissionsDue: async () => [],
+        getVotePowerBudget: async () => budget(synced ? 2_862n * 10n ** 18n : 0n),
+      },
+      getEpochVoteVolume: async () => ({ epoch: 136, totalRaw: 0n }),
+      _sync: () => { synced = true; onSync() },
+    }
+  }
+
+  it('mirrors on a zero reading and RE-READS, so the cycle does not run on the stale 0', async () => {
+    const onchain = healingWallet(() => {})
+    const syncVotingPower = vi.fn(async () => { onchain._sync(); return true })
+    const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'], syncVotingPower })
+    const report = await runCycle(config, 'c-sync', d)
+    expect(syncVotingPower).toHaveBeenCalledTimes(1)
+    // The re-read is what matters: without it the cycle keeps the 0 it just fixed.
+    expect(report.votePower?.votingPowerWei).toBe((2_862n * 10n ** 18n).toString())
+  })
+
+  it('does NOT sync when the wallet already has power (no needless API call)', async () => {
+    const syncVotingPower = vi.fn(async () => true)
+    const onchain = {
+      wallet: {
+        address: '0xwallet', readTokenBalance: async () => 0n, getVoterEmissionsDue: async () => [],
+        getVotePowerBudget: async () => budget(500n * 10n ** 18n),
+      },
+      getEpochVoteVolume: async () => ({ epoch: 136, totalRaw: 0n }),
+    }
+    await runCycle(config, 'c-nosync', deps({ onchain: onchain as unknown as CycleDeps['onchain'], syncVotingPower }))
+    expect(syncVotingPower).not.toHaveBeenCalled()
+  })
+
+  it('keeps voting when the mirror is unavailable — degrades to the old behaviour', async () => {
+    // The sync runs only when power ALREADY reads 0, so a failure must cost nothing
+    // beyond what the node had before the sync existed.
+    const onchain = healingWallet(() => {})
+    const syncVotingPower = vi.fn(async () => false) // e.g. creds missing, or the API 500'd
+    const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'], syncVotingPower })
+    await expect(runCycle(config, 'c-syncfail', d)).resolves.toBeDefined()
+    expect(syncVotingPower).toHaveBeenCalledTimes(1)
+  })
+
+  it('is a no-op on a wiring that provides no sync (every non-robinhood node)', async () => {
+    const onchain = healingWallet(() => {})
+    const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'] }) // no syncVotingPower
+    await expect(runCycle(config, 'c-nosyncdep', d)).resolves.toBeDefined()
   })
 })

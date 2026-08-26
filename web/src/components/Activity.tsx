@@ -37,7 +37,15 @@ const detail = (r: ActivityRow) =>
     // per-datanet emission-yield summary (src/voter/yield.ts formatYieldLine).
     // eval rows are evalwork breadcrumbs ("judged 3 criteria (citations)"); podId carries the jobId.
     : r.kind === 'skip' || r.kind === 'grant' || r.kind === 'stake' || r.kind === 'info' || r.kind === 'eval' ? (r.reason ?? '—')
-    : `epoch ${r.epoch} · ${claimAmount(r)}`
+    // claim: what it PAID when it worked, and WHY when it did not.
+    //
+    // This branch used to render claimAmount() unconditionally, so a failed claim showed
+    // "epoch 132 · nothing claimed" — which only says no amount was recorded, and is
+    // trivially true of every failure. The executor's reason was stored on the row the
+    // whole time and simply never displayed. A node whose wallet had run out of gas spent
+    // a week reporting 14 identical "nothing claimed" errors per cycle while the row it
+    // was rendering held "claim-emissions tx failed to submit".
+    : `epoch ${r.epoch} · ${r.status === 'executed' ? claimAmount(r) : (r.detail || claimAmount(r))}`
 
 /** Pod column: prefer the human-readable name; fall back to the id for entries
  *  logged before names were recorded. */

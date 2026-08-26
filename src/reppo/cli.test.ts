@@ -142,3 +142,47 @@ describe('grantAccessArgs', () => {
     }
   })
 })
+
+describe('parseChainResult podMetadata (mint-pod Phase 2)', () => {
+  // The field the node used to DROP. Dropping it made an on-chain-successful mint whose
+  // platform registration failed indistinguishable from one that published fine, which is
+  // exactly how pods went missing from the webapp with no trace on the node.
+  it('captures a failed platform registration with the platform status and body', () => {
+    const r = parseChainResult(JSON.stringify({
+      txHash: '0x1', gasEth: 0.01, podId: '508',
+      metadata: { published: false, stage: 'register', httpStatus: 500, error: { code: 'PLATFORM_API_ERROR', message: '{"error":"Internal Server Error"}' } },
+    }), () => {})
+    expect(r.podMetadata).toEqual({
+      published: false, stage: 'register', httpStatus: 500,
+      error: { code: 'PLATFORM_API_ERROR', message: '{"error":"Internal Server Error"}' },
+    })
+  })
+
+  it('captures an IPFS-pin failure, which never reaches the platform at all', () => {
+    const r = parseChainResult(JSON.stringify({
+      txHash: '0x1', gasEth: 0.01,
+      metadata: { published: false, stage: 'ipfs-pin', error: { code: 'IPFS_PIN_UNREACHABLE', message: 'could not reach Pinata' } },
+    }), () => {})
+    expect(r.podMetadata?.stage).toBe('ipfs-pin')
+    expect(r.podMetadata?.httpStatus).toBeUndefined()
+  })
+
+  it('records a published mint as published, carrying the dataset URI', () => {
+    const r = parseChainResult(JSON.stringify({
+      txHash: '0x1', gasEth: 0.01,
+      metadata: { published: true, stage: 'register', httpStatus: 200, datasetUri: 'https://ipfs.io/ipfs/Qm1' },
+    }), () => {})
+    expect(r.podMetadata).toEqual({ published: true, stage: 'register', httpStatus: 200, datasetUri: 'https://ipfs.io/ipfs/Qm1' })
+  })
+
+  it('is absent on non-mint results, so vote/claim/grant parsing is unchanged', () => {
+    expect(parseChainResult('{"txHash":"0x1","gasEth":0.001}', () => {}).podMetadata).toBeUndefined()
+  })
+
+  it('treats an unrecognised metadata shape as NOT published', () => {
+    // Fail toward "flag it for investigation". A future CLI shape read optimistically as
+    // published would silently restore the invisible-pod blind spot.
+    const r = parseChainResult('{"txHash":"0x1","gasEth":0.01,"metadata":{"ok":"yes"}}', () => {})
+    expect(r.podMetadata).toEqual({ published: false })
+  })
+})

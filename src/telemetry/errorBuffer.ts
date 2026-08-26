@@ -1,0 +1,81 @@
+// src/telemetry/errorBuffer.ts — the missing half of error telemetry.
+//
+// The node already counted errors (counts.errors) and already knew how to fingerprint one
+// (signature.ts), and the collector already validated and aggregated signatures. Nothing
+// ever connected them: the single production send call passed no options, so
+// `errorSignatures` defaulted to [] and every report shipped an empty array. Measured on
+// the live collector — 204 reports, 204 empty — while one install was recording ~10
+// errors per cycle that nobody could attribute to a line of code.
+//
+// This is that connection. Process-global on purpose, matching how telemetry is already
+// wired (the send path reads DATA_DIR directly rather than being injected): a cycle can
+// record from any depth without threading a collaborator through every call site, which
+// is what kept the capture from being added in the first place.
+//
+// Bounded and deduped. A node erroring in a loop produces the SAME signature repeatedly,
+// so dedup is what keeps the report under the collector's hard limit — and the limit is
+// hard: exceeding it rejects the whole report, counts included, so a broken node would
+// vanish from telemetry precisely when it mattered. Frequency is not lost by dedup;
+// counts.errors already carries the volume, and this carries the identity.
+import { toSignature, MAX_SIGNATURES, type ErrorSignature } from './signature.js'
+
+/** Insertion-ordered, deduped by (errorClass, frames). Module-level: one per process. */
+const buffer = new Map<string, ErrorSignature>()
+
+/** Dedup identity. MUST include the code: every reppo CLI failure surfaces through the
+ *  same `run (dist/reppo/cli.js:...)` frame, so a key of (class, frames) alone treats an
+ *  unfunded wallet, a missing subnet grant and an unnamed revert as ONE repeat of a
+ *  single fault and keeps only the first. That is exactly the merge the code field was
+ *  added to prevent, so omitting it here silently undoes the fix at the last step.
+ *
+ *  Found by running the built code end to end, not by a unit test: the buffer's own tests
+ *  use distinct stacks, and this bug is invisible unless the stacks are identical.
+ *
+ *  Delimiters are ASCII and visible on purpose. An earlier version used \x00 and \x01,
+ *  which work fine at runtime but make git classify this source file as BINARY, so the
+ *  whole module shows up as `Bin 0 -> 3378 bytes` in a diff and cannot be reviewed. */
+const keyOf = (s: ErrorSignature): string => [s.errorClass, s.code ?? '', ...s.frames].join(' | ')
+
+/** Fingerprint a thrown value and remember it for the next telemetry report.
+ *
+ *  NEVER throws. Every call site is already on a failure path — an exception here would
+ *  turn a handled, isolated error into an unhandled one, which is a strictly worse
+ *  outcome than losing a telemetry signature.
+ *
+ *  Once the buffer is full it stops accepting NEW signatures rather than evicting old
+ *  ones. First-seen wins deliberately: the earliest fault in a cycle is usually the cause
+ *  and the later ones its consequences, so evicting the oldest would systematically report
+ *  the symptom and drop the trigger. */
+export function recordErrorSignature(err: unknown): void {
+  try {
+    const sig = toSignature(err)
+    const key = keyOf(sig)
+    if (buffer.has(key)) return
+    if (buffer.size >= MAX_SIGNATURES) return
+    buffer.set(key, sig)
+  } catch {
+    // Telemetry must never be able to break a cycle.
+  }
+}
+
+/** Take everything collected so far and empty the buffer.
+ *
+ *  Drain-on-read, not copy-on-read: a report either carries a signature or leaves it for
+ *  the next one. Re-sending the same signature every cycle for the life of the process
+ *  would make a single transient fault look like a permanent one across the fleet. */
+export function drainErrorSignatures(): ErrorSignature[] {
+  const out = [...buffer.values()]
+  buffer.clear()
+  return out
+}
+
+/** Current contents without draining — for tests and the `telemetry` preview subcommand,
+ *  which must show what WOULD be sent without consuming it. */
+export function peekErrorSignatures(): ErrorSignature[] {
+  return [...buffer.values()]
+}
+
+/** Test hook: forget everything. */
+export function resetErrorBuffer(): void {
+  buffer.clear()
+}

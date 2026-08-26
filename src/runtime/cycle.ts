@@ -9,8 +9,10 @@ import type { BudgetLedger } from '../wallet/ledger.js'
 import type { ExecResult, VoteIntent, ClaimIntent } from '../wallet/intents.js'
 import type { ClaimableEmission, VotePowerBudget } from '../reppo/reader.js'
 import type { ActivityEntry } from '../dashboard/activityLog.js'
+import type { PlatformErrorEntry } from '../reppo/platformErrors.js'
 import type { VotePowerView } from '../dashboard/snapshot.js'
 import { redactSecrets } from '../util/redact.js'
+import { recordErrorSignature } from '../telemetry/errorBuffer.js'
 import { computeYield, formatYieldLine, type DatanetYield } from '../voter/yield.js'
 import { selectVotes } from '../voter/select.js'
 import { createVotePlanner } from '../voter/plan.js'
@@ -18,6 +20,7 @@ import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 import { isRobinhood } from '../reppo/network.js'
+import { advertisedRangeCap } from '../reppo/emissionsOnchain.js'
 
 /** Top up the wallet's veREPPO toward config.stake.lockReppo at the START of a cycle, on the
  *  HOT-RELOADED config — no restart needed. Locks the difference (an additional lockup) when
@@ -165,6 +168,11 @@ export interface ActivityStore {
   /** Register the on-chain vote with the Reppo platform API so the frontend can display
    *  it. Fire-and-forget: absence or failure never aborts the cycle. */
   registerVoteOnPlatform?(podId: string, txHash: string): Promise<void>
+  /** Persist a failed PLATFORM (webapp indexing) call — a mint or vote that landed
+   *  on-chain but never became visible in the UI. Separate from `record` because the
+   *  activity row is about the CHAIN and stays 'executed'; this is the evidence trail
+   *  for why the action is missing from the webapp. Never throws (see platformErrors.ts). */
+  platformFailure?(entry: PlatformErrorEntry): void
 }
 
 /** The per-datanet / per-cycle reads runCycle decides from — always available (each has
@@ -206,6 +214,16 @@ export interface CycleDeps {
   dedup: Dedup
   /** Activity log + per-cycle arming + platform vote registration. */
   activity: ActivityStore
+  /** Mirror the wallet's Base veREPPO voting power onto Robinhood Chain, resolving to
+   *  true when the mirror was (or already had been) updated.
+   *
+   *  Present ONLY on a robinhood node with platform agent credentials — everywhere else
+   *  voting power is read directly from the chain the node votes on and there is nothing
+   *  to mirror. Absence is the normal case and must never gate voting.
+   *
+   *  Never throws: this runs when power already reads 0, so the worst outcome of a failed
+   *  sync is the behaviour the node had before it existed. */
+  syncVotingPower?(): Promise<boolean>
   /** On-chain reads — absent as a unit on an RPC-less node. */
   onchain?: OnchainReads
   executor: WalletExecutor
@@ -232,6 +250,15 @@ export interface CycleDeps {
  *  worse than the bare error, and the body (see emissionsOnchain.errorBody) is now in the
  *  message for anything this doesn't cover. */
 export function scanFailureHint(why: string): string {
+  // A provider that names a block-range number is capping WIDTH, and it often says so in
+  // tier language ("Under the Free tier plan ... up to a 10 block range. Upgrade to PAYG").
+  // That wording used to fall into the archive-depth branch below and sent an operator
+  // shopping for an archive endpoint — which fixes nothing, because depth was never the
+  // problem. The stated number decides, so this branch must stay ahead of that one.
+  const cap = advertisedRangeCap(why)
+  if (cap !== null) {
+    return ` — the RPC provider caps eth_getLogs at ${cap} blocks per request. That is a WIDTH limit, not archive depth: the scan already narrows its span to whatever a provider advertises, but a cap this small cannot cover the ~4M-block first scan in a sane number of requests. Use an endpoint with a wider eth_getLogs range (a fallback URL and REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this — the floor bounds epochs, not blocks)`
+  }
   if (/\barchive\b|\bpaid\b|\bplan\b|\btier\b|\bupgrade\b/i.test(why)) {
     return ' — the RPC provider is refusing historical depth, not width: the first scan reads ~4M blocks back (~3 months of Base) and free tiers often cap archive access. Use an archive-capable endpoint; a fallback URL and REPPO_EMISSIONS_FLOOR_EPOCH cannot fix this (the floor bounds epochs, not blocks)'
   }
@@ -453,7 +480,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   // have to reconcile two phrasings of one condition.
   const votePowerHint = (vp: { votingPowerWei: bigint; remainingWei: bigint } | null): string =>
     vp !== null && vp.votingPowerWei === 0n
-      ? 'wallet has NO veREPPO voting power — lock REPPO on Base (on robinhood, then sync voting power at https://robinhood.reppo.ai; the node cannot mirror it itself)'
+      ? 'wallet has NO veREPPO voting power — lock REPPO on Base (on robinhood the node mirrors that lock automatically each cycle; a persistent 0 means either nothing is locked on Base, or REPPO_AGENT_ID/REPPO_API_KEY for robinhood.reppo.ai are unset)'
       : 'vote-power budget exhausted for this epoch — resumes next epoch'
 
   const voteWeights = new Map<string, number>()
@@ -476,10 +503,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
   let votePowerView: VotePowerView | undefined
   if (voteWeights.size > 0) {
     if (deps.onchain?.wallet?.getVotePowerBudget) {
+      const getBudget = deps.onchain.wallet.getVotePowerBudget.bind(deps.onchain.wallet)
       votePowerView = { sizing: 'legacy-read-failed' } // upgraded on a successful read below
-      try {
-        const budget = await deps.onchain.wallet.getVotePowerBudget()
-        votePower = { votingPowerWei: budget.votingPowerWei, remainingWei: budget.remainingWei }
+      /** Read the wallet's spendable power and (re)build the weigher from it. Extracted so
+       *  the robinhood mirror sync below can re-read after mirroring, instead of the whole
+       *  cycle running on a zero it has just fixed. */
+      const readVotePower = async (): Promise<{ votingPowerWei: bigint; remainingWei: bigint }> => {
+        const budget = await getBudget()
         votePowerView = {
           sizing: 've-reppo',
           votingPowerWei: budget.votingPowerWei.toString(),
@@ -498,6 +528,25 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             ? { spendHorizonSeconds: config.budget.voteSpendHorizonHours * 3600 }
             : {}),
         })
+        return { votingPowerWei: budget.votingPowerWei, remainingWei: budget.remainingWei }
+      }
+      try {
+        votePower = await readVotePower()
+        // ── robinhood mirror self-heal ────────────────────────────────────────────────
+        // VeReppoRBV1 is a READ-ONLY MIRROR of Base veREPPO, written by robinhood.reppo.ai.
+        // A wallet can hold thousands of veREPPO on Base and still read 0 here until that
+        // sync runs, and the node used to just skip voting forever and tell the operator to
+        // open a browser. Zero power is the ONLY trigger — a wallet that genuinely has no
+        // stake syncs a no-op, and a wallet with power never calls this at all.
+        if (votePower.votingPowerWei === 0n && deps.syncVotingPower) {
+          if (await deps.syncVotingPower()) {
+            votePower = await readVotePower() // do not spend the cycle on the stale 0
+            if (votePower.votingPowerWei > 0n) {
+              console.error('orquestra: mirrored Base veREPPO voting power onto robinhood — voting resumes this cycle')
+              recordSkipActivity(deps, cycleId, '', 'mirrored Base veREPPO voting power onto robinhood (VeReppoRBV1 is admin-synced) — voting resumes this cycle')
+            }
+          }
+        }
       } catch (e) {
         // Operator-visible, not just stderr. The dashboard is the only surface an operator
         // on an SSH tunnel actually reads; a budget read that fails every cycle (dead RPC
@@ -527,8 +576,23 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     // CANNOT_VOTE_FOR_OWN_POD is PERMANENT (we minted the pod; the own-pods query missed it).
     if (r.status === 'executed') {
       deps.dedup.recordVote(datanetId, intent.podId)
+      // Vote indexing is best-effort by design (the chain already recorded the vote), but
+      // "best-effort" used to mean the failure existed only as a stderr line in a
+      // container. Operators reported votes missing from the webapp with nothing on the
+      // node to look at. Persist the platform's own answer; still never await, never throw.
       if (r.txHash) deps.activity.registerVoteOnPlatform?.(intent.podId, r.txHash)
-        .catch((e: unknown) => console.error(redactSecrets(`orquestra: platform vote register failed pod ${intent.podId}: ${(e as Error).message}`)))
+        .catch((e: unknown) => {
+          const err = e as { message?: string; stage?: string; httpStatus?: number; code?: string }
+          deps.activity.platformFailure?.({
+            ts: new Date().toISOString(), cycleId, kind: 'vote', datanetId,
+            podId: intent.podId, txHash: r.txHash,
+            ...(err.stage ? { stage: err.stage } : {}),
+            ...(err.httpStatus !== undefined ? { httpStatus: err.httpStatus } : {}),
+            ...(err.code ? { code: err.code } : {}),
+            message: err.message ?? String(e),
+          })
+          console.error(redactSecrets(`orquestra: vote cast on-chain but NOT indexed by the platform — it will not appear in the webapp (pod ${intent.podId}): ${err.message ?? String(e)}`))
+        })
     } else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
       console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
       deps.dedup.recordVote(datanetId, intent.podId)
@@ -741,6 +805,24 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
             // unconfirmed mint on retry. (This recurred live: each missing-credential error
             // poisoned dedup and required manually clearing the key before retrying.)
             if (r.status === 'executed') deps.dedup.recordMint(datanetId, intent.canonicalKey)
+            // The mint landed on-chain but its platform metadata POST did not: the pod
+            // exists and earns, and is INVISIBLE in the webapp. Keep the platform's own
+            // answer so this is diagnosable — the operator reports were "my pods aren't
+            // showing" against a node whose activity log said every mint was clean.
+            // Deliberately does NOT change r.status: see ExecResult.podMetadata.
+            const meta = r.status === 'executed' ? r.podMetadata : undefined
+            if (meta && !meta.published) {
+              deps.activity.platformFailure?.({
+                ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
+                ...(r.podId ? { podId: r.podId } : {}),
+                ...(r.txHash ? { txHash: r.txHash } : {}),
+                ...(meta.stage ? { stage: meta.stage } : {}),
+                ...(meta.httpStatus !== undefined ? { httpStatus: meta.httpStatus } : {}),
+                ...(meta.error?.code ? { code: meta.error.code } : {}),
+                message: meta.error?.message ?? `pod metadata not published (stage ${meta.stage ?? 'unknown'})`,
+              })
+              console.error(redactSecrets(`orquestra: pod minted on-chain but NOT registered with the platform — it will not appear in the webapp (datanet ${datanetId}, pod ${r.podId ?? '?'}, stage ${meta.stage ?? 'unknown'}${meta.httpStatus ? `, HTTP ${meta.httpStatus}` : ''}): ${meta.error?.message ?? 'no detail'}`))
+            }
             deps.activity.record({
               ts: new Date().toISOString(), cycleId, kind: 'mint', datanetId,
               canonicalKey: intent.canonicalKey, podName: intent.podName,
@@ -748,7 +830,13 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
               // mint's score and rationale in Detail (not the canonical-key hash).
               ...(intent.selfScore !== undefined ? { conviction: intent.selfScore } : {}),
               ...(intent.reason ? { reason: intent.reason } : {}),
-              status: r.status, txHash: r.txHash, gasEth: r.gasEth, detail: r.detail,
+              status: r.status, txHash: r.txHash, gasEth: r.gasEth,
+              // Append the not-visible warning to the row's own detail: the Activity feed
+              // is the surface an operator actually reads, and "minted" with no caveat is
+              // what made an invisible pod look like a healthy one.
+              detail: meta && !meta.published
+                ? [r.detail, `NOT visible in the webapp — platform registration failed (${meta.stage ?? 'unknown'}${meta.httpStatus ? ` HTTP ${meta.httpStatus}` : ''})`].filter(Boolean).join(' | ')
+                : r.detail,
               ...(r.reppoSpent !== undefined ? { reppoSpent: r.reppoSpent } : {}),
               // podId from the on-chain PodMinted event (via mint-pod --json); enables
               // linking mint activity rows to their publisher emissions by pod ID.
@@ -762,6 +850,10 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       datanets.push({ datanetId, votes, mints })
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
+      // The per-datanet isolation boundary swallows anything the datanet threw so the rest
+      // of the cycle survives — which also means this is the last place the stack exists.
+      // Message-free fingerprint for telemetry (see telemetry/signature.ts).
+      recordErrorSignature(e)
       console.error(redactSecrets(`orquestra: datanet ${datanetId} skipped — ${error}`))
       // Record the failure as a skip activity entry too: without it the dashboard's
       // health/idle panels can't tell "erroring every cycle" from "quietly fine".
@@ -786,6 +878,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       due = await deps.reads.getEmissionsDue()
     } catch (e) {
+      recordErrorSignature(e)
       // SURFACE IT. This scan is the whole owner-claim path (eth_getLogs + the claim
       // probes). When it throws — a downed/rate-limited RPC peer, a getLogs range cap —
       // the throw is correct (the epoch stays re-checkable next cycle), but until now the
@@ -817,6 +910,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     try {
       voterDue = (await deps.onchain?.wallet?.getVoterEmissionsDue()) ?? []
     } catch (e) {
+      recordErrorSignature(e)
       // Same reasoning as the owner scan above — a silent voter-claim outage is invisible
       // next to a cycle full of successful votes.
       const why = redactSecrets(e instanceof Error ? e.message : String(e))

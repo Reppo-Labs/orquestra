@@ -23,6 +23,14 @@ export function makeDbPodCache(dataDir: string): PodCache {
       db.prepare('INSERT INTO emit_scan (id, lastBlock) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET lastBlock = excluded.lastBlock')
         .run(b.toString())
     },
+    getLastPodId(): bigint | null {
+      const row = db.prepare('SELECT lastPodId FROM emit_pod_scan WHERE id = 1').get() as { lastPodId: string } | undefined
+      return row ? BigInt(row.lastPodId) : null
+    },
+    setLastPodId(id: bigint): void {
+      db.prepare('INSERT INTO emit_pod_scan (id, lastPodId) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET lastPodId = excluded.lastPodId')
+        .run(id.toString())
+    },
   }
 }
 

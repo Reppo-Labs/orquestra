@@ -52,3 +52,36 @@ describe('Activity — claim detail', () => {
     expect(screen.queryByText(/REPPO/)).not.toBeInTheDocument()
   })
 })
+
+describe('Activity — a FAILED claim must say why', () => {
+  // A wallet that could not afford gas reported 14 identical "nothing claimed" errors per
+  // cycle for a week. The reason was on the row the whole time and was never rendered, so
+  // the dashboard showed a symptom that is true of every failure and named no cause.
+  const failed = (over: Partial<ActivityRow> = {}) =>
+    claim({ status: 'error', detail: 'claim-emissions tx failed to submit', ...over })
+
+  it('shows the executor detail instead of "nothing claimed"', () => {
+    show(failed())
+    expect(screen.getByText(/epoch 127 · claim-emissions tx failed to submit/)).toBeInTheDocument()
+    expect(screen.queryByText(/nothing claimed/)).not.toBeInTheDocument()
+  })
+
+  it('does not let a stale amount imply a failed claim paid out', () => {
+    // reppoClaimed falls back to the pre-claim estimate, so a failed row can carry a
+    // nonzero figure. Rendering it would report money that was never received.
+    show(failed({ reppoClaimed: 12.5 }))
+    expect(screen.getByText(/claim-emissions tx failed to submit/)).toBeInTheDocument()
+    expect(screen.queryByText(/12\.5 REPPO/)).not.toBeInTheDocument()
+  })
+
+  it('falls back to the amount phrasing when a failure carries no detail', () => {
+    show(failed({ detail: undefined }))
+    expect(screen.getByText(/epoch 127 · nothing claimed/)).toBeInTheDocument()
+  })
+
+  it('leaves a SUCCESSFUL claim showing the payout, not the detail', () => {
+    show(claim({ status: 'executed', claimedTokenSymbol: 'WOOD', claimedTokenAmount: 737.118891402, detail: 'some incidental note' }))
+    expect(screen.getByText(/epoch 127 · 737\.119 WOOD/)).toBeInTheDocument()
+    expect(screen.queryByText(/incidental/)).not.toBeInTheDocument()
+  })
+})

@@ -35,8 +35,10 @@ import { collectEconomics } from '../learn/econ.js'
 import { runReflection } from '../learn/reflect.js'
 import { getLearnEnabled } from '../learn/store.js'
 import { discoverDatanets } from '../learn/discoverDatanets.js'
-import { registerVoteOnPlatform } from '../reppo/platformApi.js'
+import { registerVoteOnPlatform, resolvePodCuid, syncVotingPowerOnPlatform } from '../reppo/platformApi.js'
+import { recordPlatformError } from '../reppo/platformErrors.js'
 import { isRobinhood } from '../reppo/network.js'
+import { redactSecrets } from '../util/redact.js'
 
 // One notice per process, not one per vote: robinhood votes are durable on-chain
 // but invisible to the reppo.ai vote index until robinhood gets its own API.
@@ -46,6 +48,20 @@ function warnRobinhoodVotesNotIndexed(): void {
   warnedRobinhoodVotesNotIndexed = true
   console.error(
     'orquestra: robinhood network — votes are NOT indexed on the reppo.ai platform (no robinhood vote API yet); on-chain votes are unaffected.',
+  )
+}
+
+// One notice per process for the robinhood mirror sync being unavailable. This fires on a
+// node that CAN'T self-heal its voting power, so the sentence has to name the fix — the
+// previous behaviour was to skip voting forever and tell the operator to open a browser.
+let warnedNoSyncCreds = false
+function warnRobinhoodSyncCredsMissing(): void {
+  if (warnedNoSyncCreds) return
+  warnedNoSyncCreds = true
+  console.error(
+    'orquestra: robinhood network — voting power cannot be mirrored from Base because REPPO_AGENT_ID / REPPO_API_KEY are unset. '
+    + 'VeReppoRBV1 is a read-only mirror, so votes stay impossible until it is synced. '
+    + 'Run `reppo register-agent --network robinhood` (agent ids are per-platform — a reppo.ai agent does not exist there) and set both vars.',
   )
 }
 
@@ -202,6 +218,22 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     (activitySnapshot ??= readActivity(w.dataDir, { limit: 100_000 }))
   // Executed-mint pod names (the earn-attribution source), derived once per cycle from
   // the snapshot; consumed per datanet by getPodsAndFilter's own-pod name backstop.
+  // on-chain tokenId → platform pod cuid, for vote registration. Filled from ONE public
+  // catalog fetch and reused by every vote in the cycle; cleared in beginCycle so pods
+  // minted since are resolvable next cycle.
+  const podCuidCache = new Map<string, string>()
+  // Vote registration is fire-and-forget, so a cycle's registrations run CONCURRENTLY.
+  // Without this, every one of them would miss the empty cache at the same instant and
+  // fetch the whole public catalog in parallel. Chaining them means the first fetch fills
+  // the cache and the rest are map hits. Each link swallows the previous link's rejection
+  // (a failed resolve must not poison the next vote's lookup).
+  let podCuidChain: Promise<unknown> = Promise.resolve()
+  const resolveCuidSerialized = (tokenId: string): Promise<string> => {
+    const run = (): Promise<string> => resolvePodCuid(tokenId, fetch, podCuidCache)
+    const next = podCuidChain.then(run, run)
+    podCuidChain = next.catch(() => {})
+    return next
+  }
   let mintedNamesMemo: Set<string> | null = null
   const mintedNames = (): Set<string> =>
     (mintedNamesMemo ??= new Set(
@@ -309,23 +341,63 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
       record: (entry) => {
         try { appendActivity(w.dataDir, entry) } catch (e) { console.error(`orquestra: activity append failed (non-fatal): ${(e as Error).message}`) }
       },
-      beginCycle: () => { video.beginCycle(); activitySnapshot = null; mintedNamesMemo = null },
+      beginCycle: () => { video.beginCycle(); activitySnapshot = null; mintedNamesMemo = null; podCuidCache.clear() },
       // Cred check deferred to call time so late-arriving or rotated creds take effect
       // without restarting the node (env vars set from SQLite at startup but re-read here).
-      registerVoteOnPlatform: (podId: string, txHash: string): Promise<void> => {
+      registerVoteOnPlatform: async (podId: string, txHash: string): Promise<void> => {
         // The vote-indexing API is the reppo.ai (Base) platform — it doesn't know
         // robinhood pods, so every registration would fail-log. Skip with a
         // one-time notice instead of a per-vote error line.
         if (isRobinhood()) {
           warnRobinhoodVotesNotIndexed()
-          return Promise.resolve()
+          return
         }
         const agentId = process.env.REPPO_AGENT_ID
         const apiKey = process.env.REPPO_API_KEY
-        if (!agentId || !apiKey) return Promise.resolve()
-        return registerVoteOnPlatform(agentId, podId, txHash, apiKey).then(() => {})
+        if (!agentId || !apiKey) return
+        // `podId` here is the ON-CHAIN token id (what `reppo vote --pod` takes and what
+        // the whole cycle threads around). The votes route resolves its :podId as a
+        // platform cuid, so it must be translated first — passing the token id straight
+        // through 404'd every single registration. Cache is per-cycle: one catalog fetch
+        // serves every vote in the cycle, cleared in beginCycle so a pod minted since is
+        // picked up next cycle. Failures throw with the platform's own body and are
+        // persisted by the caller.
+        const cuid = await resolveCuidSerialized(podId)
+        await registerVoteOnPlatform(agentId, cuid, txHash, apiKey)
       },
+      platformFailure: (entry) => recordPlatformError(w.dataDir, entry),
     },
+    // Robinhood only: VeReppoRBV1 is a READ-ONLY MIRROR of Base veREPPO written by
+    // robinhood.reppo.ai, so a lock made on Base is invisible on-chain here until this
+    // PATCH runs. Every other network reads voting power from the chain it votes on and
+    // has nothing to mirror — hence undefined there, which the cycle treats as "skip".
+    //
+    // Credentials are read at CALL time so a node that registers its agent later starts
+    // syncing without a restart, matching registerVoteOnPlatform.
+    ...(isRobinhood() && walletAddress
+      ? {
+          syncVotingPower: async (): Promise<boolean> => {
+            const agentId = process.env.REPPO_AGENT_ID
+            const apiKey = process.env.REPPO_API_KEY
+            if (!agentId || !apiKey) { warnRobinhoodSyncCredsMissing(); return false }
+            try {
+              await syncVotingPowerOnPlatform(agentId, walletAddress, apiKey)
+              return true
+            } catch (e) {
+              // Never throws to the cycle: this runs only when power ALREADY reads 0, so
+              // the worst case is exactly the behaviour that existed before the sync did.
+              console.error(redactSecrets(`orquestra: robinhood voting-power sync failed — voting stays blocked this cycle: ${(e as Error).message}`))
+              recordPlatformError(w.dataDir, {
+                ts: new Date().toISOString(), kind: 'vote',
+                stage: (e as { stage?: string }).stage ?? 'register',
+                ...((e as { httpStatus?: number }).httpStatus !== undefined ? { httpStatus: (e as { httpStatus?: number }).httpStatus } : {}),
+                message: `voting-power sync: ${(e as Error).message}`,
+              })
+              return false
+            }
+          },
+        }
+      : {}),
     reads: {
       getRubric: (id) => io.getRubric(id),
       getPodsAndFilter: async (id) => {

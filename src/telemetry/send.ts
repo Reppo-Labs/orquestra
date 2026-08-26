@@ -7,16 +7,22 @@
 // after a single debug line, there is no retry, and the caller is never given a promise it
 // might await on the cycle's critical path.
 //
-// The endpoint is configuration, not a constant. Unset means telemetry is compiled in but
-// inert, which is deliberately the state this ships in: the payload, the notice, and the
-// operator controls are reviewable by operators before any collector exists to receive
-// anything.
+// The endpoint ships as a compiled-in default so a fresh install reports without any
+// configuration (the "inert until configured" stance predates the collector existing —
+// it is deployed now). ORQUESTRA_TELEMETRY_ENDPOINT still overrides for self-hosted
+// collectors, and opting out is a CONSENT decision (`telemetry --off`,
+// ORQUESTRA_TELEMETRY_DISABLED, or the onboarding choice), not an endpoint one.
 import { shouldTransmit } from './consent.js'
 import { buildPayload, serializePayload, type TelemetryPayload } from './payload.js'
 import type { ErrorSignature } from './signature.js'
 
-/** Collector URL. Absent or empty → telemetry is inert (nothing is built, nothing sent). */
+/** Overrides the collector URL (self-hosted collectors, staging). Absent or empty → the
+ *  compiled-in default. Disabling telemetry goes through consent, never through this. */
 export const ENDPOINT_ENV = 'ORQUESTRA_TELEMETRY_ENDPOINT'
+
+/** Reppo's hosted collector (AWS API Gateway -> Lambda -> DynamoDB, 90-day TTL; see
+ *  docs/telemetry.md and collector/README.md). */
+export const DEFAULT_ENDPOINT = 'https://njivst0b99.execute-api.us-west-2.amazonaws.com/v1/reports'
 
 /** Hard ceiling on a single attempt. Short on purpose: this is best-effort background
  *  work, and a hung socket must not keep the process alive at shutdown. */
@@ -33,7 +39,7 @@ export type SendOutcome = 'sent' | 'disabled' | 'no-endpoint' | 'failed'
 
 export function endpointFor(env: NodeJS.ProcessEnv = process.env): string | null {
   const raw = (env[ENDPOINT_ENV] ?? '').trim()
-  return raw === '' ? null : raw
+  return raw === '' ? DEFAULT_ENDPOINT : raw
 }
 
 /** Attempt one transmission. Resolves to an outcome and NEVER rejects.

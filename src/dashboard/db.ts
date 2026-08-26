@@ -39,6 +39,21 @@ CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(ts);
 -- (kind='vote' AND podId IS NOT NULL) would full-scan activity otherwise.
 CREATE INDEX IF NOT EXISTS idx_activity_kind_pod ON activity(kind, podId);
 
+-- Failed calls to the Reppo PLATFORM REST API (reppo.ai / robinhood.reppo.ai) — the
+-- indexing surface that makes an on-chain action visible in the webapp. Separate from
+-- the activity table on purpose: an activity row records what the CHAIN did, and a mint or
+-- vote is a complete on-chain success while being invisible in the UI. Folding the two
+-- together is exactly how these failures stayed invisible — the mint said 'executed'
+-- and nothing anywhere held the platform's response. Rows are for investigation, so
+-- the platform's own body is kept verbatim (redacted).
+CREATE TABLE IF NOT EXISTS platform_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL, cycleId TEXT, kind TEXT NOT NULL, datanetId TEXT,
+  podId TEXT, txHash TEXT, stage TEXT, httpStatus INTEGER, code TEXT,
+  message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_platform_errors_ts ON platform_errors(ts);
+
 CREATE TABLE IF NOT EXISTS earn_status (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, cycleId TEXT, data TEXT NOT NULL
 );
@@ -100,6 +115,13 @@ CREATE TABLE IF NOT EXISTS emit_pods (
 );
 CREATE TABLE IF NOT EXISTS emit_scan (
   id INTEGER PRIMARY KEY CHECK (id = 1), lastBlock TEXT NOT NULL
+);
+-- Watermark for the ownerOf() pod sweep: the highest podId already swept. Separate from
+-- emit_scan on purpose — that row's lastBlock is NOT NULL and means "logs read through
+-- this block", so writing a pod watermark into it would have to invent a block number,
+-- and a fabricated 0 there sends the getLogs fallback scanning from genesis.
+CREATE TABLE IF NOT EXISTS emit_pod_scan (
+  id INTEGER PRIMARY KEY CHECK (id = 1), lastPodId TEXT NOT NULL
 );
 -- Per-pod watermark for the VOTER-emissions scan: the highest CLOSED epoch already scanned
 -- for this pod, so steady-state only checks new epochs (the first run deep-scans full history).

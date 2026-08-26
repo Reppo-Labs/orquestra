@@ -22,6 +22,21 @@ export interface MintArgs {
   imageUrl?: string
 }
 export interface ClaimEmissionsArgs { podId: string; epoch: number; idempotencyKey: string }
+
+/** mint-pod Phase-2 (`result.metadata` in the CLI's --json output): the IPFS pin plus the
+ *  authenticated pod-metadata POST to the platform. `published` is true ONLY on a 2xx
+ *  registration — everything else means the pod exists on-chain but not in the webapp. */
+export interface PodMetadataResult {
+  published: boolean
+  /** which half failed: the IPFS pin, or the platform POST. */
+  stage?: 'ipfs-pin' | 'register'
+  /** platform HTTP status when the POST completed (absent when it never reached the API). */
+  httpStatus?: number
+  /** the CLI's structured reason — carries the platform's own response body. */
+  error?: { code?: string; message?: string }
+  /** public-gateway URL of the pinned dataset, when one was pinned. */
+  datasetUri?: string
+}
 /** Result of an on-chain action: tx hash + gas spent (ETH), parsed from the CLI's --json output. */
 export interface ChainResult {
   txHash: string
@@ -32,6 +47,18 @@ export interface ChainResult {
    *  Extracted from the PodMinted event in the tx receipt by `reppo mint-pod --json`.
    *  Absent on vote/claim/grant results. */
   podId?: string
+  /** mint-pod Phase-2 outcome: the CLI's `POST /agents/{id}/pods` metadata registration,
+   *  which is what makes a pod VISIBLE in the Reppo webapp. Present only on mint results
+   *  from a CLI that publishes (>=0.8.0 with --pod-name).
+   *
+   *  This is deliberately separate from the mint's own success. Phase 2 runs AFTER a
+   *  durable on-chain mint and the CLI never lets it fail the command — correct, since the
+   *  tx is already final. But orquestra used to DROP the field entirely, so a mint whose
+   *  registration 4xx'd was still recorded as a clean `executed`, and the pod simply never
+   *  appeared in the webapp with no trace anywhere in the node. Operators reported "my pods
+   *  aren't showing" and there was nothing to investigate. Captured here so the cycle can
+   *  record the platform's own error response (see src/reppo/platformErrors.ts). */
+  podMetadata?: PodMetadataResult
   /** The token an access fee was paid in (reppo >=0.8.5 grant-access result). Present on
    *  non-REPPO grants — informational (the fee is consent-bounded, not budget-gated). */
   feeToken?: { symbol: string; address: string; decimals: number }
@@ -87,6 +114,8 @@ export function parseChainResult(stdout: string, warn: (m: string) => void = (m)
     txHash?: string; tx?: string; gasEth?: number; reppoFee?: number | string
     // mint-pod result: on-chain pod ID assigned by the contract (from PodMinted event).
     podId?: string | number
+    // mint-pod Phase 2 (platform metadata registration); absent on every other command.
+    metadata?: unknown
     // grant-access >=0.8.5 (best-effort; absent on vote/mint/claim results):
     feeToken?: { symbol?: string; address?: string; decimals?: number }
     feeAmount?: { raw?: string; formatted?: string } | number | string
@@ -101,12 +130,41 @@ export function parseChainResult(stdout: string, warn: (m: string) => void = (m)
   // the budget cap from ever decrementing. Treat null as absent instead.
   const fee = j.reppoFee != null ? Number(j.reppoFee) : undefined
   const podId = j.podId !== undefined ? String(j.podId) : undefined
+  const podMetadata = parsePodMetadata(j.metadata)
   return {
     txHash: j.txHash ?? j.tx ?? '',
     gasEth: Number(j.gasEth ?? 0),
     ...(fee !== undefined && !Number.isNaN(fee) ? { reppoFee: fee } : {}),
     ...(podId !== undefined ? { podId } : {}),
+    ...(podMetadata !== undefined ? { podMetadata } : {}),
     ...parseGrantFee(j),
+  }
+}
+
+/** Narrow the CLI's `result.metadata` (mint-pod Phase 2) into a PodMetadataResult.
+ *  Returns undefined when the field is absent (every non-mint command, and mints from a
+ *  CLI too old to publish) so those results are byte-identical to before.
+ *
+ *  `published` is read STRICTLY as `=== true`: a CLI that grows a new shape, or a
+ *  half-parsed object, must read as NOT-published. The whole point of this field is to
+ *  detect invisible pods, so the safe default is to flag for investigation, not to assume
+ *  success and stay silent the way the dropped field did. */
+export function parsePodMetadata(raw: unknown): PodMetadataResult | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const m = raw as { published?: unknown; stage?: unknown; httpStatus?: unknown; datasetUri?: unknown
+    error?: { code?: unknown; message?: unknown } }
+  const err = m.error && typeof m.error === 'object'
+    ? {
+        ...(m.error.code !== undefined ? { code: String(m.error.code) } : {}),
+        ...(m.error.message !== undefined ? { message: String(m.error.message) } : {}),
+      }
+    : undefined
+  return {
+    published: m.published === true,
+    ...(m.stage === 'ipfs-pin' || m.stage === 'register' ? { stage: m.stage } : {}),
+    ...(typeof m.httpStatus === 'number' ? { httpStatus: m.httpStatus } : {}),
+    ...(typeof m.datasetUri === 'string' && m.datasetUri ? { datasetUri: m.datasetUri } : {}),
+    ...(err && Object.keys(err).length > 0 ? { error: err } : {}),
   }
 }
 

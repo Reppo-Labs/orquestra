@@ -6,6 +6,7 @@
 // unauthenticated and localhost-bound, so CSRF/DNS-rebinding is the realistic
 // remote path to the budget), JSON body parsing, and response serialization.
 import { readActivity, readActivitySince, sumClaimedReppo, sumClaimedTokens, sumMintReppoSpent, sumMintSpentByDatanet } from './activityLog.js'
+import { readPlatformErrors } from '../reppo/platformErrors.js'
 import { readAgentStore, writeAgentStore, syncAgentName } from '../reppo/agent.js'
 import { updateAgentOnPlatform } from '../reppo/platformApi.js'
 import { readSnapshot } from './snapshot.js'
@@ -277,6 +278,12 @@ const onboardingSession: RouteHandler = ({ session }) => json(200, sessionView(s
 
 const activity: RouteHandler = ({ dataDir }) => json(200, readActivity(dataDir, { limit: 500 }))
 
+/** Failed PLATFORM (webapp indexing) calls — mints and votes that landed on-chain but
+ *  never became visible in the UI. Its own endpoint rather than a filter over /api/activity
+ *  because these are NOT chain failures: the corresponding activity row says 'executed',
+ *  which is exactly why the problem stayed invisible for so long. */
+const platformErrors: RouteHandler = ({ dataDir }) => json(200, readPlatformErrors(dataDir, { limit: 200 }))
+
 const config: RouteHandler = ({ dataDir }) => json(200, safeConfig(dataDir))
 
 const agent: RouteHandler = ({ dataDir }) => {
@@ -469,6 +476,7 @@ export const routes: Route[] = [
   { method: 'GET', path: '/api/onboarding/status', handler: onboardingStatus },
   { method: 'GET', path: '/api/onboarding/session', handler: onboardingSession },
   { method: 'GET', path: '/api/activity', handler: activity },
+  { method: 'GET', path: '/api/platform-errors', handler: platformErrors },
   { method: 'GET', path: '/api/config', handler: config },
   { method: 'GET', path: '/api/agent', handler: agent },
   { method: 'GET', path: '/api/earn', handler: earn },
