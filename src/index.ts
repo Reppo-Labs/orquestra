@@ -39,7 +39,11 @@ import { DedupState } from './runtime/state.js'
 import type { StrategyConfig } from './config/schema.js'
 import { buildCycleDeps, buildTick, type CycleWiring } from './runtime/wiring.js'
 import { startDashboard } from './dashboard/server.js'
-import { backfillMintReppoSpent, backfillClaimDatanets } from './dashboard/activityLog.js'
+import { backfillMintReppoSpent, backfillClaimDatanets, appendActivity } from './dashboard/activityLog.js'
+import { GatewayClient } from './evalworker/client.js'
+import { EvalBudget } from './evalworker/budget.js'
+import { judgeEval } from './evalworker/judge.js'
+import { startEvalWorker, type EvalWorkerHandle } from './evalworker/worker.js'
 import { defaultReppoReader } from './reppo/reader.js'
 import { makeCachedReader, type CacheTag } from './reppo/readCache.js'
 import type { WalletWriteKind } from './wallet/executor.js'
@@ -456,6 +460,40 @@ async function start(): Promise<void> {
   }))
   schedulerHandle = handle // now the dashboard "run now" button can trigger an off-schedule cycle
 
+  // Eval work (opt-in): serve Reppo Evaluation API jobs beside the scheduler.
+  // Started whenever a gateway URL is configured; the loop itself reads
+  // config.evalWork.enabled live (tick-reloaded via wiring.config), so flipping
+  // the dashboard toggle needs no restart. Missing agent creds → skip with a
+  // hint rather than erroring: eval work must never affect vote/mint.
+  let evalWorker: EvalWorkerHandle | null = null
+  const evalGatewayUrl = process.env.EVAL_GATEWAY_URL?.trim()
+  if (evalGatewayUrl) {
+    const agentId = process.env.REPPO_AGENT_ID ?? ''
+    const agentApiKey = process.env.REPPO_API_KEY ?? ''
+    if (!agentId || !agentApiKey) {
+      console.error('orquestra: evalwork disabled — EVAL_GATEWAY_URL is set but agent credentials are missing (REPPO_AGENT_ID/REPPO_API_KEY)')
+    } else {
+      evalWorker = startEvalWorker({
+        client: new GatewayClient({ baseUrl: evalGatewayUrl, agentId, apiKey: agentApiKey }),
+        budget: new EvalBudget(`${DATA_DIR}/evalwork-budget.json`, () => wiring.config.evalWork.maxJudgeCallsPerDay),
+        getConfig: () => wiring.config.evalWork,
+        judge: (req, evidence) => judgeEval(liveDefaultModel(), req, evidence),
+        modelId: () => (liveDefaultModel() as { modelId?: string }).modelId ?? 'unknown',
+        record: (row) =>
+          appendActivity(DATA_DIR, {
+            ts: row.ts, cycleId: 'evalwork', kind: 'eval', datanetId: '',
+            podId: row.jobId, status: row.status, reason: row.reason,
+          }),
+      })
+      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl} (enabled=${wiring.config.evalWork.enabled})`)
+    }
+  } else if (config.evalWork.enabled) {
+    // The config toggle without the env var is a fully inert combination —
+    // say so once at startup instead of leaving the operator to wonder why
+    // enabling eval work does nothing.
+    console.error('orquestra: evalwork enabled in config but EVAL_GATEWAY_URL is not set — eval work will not run')
+  }
+
   // As PID 1 in a container, Node only stops on SIGINT/SIGTERM if we handle them —
   // without this, Ctrl-C and `docker stop` are ignored. Stop the scheduler, drain any
   // in-flight cycle so a mint/vote between submit and dedup-persist isn't cut mid-write
@@ -471,6 +509,15 @@ async function start(): Promise<void> {
     if (inflight) {
       console.error(`orquestra: draining in-flight cycle (up to ${SHUTDOWN_DRAIN_MS / 1000}s)…`)
       await Promise.race([inflight, new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS))])
+    }
+    if (evalWorker) {
+      // Same drain discipline as the scheduler above: bounded, so a hung
+      // gateway call cannot push the process past docker's SIGTERM grace
+      // period into an unclean SIGKILL.
+      await Promise.race([
+        evalWorker.stop().catch(() => {}),
+        new Promise((r) => setTimeout(r, SHUTDOWN_DRAIN_MS)),
+      ])
     }
     if (dash) await dash.close().catch(() => {})
     process.exit(0)

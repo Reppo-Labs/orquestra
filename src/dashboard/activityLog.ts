@@ -22,7 +22,9 @@ export interface ActivityEntry {
   //  yield) written by v0.3.5 nodes; no longer produced (yield is state and now rides
   //  the snapshot only — see runCycle's stderr-only note). Kept in the union so old DB
   //  rows still type/render; excluded from ALL health aggregation (buildHealth).
-  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant' | 'stake' | 'info'
+  //  'eval' rows are written by the evalwork lane (src/evalworker/) — one row per
+  //  served eval job, outside any vote/mint cycle (cycleId is 'evalwork').
+  kind: 'vote' | 'mint' | 'claim' | 'skip' | 'grant' | 'stake' | 'info' | 'eval'
   datanetId: string
   podId?: string
   direction?: 'up' | 'down'
