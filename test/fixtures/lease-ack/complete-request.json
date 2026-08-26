@@ -1,0 +1,19 @@
+{
+  "jobId": "job_01J9ZX4T8RE",
+  "model": "claude-haiku-4-5-20251001",
+  "verdicts": [
+    {
+      "criterion": "entry conditions are historically profitable, not curve-fit",
+      "score": 7,
+      "critique": "Matches backtest pods showing positive expectancy; decay noted in trending regimes.",
+      "citations": ["pod:27/482", "pod:27/517"]
+    },
+    {
+      "criterion": "risk sizing survives a 10% adverse candle",
+      "score": 4,
+      "critique": "3x with a -2% stop is stop-hunt fragile per documented wick behavior.",
+      "citations": ["pod:27/533"]
+    }
+  ],
+  "evidenceBasis": "citations"
+}

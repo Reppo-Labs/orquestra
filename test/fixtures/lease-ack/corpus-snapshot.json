@@ -1,0 +1,16 @@
+{
+  "datanetId": 27,
+  "generatedAt": "2026-08-26T11:00:00.000Z",
+  "pods": [
+    {
+      "podId": "pod:27/482",
+      "name": "ETH funding backtest",
+      "text": "Negative funding rate ETH perp entries showed positive expectancy across 2025-26; decays in strong trends."
+    },
+    {
+      "podId": "pod:27/533",
+      "name": "Hyperliquid stop hunts",
+      "text": "Wick behavior around liquidation clusters makes tight stops on 3x+ leverage fragile."
+    }
+  ]
+}

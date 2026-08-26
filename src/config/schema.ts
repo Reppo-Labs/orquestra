@@ -80,6 +80,18 @@ export const StrategyConfigSchema = z
       claimGasEthMax: z.number().nonnegative().max(10).default(1),
     }),
     claimEmissions: z.boolean().default(true),
+    // Eval work: serve Reppo Evaluation API jobs (lease → judge → submit) in an
+    // always-on worker beside the scheduler — NOT part of the vote/mint cycle.
+    // Opt-in and off by default; the worker spends LLM tokens only (the wallet
+    // signs nothing for evals) and stops leasing when maxJudgeCallsPerDay is
+    // spent. Ceiling rationale mirrors budget above: generous, not a tuning knob.
+    evalWork: z
+      .object({
+        enabled: z.boolean().default(false),
+        maxConcurrent: z.number().int().min(1).max(10).default(2),
+        maxJudgeCallsPerDay: z.number().int().min(1).max(10_000).default(200),
+      })
+      .default({ enabled: false, maxConcurrent: 2, maxJudgeCallsPerDay: 200 }),
     // Multi-agent panel deliberation (personas + judge; see src/panel/).
     // Defaulted so configs written before this feature load unchanged.
     deliberation: z

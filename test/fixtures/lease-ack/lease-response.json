@@ -1,0 +1,16 @@
+{
+  "jobId": "job_01J9ZX4T8RE",
+  "request": {
+    "type": "plan",
+    "payload": "Long ETH-PERP 3x when funding < -0.01%/h and 4h RSI < 35; -2% stop; size 15% of vault.",
+    "criteria": [
+      "entry conditions are historically profitable, not curve-fit",
+      "risk sizing survives a 10% adverse candle"
+    ],
+    "context": "Autonomous vault agent, $50k AUM."
+  },
+  "datanetId": 27,
+  "corpusUrl": "https://example-bucket.s3.us-west-2.amazonaws.com/corpus/27.json?X-Amz-Signature=abc",
+  "leaseExpiresAt": "2026-08-26T12:04:00.000Z",
+  "settlementDeadline": "2026-08-26T12:05:00.000Z"
+}

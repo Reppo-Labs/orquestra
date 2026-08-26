@@ -35,7 +35,8 @@ const detail = (r: ActivityRow) =>
     // skip + grant + stake + info are free-text breadcrumbs — grant carries "granted access — paid
     // 50 EXY"; stake carries "topped up veREPPO 1031 → 2000 (+969, 30d)"; info carries the
     // per-datanet emission-yield summary (src/voter/yield.ts formatYieldLine).
-    : r.kind === 'skip' || r.kind === 'grant' || r.kind === 'stake' || r.kind === 'info' ? (r.reason ?? '—')
+    // eval rows are evalwork breadcrumbs ("judged 3 criteria (citations)"); podId carries the jobId.
+    : r.kind === 'skip' || r.kind === 'grant' || r.kind === 'stake' || r.kind === 'info' || r.kind === 'eval' ? (r.reason ?? '—')
     : `epoch ${r.epoch} · ${claimAmount(r)}`
 
 /** Pod column: prefer the human-readable name; fall back to the id for entries
