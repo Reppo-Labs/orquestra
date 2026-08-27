@@ -62,7 +62,7 @@
 
 - [ ] 9.1 Create (or designate) the v1 datanet on Base (minimal fees); record id + epoch duration in config (verify epoch on-chain; 48h SLA math assumes epoch ≤ ~46h)
 - [ ] 9.2 Enable evalwork on 1–2 Reppo house nodes (incl. Major Oak candidate) so min-1 quorum is always reachable
-- [ ] 9.3 API docs page: contract, platform-API-key signup, per-key limits (10/h, 10 mints/day), 48h-after-epoch-end SLA + 3h rollover rule, result-shape reference (0–100, decision/route thresholds), per-criteria threshold guidance, publicity disclosure — request TYPE + CRITERIA (and payload hash) become public pod metadata, votable by humans; payloads stay private (gates announcement)
+- [x] 9.3 API docs page (drafted `docs/api.md` in eval-api + review artifact; publish location = launch decision): contract, platform-API-key signup, per-key limits (10/h, 10 mints/day), 48h-after-epoch-end SLA + 3h rollover rule, result-shape reference (0–100, decision/route thresholds), per-criteria threshold guidance, publicity disclosure — request TYPE + CRITERIA (and payload hash) become public pod metadata, votable by humans; payloads stay private (gates announcement)
 - [ ] 9.4 Deploy to chosen account/region; smoke: 400 invalid, 429 over-limit, 202→settled round-trip through a real node, pod visible on datanet
 - [ ] 9.5 Fund wallet float; publish docs + announce
 - [ ] 9.6 Ops runbook: wallet top-up, DLQ redrive, unserved-jobs alarm response, intake kill switch
