@@ -12,8 +12,9 @@ const job = (id: string): LeasedJob => ({
   request: { type: 'answer', payload: 'the payload', criteria: ['is good'] },
   datanetId: 1,
   corpusUrl: 'https://example.com/corpus.json',
-  leaseExpiresAt: new Date(Date.now() + 240_000).toISOString(),
-  settlementDeadline: new Date(Date.now() + 300_000).toISOString(),
+  corpusVersion: '20260826T110000Z',
+  epoch: 128,
+  answerCutoff: new Date(Date.now() + 300_000).toISOString(),
 })
 
 const corpus = { datanetId: 1, generatedAt: new Date().toISOString(), pods: [] }

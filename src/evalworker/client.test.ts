@@ -8,8 +8,9 @@ const goodLease = {
   request: { type: 'answer', payload: 'p', criteria: ['c'] },
   datanetId: 1,
   corpusUrl: 'https://bucket/corpus.json',
-  leaseExpiresAt: '2026-08-26T12:04:00.000Z',
-  settlementDeadline: '2026-08-26T12:05:00.000Z',
+  corpusVersion: '20260826T110000Z',
+  epoch: 128,
+  answerCutoff: '2026-08-27T01:00:00.000Z',
 }
 
 describe('GatewayClient', () => {

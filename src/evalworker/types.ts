@@ -13,15 +13,19 @@ export interface EvalJobRequest {
   context?: string
 }
 
-/** What the lease endpoint hands this node. */
+/** What the lease endpoint hands this node (epoch model, eval-judge-v1 2b). */
 export interface LeasedJob {
   jobId: string
   request: EvalJobRequest
   datanetId: number
   /** Presigned URL of the evidence corpus snapshot every node judges against. */
   corpusUrl: string
-  leaseExpiresAt: string
-  settlementDeadline: string
+  /** Snapshot version the gateway pins citations against at settlement. */
+  corpusVersion: string
+  /** On-chain datanet epoch this job settles in. */
+  epoch: number
+  /** Epoch end + grace — answers submitted after this are rejected. */
+  answerCutoff: string
 }
 
 export interface CriterionVerdict {
