@@ -30,6 +30,13 @@ services:
     volumes:
       - orquestra-data:/data
     restart: unless-stopped
+    # The node logs every cycle diagnostic to stderr by design (see CLAUDE.md); without
+    # a cap the default json-file driver grows unbounded and eventually fills the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   # Parallel Robinhood Chain node — OPT-IN via profile, so a plain
   # `docker compose up -d` (Base-only operators) is unaffected:
@@ -57,6 +64,11 @@ services:
     volumes:
       - orquestra-robinhood-data:/data
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   orquestra-data:
