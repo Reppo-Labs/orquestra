@@ -94,6 +94,13 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         return
       } catch (e) {
         lastErr = e
+        // Deterministic gateway rejections (400 JOB_ID_MISMATCH, 409
+        // PAST_CUTOFF, 422 CRITERIA_MISMATCH/UNRESOLVABLE_CITATION — see
+        // the error-codes.json contract fixture) never change on resend;
+        // retrying only wastes traffic. 408/429 stay retryable.
+        if (e instanceof GatewayError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) {
+          throw e
+        }
         if (attempt < completeRetries) {
           log(`:complete attempt ${attempt + 1} failed for job ${answer.jobId}, retrying: ${e instanceof Error ? e.message : String(e)}`)
         }
@@ -105,6 +112,13 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
   async function serve(job: LeasedJob): Promise<void> {
     let submitted = false
     try {
+      // Past the epoch answer cut-off the gateway rejects every answer —
+      // judging would spend LLM budget on a guaranteed 409. Hand it back.
+      if (Date.parse(job.answerCutoff) < Date.now()) {
+        await reportFail(job.jobId, 'answer cut-off already passed')
+        safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'skipped', reason: 'past answer cut-off' })
+        return
+      }
       // Reserve BEFORE the judge call — the budget is a pre-spend gate.
       if (!deps.budget.reserve()) {
         await reportFail(job.jobId, 'node eval budget exhausted')
@@ -134,8 +148,11 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'error', reason: msg })
       // Only tell the gateway "I cannot serve this" when we truly didn't: a
       // bookkeeping error AFTER a successful :complete must not retract the
-      // answer the gateway already accepted.
-      if (!submitted) await reportFail(job.jobId, msg)
+      // answer the gateway already accepted. A 409/422 on :complete means the
+      // gateway ADJUDICATED the answer (past cut-off, or discarded and
+      // recorded against this node) — a :fail on top would double-record.
+      const adjudicated = e instanceof GatewayError && (e.status === 409 || e.status === 422)
+      if (!submitted && !adjudicated) await reportFail(job.jobId, msg)
     }
   }
 

@@ -16,12 +16,14 @@ const DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'lea
 const read = (f: string): string => readFileSync(join(DIR, f), 'utf8')
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 
-// Pinned in BOTH repos — see eval-api fixtures/lease-ack/checksums.test.ts.
+// Pinned in BOTH repos — eval-api pins the same bytes via
+// fixtures/lease-ack/CHECKSUMS.sha256 (`npm run fixtures:check` in its CI).
 const CHECKSUMS: Record<string, string> = {
-  'lease-response.json': '9db1159daaf1b6e9f8ae0f5a2ef9ca67f03a37bc3c91027af546c922046da06c',
+  'lease-response.json': '37f2dce3d97fee1f780cb3e48867cff27d3f1f18306f7d9953d6d632783791c4',
   'complete-request.json': '672c23a9181f741a28ac0d526fa544777518339200041a21e678c46c1d3f0311',
   'fail-request.json': '73fde433d66db0ee93e14e84fc31246e309939134aef874521bf54af8108714d',
   'corpus-snapshot.json': '35a7c0886218be13d08fb42fa1739b02a6a56408930bbb072e1d7d4b06d4ccdc',
+  'error-codes.json': '0796ba06cea9a0dfc3e90eb1dfb99b9419fac2fe990193b63835bcb7c62caa73',
 }
 
 describe('lease/ack contract fixtures', () => {
@@ -39,7 +41,9 @@ describe('lease/ack contract fixtures', () => {
     expect(job.request.type).toBe('plan')
     expect(job.request.criteria).toHaveLength(2)
     expect(job.corpusUrl).toMatch(/^https:/)
-    expect(Date.parse(job.settlementDeadline)).toBeGreaterThan(0)
+    expect(job.corpusVersion).toBe('20260826T110000Z')
+    expect(job.epoch).toBe(128)
+    expect(Date.parse(job.answerCutoff)).toBeGreaterThan(0)
   })
 
   it('client submits a :complete body shaped exactly like the fixture', async () => {

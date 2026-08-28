@@ -12,11 +12,23 @@ the vote/mint cycle.
 ### Requirement: Pull-based lease protocol
 
 Nodes SHALL obtain work by long-polling a lease endpoint; the gateway SHALL
-never push to nodes. Leases are per (job, node): an open job SHALL be
-offered to every polling node that has not yet answered it, so any number
-of nodes can serve the same job concurrently; a node SHALL NOT be offered
-the same job twice. Delivery is at-least-once and result submission SHALL
-be idempotent per `jobId` + node.
+never push to nodes. Leases are per (job, node): an open job (belonging to
+the current judging epoch) SHALL be offered to every polling node that has
+not yet answered it, so any number of nodes can serve the same job
+concurrently; a node SHALL NOT be offered the same job twice. Delivery is
+at-least-once and result submission SHALL be idempotent per `jobId` + node.
+
+The lease response carries the **request inline** (type, payload,
+criteria, context) plus the epoch-model coordination fields: the presigned
+`corpusUrl` with its `corpusVersion`, the job's `epoch`, and the
+`answerCutoff`. Every call an eval needs is served by the gateway itself —
+nodes never call the reppo.ai platform to judge, and the platform is not
+in the judging hot path.
+
+#### Scenario: Lease is self-sufficient
+
+- **WHEN** a node receives a lease
+- **THEN** the lease body contains the full request and the corpus URL, and the node can judge without calling any service other than the gateway and S3
 
 #### Scenario: Two nodes lease the same job
 
@@ -50,7 +62,7 @@ Quorum and settlement are exclusively the gateway's concern. A node that
 leases a job SHALL always judge and submit its answer; the node-side
 protocol carries no quorum state, no settlement logic, and no knowledge of
 how many other nodes are serving the job. The gateway SHALL accept every
-answer submitted within the job's settlement window.
+answer submitted before the job's epoch answer cut-off (epoch end + 1h).
 
 #### Scenario: Node answers without quorum knowledge
 
@@ -81,7 +93,9 @@ voting or minting.
 
 The lease/ack protocol SHALL be pinned by one fixture suite exercised against
 BOTH the gateway implementation and the orquestra worker, so the two sides
-cannot drift.
+cannot drift. The fixtures are **copied into both repos with a checksum
+guard in each CI** (no shared package in v1): unilateral change on either
+side fails that side's CI.
 
 #### Scenario: Protocol drift fails CI
 

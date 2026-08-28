@@ -23,8 +23,9 @@ const leasedJobSchema = z.object({
   }),
   datanetId: z.number(),
   corpusUrl: z.string().url(),
-  leaseExpiresAt: z.string(),
-  settlementDeadline: z.string(),
+  corpusVersion: z.string().min(1),
+  epoch: z.number().int(),
+  answerCutoff: z.string(),
 })
 
 const corpusSnapshotSchema = z.object({

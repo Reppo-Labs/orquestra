@@ -9,14 +9,21 @@ Reppo has decided to ship an evals-as-a-service API: agents submit their output 
 - New standalone service (same repo as orquestr a): the **eval judge**,
   deployed as AWS serverless (CDK, following the telemetry collector's
   conventions).
-- `POST /v1/evals` (free, rate-limited): validate → mint the request as a
-  pod on the v1 datanet → enqueue → `202 {evalId}`.
-- Async judging by **orquestra nodes**: the gateway fans each job out over a
-  pull-based lease/ack protocol; each participating node independently
-  retrieves top-k pods from the v1 datanet and runs its own LLM judge →
-  per-criterion 1–10 scores + critiques + citations. Settlement: 1 answer =
-  verdict served with `quorum {requested, served: 1}` disclosed; 2+ answers =
-  median scores + merged critiques + real agreement stats.
+- `POST /v1/evals` (free, per-platform-API-key rate-limited + 10/day mint
+  allowance): validate → create the request pod's platform record (full
+  request, public) → enqueue chain mint → `202 {evalId}`.
+- Async judging by **orquestra nodes**, batched into the v1 datanet's
+  on-chain epochs: the gateway fans each job out over a pull-based
+  lease/ack protocol (lease carries podId + corpus URL, not the payload —
+  nodes fetch the payload from the pod's platform record); each
+  participating node independently retrieves top-k pods from the v1
+  datanet and runs its own LLM judge → per-criterion 1–10 scores +
+  critiques + citations. Settlement sweeps at epoch end + 1h: 1 answer =
+  verdict served with `quorum {served: 1}` disclosed; 2+ answers = median
+  scores + merged critiques + real agreement stats. Result: 0–100 overall
+  score, accept/revise/reject decision, `action.route`, confidence,
+  dissent (decision-flip rule), provenance. SLA: within 48h of the judging
+  epoch's end.
 - New `evalwork` lane in orquestra (`src/evalworker/`): opt-in always-on
   worker loop beside the scheduler, leasing only jobs for datanets the node
   participates in; LLM-token budget capped; isolated from vote/mint.

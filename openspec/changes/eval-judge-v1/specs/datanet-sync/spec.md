@@ -11,8 +11,14 @@ pod content and maintenance of the embedding corpus nodes retrieve against.
 
 The service SHALL refresh the v1 datanet's pod corpus on a schedule
 (hourly-class), pulling pod content from the chain and platform APIs,
-computing embeddings, and atomically replacing the corpus. A failed refresh
-SHALL leave the previous corpus in place (last-good wins).
+computing embeddings, and writing a **version-addressed corpus object**
+(`corpus/<datanetId>/<version>.json` + a `latest` pointer, temp key +
+atomic copy). Each lease records the corpus version it presigned, and
+citation resolution at settlement SHALL use that version's pod-id
+manifest. Superseded versions SHALL be retained until every job that could
+cite them has settled (lifecycle expiry after the longest settlement
+window). A failed refresh SHALL leave the previous corpus in place
+(last-good wins).
 
 #### Scenario: Failed refresh keeps serving
 
