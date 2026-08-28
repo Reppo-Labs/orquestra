@@ -19,15 +19,24 @@ with `400` and a machine-readable reason.
 - **WHEN** a request with a 40 KB payload or zero criteria is submitted
 - **THEN** the service responds `400` with a machine-readable reason and no job is created
 
-### Requirement: Caller authentication via platform API keys
+### Requirement: Caller authentication via gateway-issued API keys
 
-Callers SHALL authenticate with a reppo.ai platform-issued API key.
-Requests without a valid key SHALL be rejected with `401`. All limits and
-allowances apply per key.
+The gateway SHALL issue caller API keys itself: `POST /v1/keys` with an
+email returns a key exactly once (`201`), stores only its SHA-256 hash,
+enforces one key per email (`409` on repeat), and rate-limits issuance per
+source address. Callers SHALL authenticate with that key; requests with a
+missing, malformed, or unknown key SHALL be rejected with `401` (validated
+by hash lookup — never trusted as bare identity). All limits and
+allowances apply per key (keyed internally by the hash).
 
-#### Scenario: Unkeyed request rejected
+#### Scenario: Key issued once
 
-- **WHEN** a request arrives without a valid platform API key
+- **WHEN** an email requests a key twice
+- **THEN** the first call returns a fresh key and the second answers `409` without issuing
+
+#### Scenario: Unkeyed or unknown-key request rejected
+
+- **WHEN** a request arrives without a key, or with a key whose hash is not on record
 - **THEN** the service responds `401` and no job is created
 
 ### Requirement: Free tier with per-key rate limiting and mint allowance

@@ -99,10 +99,15 @@ judging by orquestra nodes (min 1 answer, target 2+) — no service-run judge.
    (citations vs model-judgment) is the only grounding disclosure.
    Per-topic datanets + routing return as a later change if usage justifies
    them.
-5. **Free tier control = platform API keys + per-key limits + idempotency
-   keys** (2026-08-26). Callers authenticate with **reppo.ai
-   platform-issued API keys** (same account system that issues node
-   agentId/apiKey); unkeyed requests get `401`. All limits are per key:
+5. **Free tier control = gateway-issued API keys + per-key limits +
+   idempotency keys** (AMENDED 2026-08-28 — the platform's agent-key space
+   never fit callers, and unvalidated keys let fabricated identities
+   multiply allowances). The gateway issues keys itself: `POST /v1/keys`
+   {email} → `rk_…` shown once, SHA-256 hash stored, one key per email,
+   issuance IP-rate-limited; intake validates by hash lookup and uses the
+   hash as the caller identity everywhere. Unkeyed/unknown keys get `401`.
+   Emails give the kill-criteria metrics real distinct-user grounding.
+   All limits are per key:
    token-bucket 10/hour burst 3 as the shaper, and a **mint allowance of
    10/day per key** checked at intake — request #11 is rejected (`429` +
    quota-reset time) BEFORE acceptance, preserving "every accepted request
