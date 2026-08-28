@@ -16,7 +16,8 @@
 ## 3. Intake path (eval-api spec)
 
 - [x] 3.1 Request schema validation: 400 with reasons, 32 KB cap, criteria bounds, type enum (unit tests)
-- [x] 3.2 Caller auth + free-tier controls: platform API key required via x-api-key (401 unkeyed; cryptographic validation pending the 4.1 probe — key trusted as bucketing identity, global cap bounds fabricated-key abuse); per-key token bucket (10/h burst 3) AND per-key mint allowance (10/day, global 100/day with rollback on global refusal) checked at intake → 429 with retry-after/quota-reset; idempotency-key → same evalId, limits charged once (unit tests)
+- [x] 3.2 Caller auth + free-tier controls (REVISED 2026-08-28, decision 5 amendment): gateway-issued API key required via x-api-key, validated by SHA-256 hash lookup (401 for missing/malformed/unknown); per-key token bucket (10/h burst 3) AND per-key mint allowance (10/day, global 100/day with rollback on global refusal) checked at intake → 429 with retry-after/quota-reset; idempotency-key → same evalId, limits charged once; caller identity everywhere = the key hash (unit tests)
+- [x] 3.2b Key issuance: POST /v1/keys {email} → rk_ key shown once (201), hash-only storage via TransactWriteItems, one key per email (409), per-IP issuance bucket (config knobs, TTL'd rows, race-safe retry), revokeKeyByEmail support rotation deleting both rows (eval-api PR #12)
 - [x] 3.3 202 response {evalId}; job record with epoch assignment (config-mirrored schedule EPOCH_GENESIS_ISO + EPOCH_DURATION_SECONDS, 3h-tail rollover, cut-off epoch end + 1h) + pinned latest corpus version (503 CORPUS_UNAVAILABLE when none, reservations released) + metadata-pod FIFO mint message (payloadHash, never the payload)
 - [x] 3.4 Read Lambda: GET /v1/evals/{id} (pending|settled|failed with reason, result when settled)
 
@@ -62,7 +63,7 @@
 
 - [ ] 9.1 Create (or designate) the v1 datanet on Base (minimal fees); record id + epoch duration in config (verify epoch on-chain; 48h SLA math assumes epoch ≤ ~46h)
 - [ ] 9.2 Enable evalwork on 1–2 Reppo house nodes (incl. Major Oak candidate) so min-1 quorum is always reachable
-- [x] 9.3 API docs page (drafted `docs/api.md` in eval-api + review artifact; publish location = launch decision): contract, platform-API-key signup, per-key limits (10/h, 10 mints/day), 48h-after-epoch-end SLA + 3h rollover rule, result-shape reference (0–100, decision/route thresholds), per-criteria threshold guidance, publicity disclosure — request TYPE + CRITERIA (and payload hash) become public pod metadata, votable by humans; payloads stay private (gates announcement)
+- [x] 9.3 API docs page (drafted `docs/api.md` in eval-api + review artifact; publish location = launch decision): contract, API-key signup via POST /v1/keys, per-key limits (10/h, 10 mints/day), 48h-after-epoch-end SLA + 3h rollover rule, result-shape reference (0–100, decision/route thresholds), per-criteria threshold guidance, publicity disclosure — request TYPE + CRITERIA (and payload hash) become public pod metadata, votable by humans; payloads stay private (gates announcement)
 - [ ] 9.4 Deploy to chosen account/region; smoke: 400 invalid, 429 over-limit, 202→settled round-trip through a real node, pod visible on datanet
 - [ ] 9.5 Fund wallet float; publish docs + announce
 - [ ] 9.6 Ops runbook: wallet top-up, DLQ redrive, unserved-jobs alarm response, intake kill switch

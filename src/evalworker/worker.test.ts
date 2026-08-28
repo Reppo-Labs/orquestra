@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EvalBudget } from './budget.js'
 import { startEvalWorker, type EvalWorkerDeps } from './worker.js'
-import type { GatewayClient } from './client.js'
+import { GatewayError, type GatewayClient } from './client.js'
 import type { LeasedJob } from './types.js'
 
 const job = (id: string): LeasedJob => ({
@@ -131,6 +131,43 @@ const deferred = <T,>() => {
 }
 
 describe('startEvalWorker (review regressions)', () => {
+  it('a deterministic 4xx on :complete is not retried and not double-recorded via :fail', async () => {
+    const client = makeClient([job('j-422'), null])
+    const complete = client.complete as ReturnType<typeof vi.fn>
+    complete.mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 UNRESOLVABLE_CITATION'))
+    const d = deps({ client })
+    const w = startEvalWorker(d)
+    await waitFor(() => complete.mock.calls.length >= 1)
+    await new Promise((r) => setTimeout(r, 50))
+    await w.stop()
+    expect(complete.mock.calls.length).toBe(1) // no retries on a permanent rejection
+    expect(client.failed).toHaveLength(0) // the gateway already adjudicated; no :fail on top
+  })
+
+  it('a 429 on :complete stays retryable', async () => {
+    const client = makeClient([job('j-429'), null])
+    const complete = client.complete as ReturnType<typeof vi.fn>
+    complete
+      .mockRejectedValueOnce(new GatewayError(429, 'complete failed: HTTP 429'))
+      .mockResolvedValueOnce(undefined)
+    const w = startEvalWorker(deps({ client }))
+    await waitFor(() => complete.mock.calls.length >= 2)
+    await w.stop()
+    expect(complete.mock.calls.length).toBe(2)
+    expect(client.failed).toHaveLength(0)
+  })
+
+  it('a job already past its answer cut-off is handed back without judging or spending budget', async () => {
+    const stale = { ...job('j-late'), answerCutoff: new Date(Date.now() - 1000).toISOString() }
+    const client = makeClient([stale, null])
+    const judge = vi.fn()
+    const w = startEvalWorker(deps({ client, judge }))
+    await waitFor(() => client.failed.length >= 1)
+    await w.stop()
+    expect(judge).not.toHaveBeenCalled()
+    expect(client.failed[0]).toMatchObject({ id: 'j-late', reason: 'answer cut-off already passed' })
+  })
+
   it('a throwing record() never escapes — the node survives (critical #1)', async () => {
     const client = makeClient([job('j1'), null])
     const w = startEvalWorker(

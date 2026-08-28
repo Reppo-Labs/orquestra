@@ -172,8 +172,9 @@ datanet → fund wallet with float → publish docs + announce. Rollback = delet
 
 ## Resolved (2026-08-26 grilling)
 
-- Rate limits: per platform API key — 10/hour burst 3, mint allowance
-  10/day per key, global 100/day.
+- Rate limits: per gateway-issued caller key (decision 5 as amended
+  2026-08-28) — 10/hour burst 3, mint allowance 10/day per key, global
+  100/day.
 - Settlement timing: epoch-batched (see decision 2b); the old
   deadline/lease-TTL knobs are retired.
 - Account placement: collector's account (wallet holds mint-fee float
