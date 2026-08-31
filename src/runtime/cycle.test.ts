@@ -805,6 +805,57 @@ describe('runCycle', () => {
     expect(d.dedup.recordVote).toHaveBeenCalledWith('9', 'p1') // permanent error → dedup so it stops retrying
   })
 
+  it('records a POD_NOT_VALID_FOR_EPOCH vote as voted (expired pod — never retried)', async () => {
+    const d = deps({
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: false, status: 'error', detail: 'reppo vote failed — {"error":{"code":"POD_NOT_VALID_FOR_EPOCH"}}' })),
+        executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
+      } as unknown as CycleDeps['executor'],
+    })
+    await runCycle(config, 'c-expired', d)
+    // A pod's validityEpoch never advances, so the chain rejects this vote forever —
+    // without dedup the node LLM-scored and re-submitted it every cycle (datanet 21 loop).
+    expect(d.dedup.recordVote).toHaveBeenCalledWith('9', 'p1')
+  })
+
+  it('skips pin-mode mints BEFORE discovery when the Pinata preflight fails (no on-chain spend)', async () => {
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const executeMint = vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' }))
+    const recordActivity = vi.fn()
+    const d = deps({
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      executor: {
+        executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
+        executeMint,
+      } as unknown as CycleDeps['executor'],
+      activity: fakeActivity({ record: recordActivity }),
+      pinataPreflight: vi.fn(async () => ({ ok: false as const, reason: 'Pinata key lacks legacy pinning scopes (403 NO_SCOPES_FOUND)' })),
+    })
+    // Mint-only datanet: with no votes the datanet is idle, so the preflight skip is
+    // recorded as an activity entry (an also-voting datanet gets stderr only).
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '9': { vote: false, mint: true, adapter: 'hyperliquid' } },
+    })
+    await runCycle(cfg, 'c-pinata', d)
+    expect(discover).not.toHaveBeenCalled()   // no LLM/candidate spend either
+    expect(executeMint).not.toHaveBeenCalled() // and no on-chain fee
+    const skip = recordActivity.mock.calls
+      .map((c) => c[0] as { kind: string; reason?: string })
+      .find((e) => e.kind === 'skip' && /NO_SCOPES_FOUND/.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+  })
+
+  it('runs the Pinata probe once per cycle and mints normally when it passes', async () => {
+    const preflight = vi.fn(async () => ({ ok: true as const }))
+    const d = deps({ pinataPreflight: preflight })
+    await runCycle(config, 'c-pinata-ok', d)
+    expect(preflight).toHaveBeenCalledTimes(1) // memoized across datanets
+    expect(d.dedup.recordMint).toHaveBeenCalled()
+  })
+
   it('evicts the granted-subnet cache when a vote fails VOTER_LACKS_SUBNET_ACCESS despite the cache', async () => {
     const revokeGrant = vi.fn()
     const d = deps({

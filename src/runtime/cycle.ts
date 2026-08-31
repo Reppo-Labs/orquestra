@@ -234,6 +234,12 @@ export interface CycleDeps {
    *  charges a non-REPPO access fee is skipped with a recorded reason rather than firing
    *  an unsupported flag. Defaults to false (fail-closed) when omitted. */
   supportsNonReppoGrants?: boolean
+  /** Pinata scope preflight for pin-mode mints (src/reppo/pinataPreflight.ts). Runs
+   *  BEFORE candidate discovery, so a Files-scoped key that would 403 at the IPFS
+   *  stage skips the datanet's mints for the cycle instead of paying an on-chain fee
+   *  for a pod the platform never learns about. Absent ⇒ no preflight (tests, or
+   *  wiring on a node that never pin-mints). */
+  pinataPreflight?: () => Promise<{ ok: true } | { ok: false; reason: string }>
 }
 
 /** Turn an emissions-scan failure into something the operator can ACT on.
@@ -596,6 +602,14 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     } else if (r.status === 'error' && /CANNOT_VOTE_FOR_OWN_POD/.test(r.detail ?? '')) {
       console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} is our own pod — recording as voted so it is not retried`)
       deps.dedup.recordVote(datanetId, intent.podId)
+    } else if (r.status === 'error' && /POD_NOT_VALID_FOR_EPOCH/.test(r.detail ?? '')) {
+      // Also PERMANENT: a pod's validityEpoch never moves forward, so a vote the chain
+      // rejects as expired stays rejected every epoch after. Without this, a dormant
+      // datanet's stale pods were LLM-scored and re-submitted every cycle forever
+      // (operator report: datanet 21, validity 121 vs epoch 141). The epoch filter in
+      // wiring keeps these out of scoring; this is the backstop for pods already in flight.
+      console.error(`orquestra: datanet ${datanetId} pod ${intent.podId} expired (POD_NOT_VALID_FOR_EPOCH) — recording as voted so it is not retried`)
+      deps.dedup.recordVote(datanetId, intent.podId)
     }
     // A VOTER_LACKS_SUBNET_ACCESS error while the cache says granted means the cache is STALE —
     // evict so the next cycle re-attempts the grant instead of failing forever.
@@ -629,6 +643,9 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         : `vote rate/budget cap reached — ${count} vote${count === 1 ? '' : 's'} deferred to next cycle`),
   })
 
+  // One Pinata probe per cycle, shared across datanets (the key is node-global).
+  let pinataCheck: Promise<{ ok: true } | { ok: false; reason: string }> | undefined
+
   for (const [datanetId, policy] of Object.entries(config.datanets)) {
     if (datanetId === '*') continue
     if (!policy.vote && !policy.mint) continue
@@ -653,6 +670,14 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
     const recordSkip = (reason: string, opts: { activity?: boolean } = {}): void => {
       console.error(`orquestra: datanet ${datanetId} — ${reason}`)
       if (opts.activity !== false) recordSkipActivity(deps, cycleId, datanetId, reason)
+    }
+
+    // Pin-mode mint preflight: probe the Pinata key's pinning scopes before any
+    // discovery or on-chain spend. false ⇒ the skip is already recorded.
+    const preflightPinata = async (idle: boolean): Promise<boolean> => {
+      const r = await (pinataCheck ??= deps.pinataPreflight!())
+      if (!r.ok) recordSkip(`mint skipped before on-chain spend — ${r.reason}`, { activity: idle })
+      return r.ok
     }
 
     // Per-datanet isolation: a failure here (RPC error, rubric unavailable on an
@@ -777,6 +802,8 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // would pass with 1-199 REPPO of headroom and then every mint still refuses.
           // Record a skip when otherwise idle so the dashboard still explains the silence.
           recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
+        } else if (policy.mintMode === 'pin' && deps.pinataPreflight && !(await preflightPinata(idleThisCycle))) {
+          // recordSkip happened inside preflightPinata with the probe's reason.
         } else {
           const candidates = await adapter.discover({
             datanetId, rubric, topN: deps.adapters.topN,
