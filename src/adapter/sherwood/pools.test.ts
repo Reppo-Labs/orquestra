@@ -68,6 +68,30 @@ describe('parsePools', () => {
     expect(parsePools(null)).toEqual([])
     expect(parsePools({ data: 'nope' })).toEqual([])
   })
+
+  // The live marker is the bullet form "NVIDIA • Robinhood Token" (measured
+  // 2026-08-11); the old parenthesized "(Robinhood Tokenized Stock)" string
+  // matched ZERO live tokens while four real RWAs were present. This pins the
+  // bare-substring match and that ticker-shaped memecoin names never classify.
+  it('flags the live bullet-form marker and rejects ticker-shaped memecoins', () => {
+    const body = {
+      data: [{
+        attributes: { name: 'GME / USDG 0.05%', address: '0xp1', reserve_in_usd: '1', volume_usd: { h24: '1' } },
+        relationships: {
+          dex: { data: { id: 'uniswap-v3-robinhood' } },
+          base_token: { data: { id: 't_gme' } },
+          quote_token: { data: { id: 't_fake' } },
+        },
+      }],
+      included: [
+        { id: 't_gme', type: 'token', attributes: { symbol: 'GME', name: 'GameStop • Robinhood Token', address: '0xgme' } },
+        { id: 't_fake', type: 'token', attributes: { symbol: 'STONK', name: 'STONKBROKER', address: '0xfake' } },
+      ],
+    }
+    const pools = parsePools(body)
+    expect(pools[0].base?.isTokenizedStock).toBe(true)
+    expect(pools[0].quote?.isTokenizedStock).toBe(false)
+  })
 })
 
 describe('tokenizedStocks', () => {

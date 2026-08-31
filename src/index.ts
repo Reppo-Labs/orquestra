@@ -426,7 +426,7 @@ async function start(): Promise<void> {
       createHyperliquidAdapter(),
       createGdeltAdapter({ getModel: liveDefaultModel }),
       createSportsAdapter({ getModel: liveDefaultModel }),
-      createSherwoodAdapter({ getModel: liveDefaultModel }),
+      createSherwoodAdapter({ getModel: liveDefaultModel, ...(rpcUrl ? { rpcUrl } : {}) }),
       createRwaAdapter(),
     ],
   }

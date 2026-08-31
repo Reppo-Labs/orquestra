@@ -5,9 +5,13 @@
 // capital range", so candidates must cite real pools, not hallucinated ones).
 //
 // Token metadata rides along (`include=base_token,quote_token`) so tokenized
-// equities are first-class: Robinhood stock tokens are labeled
-// "<Name> (Robinhood Tokenized Stock)" in their token name — a deterministic
-// classifier, no ticker heuristics (verified live: nvda, spacex; 2026-07-28).
+// equities are first-class: Robinhood stock tokens carry "Robinhood Token" in
+// their token name (live form "NVIDIA • Robinhood Token") — a deterministic
+// classifier, no ticker heuristics. The earlier "(Robinhood Tokenized Stock)"
+// marker matched ZERO live tokens by 2026-08-11 while four real RWAs were
+// present, so this matches the bare substring, no parentheses. The API copy of
+// the name is only a pre-filter — verifyTokens.ts confirms the marker against
+// the contract's own name() before the flag reaches synthesis.
 // Public API, no key; network slug `robinhood` verified live 2026-07-28.
 
 const BASE = 'https://api.geckoterminal.com/api/v2'
@@ -16,7 +20,7 @@ const TIMEOUT_MS = 15_000
  *  today and stays well under the free tier's 30 calls/min. */
 const DEFAULT_PAGES = 3
 
-const TOKENIZED_STOCK_MARKER = '(Robinhood Tokenized Stock)'
+export const TOKENIZED_STOCK_MARKER = 'Robinhood Token'
 
 export interface TokenRef {
   symbol: string

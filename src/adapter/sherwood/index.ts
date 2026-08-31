@@ -1,6 +1,7 @@
 // src/adapter/sherwood/index.ts
 import type { LanguageModel } from 'ai'
 import { fetchRobinhoodPools, type PoolInfo } from './pools.js'
+import { verifyRwaFlagsOnchain } from './verifyTokens.js'
 import { fetchMorphoMarkets, type MorphoMarket } from './morpho.js'
 import { fetchMetrics, type PoolMetrics } from './metrics.js'
 import { venueRejectReason, type Venue } from './derive.js'
@@ -16,6 +17,12 @@ export interface SherwoodDeps {
    *  undefined ⇒ no LLM (tests inject `generate`; semantic dedup no-ops). */
   getModel?: () => LanguageModel | undefined
   fetchPools?: () => Promise<PoolInfo[]>
+  /** On-chain confirmation of API-supplied tokenized-stock flags (name()-marker
+   *  discipline, see verifyTokens.ts). Defaults to a verifier against `rpcUrl`;
+   *  with neither, flags pass through UNverified and a one-time warning is logged. */
+  verifyRwaFlags?: (pools: PoolInfo[]) => Promise<PoolInfo[]>
+  /** Robinhood Chain JSON-RPC endpoint for the default verifier (RPC_URL env). */
+  rpcUrl?: string
   fetchLendingMarkets?: () => Promise<MorphoMarket[]>
   /** Trailing OHLCV statistics per pool — the measured inputs bands, gates and
    *  returns are derived from. A pool this cannot measure is not offered. */
@@ -86,6 +93,13 @@ export function parseSherwoodParams(raw: Record<string, unknown> | undefined): S
  *  GeckoTerminal pool data; personalized per (datanet, operator) via ctx.strategy. */
 export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
   const fetchPools = deps.fetchPools ?? fetchRobinhoodPools
+  // Verdicts are per-adapter-instance and final once the chain answered — a
+  // contract's name() does not change, so one call per token, ever.
+  const rwaVerdictCache = new Map<string, boolean>()
+  const verifyRwaFlags = deps.verifyRwaFlags
+    ?? (deps.rpcUrl
+      ? (pools: PoolInfo[]) => verifyRwaFlagsOnchain(pools, deps.rpcUrl!, { cache: rwaVerdictCache })
+      : undefined)
   const fetchLending = deps.fetchLendingMarkets ?? fetchMorphoMarkets
   const fetchMeasurements = deps.fetchMetrics
     ?? ((addrs: string[]) => fetchMetrics(addrs, { max: addrs.length, deadlineMs: METRICS_DEADLINE_MS }))
@@ -95,6 +109,7 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
   // Both upstreams refresh together — one throttle slot; the instance persists
   // across cycles, so the last success time lives in its closure.
   let lastFetchAt: number | undefined
+  let warnedUnverifiedRwa = false
   let lastPools: PoolInfo[] = []
   let lastLending: MorphoMarket[] = []
   /** Measurements accumulate ACROSS cycles rather than being swept in one go —
@@ -131,6 +146,18 @@ export function createSherwoodAdapter(deps: SherwoodDeps = {}): DatanetAdapter {
         } catch (e) {
           console.error(`orquestra: sherwood pool fetch failed (skipping mint discovery this cycle) — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
           return []
+        }
+        // Confirm API-supplied RWA flags against each token contract's own
+        // name() before anything ranks on or synthesizes from them. Runs once
+        // per fresh fetch, so the throttled snapshot below is already verified.
+        if (verifyRwaFlags) {
+          pools = await verifyRwaFlags(pools)
+        } else if (!warnedUnverifiedRwa && pools.some((p) => p.base?.isTokenizedStock || p.quote?.isTokenizedStock)) {
+          warnedUnverifiedRwa = true
+          console.error(
+            'orquestra: sherwood — no RPC_URL, tokenized-stock flags from GeckoTerminal are UNVERIFIED on-chain; ' +
+            'set RPC_URL to enable the name()-marker check.',
+          )
         }
         lending = await fetchLending().catch((e: unknown) => {
           console.error(`orquestra: sherwood lending fetch failed (proposals go out without borrow-leg data this cycle) — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
