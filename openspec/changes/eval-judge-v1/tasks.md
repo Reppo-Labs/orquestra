@@ -18,7 +18,7 @@
 - [x] 3.1 Request schema validation: 400 with reasons, 32 KB cap, criteria bounds, type enum (unit tests)
 - [x] 3.2 Caller auth + free-tier controls (REVISED 2026-08-28, decision 5 amendment): gateway-issued API key required via x-api-key, validated by SHA-256 hash lookup (401 for missing/malformed/unknown); per-key token bucket (10/h burst 3) AND per-key mint allowance (10/day, global 100/day with rollback on global refusal) checked at intake → 429 with retry-after/quota-reset; idempotency-key → same evalId, limits charged once; caller identity everywhere = the key hash (unit tests)
 - [x] 3.2b Key issuance: POST /v1/keys {email} → rk_ key shown once (201), hash-only storage via TransactWriteItems, one key per email (409), per-IP issuance bucket (config knobs, TTL'd rows, race-safe retry), revokeKeyByEmail support rotation deleting both rows (eval-api PR #12)
-- [x] 3.3 202 response {evalId}; job record with epoch assignment (config-mirrored schedule EPOCH_GENESIS_ISO + EPOCH_DURATION_SECONDS, 3h-tail rollover, cut-off epoch end + 1h) + pinned latest corpus version (503 CORPUS_UNAVAILABLE when none, reservations released) + metadata-pod FIFO mint message (payloadHash, never the payload)
+- [x] 3.3 (REVISED 2026-08-31: mint moved to settlement — intake only reserves the allowance) 202 response {evalId}; job record with epoch assignment (config-mirrored schedule EPOCH_GENESIS_ISO + EPOCH_DURATION_SECONDS, 3h-tail rollover, cut-off epoch end + 1h) + pinned latest corpus version (503 CORPUS_UNAVAILABLE when none, reservations released) + metadata-pod FIFO mint message (payloadHash, never the payload)
 - [x] 3.4 Read Lambda: GET /v1/evals/{id} (pending|settled|failed with reason, result when settled)
 
 ## 4. Job distribution (job-distribution spec)
@@ -30,6 +30,7 @@
 
 ## 5. Settlement (eval-judging spec)
 
+- [x] 5.5 Outcome-pod enqueue from the settlement sweep (2026-08-31, design 6/6c): pod = criteria + verdict summary (or failure reason), payloadHash, epoch; enqueue-before-closeJob retry ordering; failed evals mint too (sweep tests)
 - [x] 5.1 Epoch settlement sweep: at epoch end + 1h aggregate ALL answers received (median per-criterion scores, merged critiques, citation union, agreement when ≥2); 1 answer = settle with quorum {served:1, agreement:null}; 0 answers = failed + unserved metric — pure logic in `src/settle/settle.ts` + `epoch.ts` (sweep trigger wiring lands with 2.3)
 - [x] 5.2 Result assembly (design 2c): 0–100 overall score (mean of medians ×10) + decision thresholds (≥70/40–69/<40), confidence {agreement formula, dispersion buckets}, action.route (auto-ship/review/block; never auto-ship at served=1), dissent via decision-flip rule, evidence block, quorum block, provenance (per-answer model + anonymized node ids, requestPodId, receipt = mint tx, settledAt)
 - [x] 5.3 Settlement unit tests: 3-answer, 1-answer, 0-answer scenarios + fabricated-citation discard + late-answer-after-cut-off rejection + dissent flip/no-flip + rollover epoch assignment (`settle.test.ts`, `epoch.test.ts`)

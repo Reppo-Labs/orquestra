@@ -8,21 +8,33 @@ budget-capped service wallet without ever blocking or losing accepted work.
 
 ## ADDED Requirements
 
-### Requirement: Every request is minted as a metadata pod
+### Requirement: Every eval is minted as an outcome pod at settlement
 
-For every accepted eval the service SHALL mint a pod on the v1 datanet
-through the platform/chain API **as it exists today** — no new platform
-capabilities. The pod is a **metadata demand record**: type, criteria,
-payloadHash, submittedAt, epoch. The payload itself is NOT in the pod.
-Pods are public and votable through the datanet's normal epoch voting.
-The pod id SHALL appear in the result's provenance and the confirmed mint
-tx hash as `provenance.receipt`. The verdict lives only in the gateway's
-result object.
+For every eval that settles (or fails) the service SHALL mint a pod on the
+v1 datanet through the platform/chain API **as it exists today** — no new
+platform capabilities. The pod is the **settled outcome record**: type,
+criteria, payloadHash, submittedAt, epoch, settledAt, and the verdict
+summary (decision, score, agreement, served) — or the failure reason for
+a failed eval. The payload itself is NOT in the pod. Pods are public and
+votable through the datanet's normal epoch voting; votes are the
+network's verdict-oversight layer (design 6c) and never affect
+processing. The pod id SHALL appear in the result's provenance and the
+confirmed mint tx hash as `provenance.receipt`.
 
-#### Scenario: Accepted request becomes a metadata pod
+#### Scenario: Settled eval becomes an outcome pod
 
-- **WHEN** an eval is accepted
-- **THEN** a metadata pod mint is enqueued and the settled result carries its `requestPodId` and, once confirmed, the mint tx hash as `receipt`
+- **WHEN** an eval settles
+- **THEN** a pod mint is enqueued carrying the criteria and verdict summary, and the result carries its `requestPodId` and, once confirmed, the mint tx hash as `receipt`
+
+#### Scenario: Failed eval still mints
+
+- **WHEN** an eval settles `failed` (no valid answers)
+- **THEN** a pod mint is enqueued carrying the criteria and the failure reason — the reserved allowance slot always corresponds to a pod
+
+#### Scenario: Enqueue failure retries with settlement
+
+- **WHEN** the mint enqueue fails during the settlement sweep
+- **THEN** the job stays pending and the next sweep retries settlement and enqueue together; duplicate messages never double-mint (receipt-pending check)
 
 ### Requirement: Minting never blocks or loses accepted work
 

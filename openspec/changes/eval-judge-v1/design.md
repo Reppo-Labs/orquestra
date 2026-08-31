@@ -115,18 +115,33 @@ judging by orquestra nodes (min 1 answer, target 2+) — no service-run judge.
    Signup friction is a feature for the demand test: registered keys make
    the distinct-user and repeat-user kill metrics honest. No payment code
    in v1.
-6. **Mint pipeline: metadata pod via the CURRENT platform/chain API, FIFO
-   async** (REVISED 2026-08-26, superseding the same-day platform-first
-   variant: the gateway takes NO new platform dependencies). The pod is a
-   **metadata demand record** — type, criteria, payloadHash, submittedAt,
-   epoch — minted at intake through the mint flow as it exists today
-   (chain mint by the gateway wallet; platform indexing per the existing
-   API). The payload itself is NOT in the pod. Mint is fire-and-forget via
-   the FIFO queue (single consumer serializes nonce use):
-   `requestPodId: "pending"` until confirmed, bounded retries then
-   terminal alarm; judging never waits on the mint. The verdict lives ONLY
-   in the gateway's result object; `provenance.receipt` = the mint tx
-   hash. Pods are public and votable through normal datanet epoch voting.
+6. **Mint pipeline: the pod is the settled OUTCOME, minted at settlement
+   via the CURRENT platform/chain API, FIFO async** (REVISED 2026-08-31,
+   superseding the intake-time metadata mint: voting needs something worth
+   voting ON — see 6c). The settlement sweep enqueues one mint per settled
+   (or failed) eval; the pod records type, criteria, payloadHash,
+   submittedAt, epoch, settledAt, and the VERDICT SUMMARY (decision,
+   score, agreement, served — or the failure reason). The payload itself
+   is never minted. Chain mint stays fire-and-forget via the FIFO queue
+   (single consumer serializes nonce use): `requestPodId: "pending"` until
+   confirmed, bounded retries then terminal alarm; results are available
+   to the caller regardless of mint state. The gateway takes NO new
+   platform dependencies; enqueue ordering (before closeJob) makes a
+   failed enqueue retry with the whole settlement next sweep, and the
+   consumer's receipt-pending check absorbs duplicate messages.
+   `provenance.receipt` = the mint tx hash. Trade-off vs intake-mint: the
+   demand record appears up to ~1 epoch later — accepted; the kill-criteria
+   metrics read gateway data, not the chain.
+6c. **Datanet voting = verdict oversight** (decided 2026-08-31 — the novel
+   Reppo-native loop that a centralized eval API cannot replicate). Voters
+   stake on whether the settled judgment looks right for the stated
+   criteria: upvote sound verdicts, downvote wrong-looking ones.
+   Vote-vs-verdict disagreement is a product input three ways: (a)
+   calibration data for the deferred `action.est_error`; (b) per-node
+   accountability in v2 (reputation-weighted medians); (c) a dispute flag
+   on contested results. Voting never affects processing — every accepted
+   request is judged and settled regardless (nodes stay quorum-oblivious
+   and cannot see votes).
 6b. **Every call an eval needs is served by eval-api itself** (2026-08-26).
    The lease response carries the request INLINE (type, payload, criteria,
    context) plus the epoch-model fields (`epoch`, `answerCutoff`,
