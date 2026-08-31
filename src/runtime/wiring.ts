@@ -24,6 +24,7 @@ import {
   type ReppoReader, type ClaimableEmission, type ClaimToken, type EmissionsDue,
   type EpochInfo, type OwnPodVote,
 } from '../reppo/reader.js'
+import { checkPinataPinScopes } from '../reppo/pinataPreflight.js'
 import { runCycle } from './cycle.js'
 import { getDatanetRubric } from '../rubric/load.js'
 import { appendActivity, readActivity, type ActivityEntry } from '../dashboard/activityLog.js'
@@ -187,6 +188,16 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
   // (buildTick swaps w.config each cycle). Used by the screen scorer, the panel
   // judge, and the adapters.
   const liveBrief = (): string => w.config.notes
+  // Short-lived memo of the authoritative chain epoch (one CLI read per minute, not
+  // one per datanet per cycle) — consumed by the expired-pod filter below.
+  let epochMemo: { at: number; epoch: number } | undefined
+  const chainEpoch = async (): Promise<number> => {
+    const t = Date.now()
+    if (epochMemo && t - epochMemo.at < 60_000) return epochMemo.epoch
+    const e = (await reader.epoch()).epoch
+    epochMemo = { at: t, epoch: e }
+    return e
+  }
   // Raw pass-through by design: each adapter parses/validates these params itself
   // (e.g. parseGdeltParams / parseSportsParams) so the typing lives at the adapter.
   const strategyFor = (id: string): Record<string, unknown> => {
@@ -401,7 +412,27 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     reads: {
       getRubric: (id) => io.getRubric(id),
       getPodsAndFilter: async (id) => {
-        const pods = await reader.listPods(id, { all: true })
+        let pods = await reader.listPods(id, { all: true })
+        // Drop pods the CHAIN would reject before anything scores them. The derived
+        // currentEpoch below is "newest validityEpoch among this datanet's pods" —
+        // on a dormant datanet that is an EXPIRED epoch (operator report: datanet 21,
+        // newest pods validity 121 vs chain epoch 141), so the node LLM-scored dead
+        // pods and cast votes rejected with POD_NOT_VALID_FOR_EPOCH every cycle.
+        // The authoritative epoch comes from `reppo query epoch`; on a failed read,
+        // fall back to the old behavior rather than skipping the datanet.
+        try {
+          const epochNow = await chainEpoch()
+          const before = pods.length
+          pods = pods.filter((p) => {
+            const v = Number(p.validityEpoch)
+            return !Number.isFinite(v) || v >= epochNow
+          })
+          if (pods.length < before) {
+            console.error(`orquestra: datanet ${id} — ${before - pods.length}/${before} pod(s) expired (validity < epoch ${epochNow}); not scored`)
+          }
+        } catch (e) {
+          console.error(`orquestra: epoch read failed for datanet ${id} — expired-pod filter off this cycle: ${(e as Error).message}`)
+        }
         // The own-pods read needs the wallet-auth platform API, which robinhood
         // doesn't have — attempting it fail-logged EVERY cycle. Skip with a
         // one-time notice instead; the on-chain CanNotVoteForOwnPod revert is
@@ -501,6 +532,10 @@ export function buildCycleDeps(w: CycleWiring): CycleDeps {
     executor: w.executor,
     ledger: w.ledger,
     supportsNonReppoGrants: w.supportsNonReppoGrants ?? false,
+    // Scope-check the Pinata key before any pin-mode mint spends an on-chain fee —
+    // Pinata's default new keys are Files-scoped and 403 at the CLI's legacy pin
+    // endpoint AFTER the mint tx, leaving paid-for pods invisible to the platform.
+    pinataPreflight: () => checkPinataPinScopes(process.env.PINATA_JWT),
     ...(onchain ? { onchain } : {}),
   }
 }
