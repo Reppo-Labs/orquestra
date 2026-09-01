@@ -3,7 +3,9 @@ import type { DatanetEntry, ModelProvider } from '../api'
 import { Tip } from './Tip'
 import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
-const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
+// Must track the `adapters: [...]` array in src/index.ts — a registered adapter
+// missing here is invisible to operators (sherwood/rwa were absent for weeks).
+const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'rwa', 'sherwood', 'sports']
 
 // "Add a datanet" dialog. The datanet is picked BY NAME from the live catalog
 // (/api/datanets id→name map) — ids never surface in the UI. Already-configured

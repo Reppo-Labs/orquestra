@@ -695,6 +695,20 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         continue
       }
 
+      // Rewards-pool read, hoisted above BOTH the vote and mint gates: a dry pool
+      // means votes earn nothing AND mints pay a fee for emissions that cannot be
+      // claimed, so both paths need the same answer (it used to live inside the vote
+      // branch only — a mint-only datanet never read it and minted into dry pools).
+      // Fail-open discipline: a failed read means UNKNOWN (null), never a dry pool.
+      let rewardPools: { reppoWei: bigint; primaryWei: bigint } | null = null
+      if (policy.vote || policy.mint) {
+        try {
+          rewardPools = (await deps.onchain?.getSubnetPools?.(datanetId)) ?? null
+        } catch (e) {
+          console.error(`orquestra: datanet ${datanetId} — rewards-pool read failed, runway omitted: ${redactSecrets(e instanceof Error ? e.message : String(e))}`)
+        }
+      }
+
       if (policy.vote && !rubric.canVote) {
         recordSkip('vote enabled but this datanet has no on-chain voter rubric (onboardingVoters) — voting not possible')
       }
@@ -734,15 +748,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           volumeReadError = redactSecrets(e instanceof Error ? e.message : String(e))
           console.error(`orquestra: datanet ${datanetId} — epoch vote volume read failed, yield omitted: ${volumeReadError}`)
         }
-        // Rewards-pool read — same fail-open discipline as the volume read: a
-        // failure means UNKNOWN (null), never a dry pool.
-        let pools: { reppoWei: bigint; primaryWei: bigint } | null = null
-        try {
-          pools = (await deps.onchain?.getSubnetPools?.(datanetId)) ?? null
-        } catch (e) {
-          console.error(`orquestra: datanet ${datanetId} — rewards-pool read failed, runway omitted: ${redactSecrets(e instanceof Error ? e.message : String(e))}`)
-        }
-        const yld = computeYield(datanetId, rubric.economics, epochVotes, pools)
+        const yld = computeYield(datanetId, rubric.economics, epochVotes, rewardPools)
         // Discriminate the two "unavailable" causes for the dashboard: an RPC failure
         // carries its (redacted) error, an RPC-less node shows plain "unavailable" —
         // the operator on the SSH-tunneled dashboard can't read stderr.
@@ -802,6 +808,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // would pass with 1-199 REPPO of headroom and then every mint still refuses.
           // Record a skip when otherwise idle so the dashboard still explains the silence.
           recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
+        } else if (computeYield(datanetId, rubric.economics, null, rewardPools).poolDry) {
+          // Same gate the vote path applies, for the same reason with a higher stake:
+          // a vote into a dry pool wastes gas, but a MINT pays the datanet's mint fee
+          // for emissions that cannot be claimed until someone re-seeds the pool.
+          // Fail-open like every economics read — an unread pool never blocks minting.
+          recordSkip('rewards pool dry — skipping mint discovery until the datanet is re-seeded (mint fee would buy unclaimable emissions)', { activity: idleThisCycle })
         } else if (policy.mintMode === 'pin' && deps.pinataPreflight && !(await preflightPinata(idleThisCycle))) {
           // recordSkip happened inside preflightPinata with the probe's reason.
         } else {

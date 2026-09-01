@@ -6,7 +6,9 @@ import { AddDatanetModal } from './AddDatanetModal'
 import { Tip } from './Tip'
 import { STRICT, STRICT_LABEL, strictnessTip } from '../lib/strictness'
 
-const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'sports']
+// Must track the `adapters: [...]` array in src/index.ts — a registered adapter
+// missing here is invisible to operators (sherwood/rwa were absent for weeks).
+const ADAPTERS = ['', 'gdelt', 'hyperliquid', 'rwa', 'sherwood', 'sports']
 
 const mintModeTip = (
   <>
@@ -135,7 +137,7 @@ function NetCard({ id, d, name, edit, providers, econ, maxYield, flash }: {
       <EconChips y={econ} maxYield={maxYield} />
       <div className="net-row">
         <label className="field">
-          <span>adapter <Tip label="what the adapter does">Where mint candidates come from for this datanet: gdelt = world news, hyperliquid = on-chain trades, sports = sports signals. Blank = no minting source (vote-only).</Tip></span>
+          <span>adapter <Tip label="what the adapter does">Where mint candidates come from for this datanet: gdelt = world news, hyperliquid = on-chain trades, rwa = tokenized-stock price tracking, sherwood = Robinhood Chain trading strategies, sports = sports signals. Blank = no minting source (vote-only).</Tip></span>
           <select value={d.adapter ?? ''} onChange={(e) => upd((n) => { if (e.target.value) n.adapter = e.target.value; else delete n.adapter })}>
             {ADAPTERS.map((a) => <option key={a} value={a}>{a || '—'}</option>)}
           </select>
