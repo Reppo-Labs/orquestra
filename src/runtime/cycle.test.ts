@@ -14,7 +14,7 @@ import { markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 const rubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
   canVote: true, canMint: true, status: 'ACTIVE', subnetUuid: 'cm-test-9',
-  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
   ...over,
 })
 
@@ -658,7 +658,7 @@ describe('runCycle', () => {
   it('skips a non-REPPO-fee datanet with a recorded reason when the CLI cannot pay primary (capability OFF)', async () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -678,7 +678,7 @@ describe('runCycle', () => {
   it('grants a non-REPPO-fee datanet with token=primary when the CLI supports it (capability ON)', async () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -697,7 +697,7 @@ describe('runCycle', () => {
     // EXY has 6 decimals; need 50 EXY = 50_000_000 raw. Wallet holds 49 EXY = 49_000_000 raw.
     const readTokenBalance = vi.fn(async () => 49_000_000n)
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -720,7 +720,7 @@ describe('runCycle', () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const readTokenBalance = vi.fn(async () => 50_000_000n) // exactly 50 EXY @ 6 dp — enough
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -738,7 +738,7 @@ describe('runCycle', () => {
   it('does NOT block the grant when no balance reader is wired (CLI still fails closed)', async () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -759,7 +759,7 @@ describe('runCycle', () => {
       feeAmount: '50', feeToken: { symbol: 'EXY', address: exyToken.address, decimals: 6 },
     }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -1244,7 +1244,7 @@ describe('runCycle rewards-pool runway', () => {
       scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod } }) }),
       reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
         datanetId: id,
-        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
       })) }),
       onchain: onchainReads({ getSubnetPools: vi.fn(async () => ({ reppoWei: 0n, primaryWei: 0n })) }),
     })
@@ -1279,7 +1279,7 @@ describe('runCycle rewards-pool runway', () => {
       adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
       reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
         datanetId: id,
-        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
       })) }),
       onchain: onchainReads({ getSubnetPools: vi.fn(async () => ({ reppoWei: 0n, primaryWei: 0n })) }),
     })
