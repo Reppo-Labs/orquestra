@@ -18,6 +18,7 @@ import { selectVotes } from '../voter/select.js'
 import { createVotePlanner } from '../voter/plan.js'
 import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
+import { mintFeeRatioExceeded, mintFeeLooksUnread, feeRatioPercent } from '../minter/feeGate.js'
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 import { isRobinhood } from '../reppo/network.js'
 import { advertisedRangeCap } from '../reppo/emissionsOnchain.js'
@@ -793,6 +794,17 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Only surface mint-incapability as a dashboard skip entry when the datanet is
       // otherwise idle this cycle (no votes) — see recordSkip's note on health idle.
       const idleThisCycle = votes.length === 0
+      // The fee gate fails open when the fee reads 0 (rubric/parse.ts cannot tell an
+      // absent field from a genuinely free mint), which is silent by design — so a
+      // payload shape change would disable the gate with NO signal. Say so once per
+      // datanet per cycle, on stderr, so "nothing to gate" stays distinguishable from
+      // "we can no longer read the fee".
+      if (policy.mint && config.budget.mintFeeRatioMax !== undefined && mintFeeLooksUnread(rubric.economics)) {
+        console.error(
+          `orquestra: datanet ${datanetId} — publishing fee read as 0 while the datanet emits ` +
+            `${rubric.economics.emissionsPerEpochReppo} REPPO/epoch; the mint fee gate cannot evaluate and is OPEN for this datanet`,
+        )
+      }
       if (policy.mint && !policy.adapter) {
         recordSkip('mint enabled but no adapter is configured for this datanet — minting not possible', { activity: idleThisCycle })
       } else if (policy.mint && policy.adapter && !rubric.canMint) {
@@ -814,6 +826,19 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // for emissions that cannot be claimed until someone re-seeds the pool.
           // Fail-open like every economics read — an unread pool never blocks minting.
           recordSkip('rewards pool dry — skipping mint discovery until the datanet is re-seeded (mint fee would buy unclaimable emissions)', { activity: idleThisCycle })
+        } else if (mintFeeRatioExceeded(rubric.economics, config.budget.mintFeeRatioMax)) {
+          // Fee gate: this datanet's per-mint publishing fee is a large share of what it
+          // emits per epoch. Sits with the other pre-discovery gates so a blocked datanet
+          // costs no adapter fetch and no LLM scoring. Fails open whenever the ratio is not
+          // two REPPO quantities — a native-token datanet is never gated (see minter/feeGate.ts).
+          // The `!` is safe: mintFeeRatioExceeded returns false when the threshold is undefined.
+          recordSkip(
+            `publishing fee ${rubric.economics.publishingFeeReppo} REPPO is ` +
+              `${feeRatioPercent(rubric.economics).toFixed(1)}% of this datanet's ` +
+              `${rubric.economics.emissionsPerEpochReppo} REPPO/epoch emissions ` +
+              `(max ${(config.budget.mintFeeRatioMax! * 100).toFixed(1)}%) — skipping mint discovery`,
+            { activity: idleThisCycle },
+          )
         } else if (policy.mintMode === 'pin' && deps.pinataPreflight && !(await preflightPinata(idleThisCycle))) {
           // recordSkip happened inside preflightPinata with the probe's reason.
         } else {

@@ -1618,3 +1618,54 @@ describe('runCycle robinhood voting-power mirror', () => {
     await expect(runCycle(config, 'c-nosyncdep', d)).resolves.toBeDefined()
   })
 })
+
+describe('runCycle — mint fee-to-emissions gate', () => {
+  // Mint-only datanet throughout so it is idle this cycle and the skip is persisted as
+  // an activity entry (a datanet that also voted gets the stderr line only).
+  const mintOnly = (over: Record<string, unknown> = {}) =>
+    StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1, ...over },
+      datanets: { '9': { vote: false, mint: true, adapter: 'hyperliquid' } },
+    })
+
+  it('gates mint discovery when the publishing fee is too large a share of emissions', async () => {
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        // 300 / 2000 = 15%, far above the 3% threshold configured below.
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 300, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+    })
+    await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate', d)
+    // The whole point of gating BEFORE discovery: no adapter fetch, no LLM scoring.
+    expect(discover).not.toHaveBeenCalled()
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+    const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
+      .find((e: any) => e.kind === 'skip' && /publishing fee/i.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+  })
+
+  it('never gates a native-token datanet — the ratio is not two REPPO quantities', async () => {
+    // Non-vacuity control for the fail-open rule: 7200 is far above any ratio that could
+    // pass, so a regression in the fail-open branch fails this loudly instead of agreeing
+    // silently. Some nodes run WOOD datanets exclusively; gating them strands the node.
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const d = deps({
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 7200, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'WOOD' },
+      })) }),
+      // No `onchain` wiring, so the rewards-pool read yields null and poolDry is false
+      // (fail-open) — the pool gate cannot be what decides whether discovery runs here.
+    })
+    await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-native', d)
+    expect(discover).toHaveBeenCalled()
+  })
+})
