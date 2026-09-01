@@ -9,6 +9,7 @@ import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
 import type { LockArgs } from '../reppo/cli.js'
+import type { MintIntent } from '../wallet/intents.js'
 import { markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 
 const rubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
@@ -1719,5 +1720,42 @@ describe('runCycle — mint fee-to-emissions gate', () => {
     } finally {
       err.mockRestore()
     }
+  })
+
+  it('reserves the datanet real publishing fee on the mint intent, not the flat fallback', async () => {
+    const executeMint = vi.fn(async (_intent: MintIntent) => ({ ok: true, status: 'executed', txHash: '0xm' }))
+    const d = deps({
+      executor: { executeVote: vi.fn(), executeMint } as unknown as CycleDeps['executor'],
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 5, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+    })
+    // No mintFeeRatioMax configured — the fee gate (Task 4) must not intercept this datanet
+    // before discovery runs.
+    await runCycle(mintOnly(), 'cyc-feecost', d)
+    // Vacuity guard: prove the mint actually happened before trusting any assertion on
+    // what it was called with.
+    expect(executeMint).toHaveBeenCalled()
+    const intent = executeMint.mock.calls[0][0]
+    expect(intent.estReppoCost).toBe(5)
+  })
+
+  it('does not let a 0 publishing fee reserve 0 — falls through to the executor fallback', async () => {
+    const executeMint = vi.fn(async (_intent: MintIntent) => ({ ok: true, status: 'executed', txHash: '0xm' }))
+    const d = deps({
+      executor: { executeVote: vi.fn(), executeMint } as unknown as CycleDeps['executor'],
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+    })
+    await runCycle(mintOnly(), 'cyc-feecost-zero', d)
+    expect(executeMint).toHaveBeenCalled()
+    const intent = executeMint.mock.calls[0][0]
+    // Falsy (0 or undefined) is what makes `intent.estReppoCost || MINT_REPPO_FALLBACK`
+    // in executor.ts fall back to the conservative flat reserve — the safety property
+    // this task must not weaken.
+    expect(intent.estReppoCost).toBeFalsy()
   })
 })

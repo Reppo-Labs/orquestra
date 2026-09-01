@@ -870,7 +870,7 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // toMintRubric: the mint path only ever holds a MintRubric (never yield).
           const intents = await selectMints(datanetId, candidates, toMintRubric(rubric), {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.scorers.candidateScorer,
-            mintMode: policy.mintMode,
+            mintMode: policy.mintMode, estReppoCost: rubric.economics.publishingFeeReppo,
           })
           // Surface the otherwise-silent case where the adapter found candidates but
           // none cleared scoring/dedup — the difference between "no data" and "data
