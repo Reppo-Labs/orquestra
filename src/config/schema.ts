@@ -72,6 +72,13 @@ export const StrategyConfigSchema = z
       voteSpendHorizonHours: z.number().min(0.1).max(1_000).optional(),
       mintRateMaxPerCycle: z.number().int().nonnegative().max(1_000).optional(),
       mintReppoMax: z.number().nonnegative().max(1_000_000),
+      // Refuse to mint on a datanet whose per-mint publishing fee is a large share of
+      // what it emits per epoch (0.03 = 3%). Measured on a live node: a 2.5% fee ratio
+      // returned 3.5x over 219 mints while 5% and above lost money. Undefined ⇒ gate
+      // OFF — a default here would silently stop minting for operators currently
+      // running fine on a higher-fee datanet. Only gates REPPO-emitting datanets
+      // (see src/minter/feeGate.ts).
+      mintFeeRatioMax: z.number().positive().max(1).optional(),
       // Gas caps are no longer operator-configured — gas on Base is negligible. They
       // default to a high value that never bites in practice but still bounds a
       // runaway loop, and the ledger keeps enforcing them as a safety backstop.

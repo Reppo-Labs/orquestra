@@ -64,6 +64,22 @@ describe('StrategyConfig budget/stake ceilings (caps are the real security bound
   })
 })
 
+describe('StrategyConfig budget.mintFeeRatioMax (fee-gate knob, off by default)', () => {
+  it('accepts mintFeeRatioMax: 0.03 and it survives parsing', () => {
+    const cfg = StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintFeeRatioMax: 0.03 } })
+    expect(cfg.budget.mintFeeRatioMax).toBe(0.03)
+  })
+  it('parses to undefined when absent (gate stays off)', () => {
+    const cfg = StrategyConfigSchema.parse(valid)
+    expect(cfg.budget.mintFeeRatioMax).toBeUndefined()
+  })
+  it('rejects 0, a negative value, and a value above 1', () => {
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintFeeRatioMax: 0 } })).toThrow()
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintFeeRatioMax: -0.01 } })).toThrow()
+    expect(() => StrategyConfigSchema.parse({ ...valid, budget: { ...valid.budget, mintFeeRatioMax: 1.01 } })).toThrow()
+  })
+})
+
 describe('StrategyConfig claim fields', () => {
   it('defaults claimEmissions to true', () => {
     expect(StrategyConfigSchema.parse(valid).claimEmissions).toBe(true)
