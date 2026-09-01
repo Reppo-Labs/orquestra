@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { drainErrorSignatures, resetErrorBuffer } from '../telemetry/errorBuffer.js'
-import { runCycle, scanFailureHint, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
+import { runCycle, scanFailureHint, resetWarnedFeeUnread, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
@@ -1649,23 +1649,75 @@ describe('runCycle — mint fee-to-emissions gate', () => {
     const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
       .find((e: any) => e.kind === 'skip' && /publishing fee/i.test(e.reason ?? ''))
     expect(skip).toBeDefined()
+    // The NUMBERS are the actionable part and the only consumer of feeRatioPercent —
+    // an inverted ratio (666.7%), a dropped figure, or a raw 0.15 under a "%" sign
+    // would all pass a message-shape-only assertion.
+    expect(skip.reason).toMatch(/15\.0%/)
+    expect(skip.reason).toMatch(/max 3\.0%/)
+    // and name the lever the operator would reach for, like every sibling message.
+    expect(skip.reason).toMatch(/budget\.mintFeeRatioMax/)
   })
 
   it('never gates a native-token datanet — the ratio is not two REPPO quantities', async () => {
-    // Non-vacuity control for the fail-open rule: 7200 is far above any ratio that could
-    // pass, so a regression in the fail-open branch fails this loudly instead of agreeing
-    // silently. Some nodes run WOOD datanets exclusively; gating them strands the node.
+    // Non-vacuity control for the fail-open rule, and the symbol check is the ONLY thing
+    // holding it: a POSITIVE rate is deliberate here so the guard order cannot make this
+    // pass for free. 300/7200 = 4.2% WOULD gate at the 3% threshold if this datanet were
+    // REPPO-denominated. The zero-rate-implies-native-token pairing is only an ASSUMED
+    // catalog invariant (voter/yield.ts says so explicitly, and rubric/parse.ts reads the
+    // single fixed emissionsPerEpochREPPO field denomination-blind), so a WOOD datanet
+    // populating a rate is plausible and must still not be gated — some nodes run WOOD
+    // datanets exclusively and gating them strands the whole node.
     const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
     const d = deps({
       adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
       reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
         datanetId: id,
-        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 7200, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'WOOD' },
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 7200, publishingFeeReppo: 300, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'WOOD' },
       })) }),
       // No `onchain` wiring, so the rewards-pool read yields null and poolDry is false
       // (fail-open) — the pool gate cannot be what decides whether discovery runs here.
     })
     await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-native', d)
     expect(discover).toHaveBeenCalled()
+  })
+
+  it('warns on stderr when the publishing fee reads 0 — the fail-open branch is otherwise silent', async () => {
+    resetWarnedFeeUnread()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const d = deps({
+        reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+          datanetId: id,
+          economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        })) }),
+      })
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-unread', d)
+      // Second cycle, same datanet: the warn-once latch must hold, or this line runs
+      // every cycle forever (~312/day at 13 datanets hourly) and drowns real events.
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-unread-2', d)
+      const warns = err.mock.calls.map((c) => String(c[0])).filter((m) => /fee gate cannot evaluate/.test(m))
+      expect(warns).toHaveLength(1)
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it('stays quiet about an unreadable fee on a node that never opted into the gate', async () => {
+    // Pins the `mintFeeRatioMax !== undefined` conjunct: without it every node that never
+    // configured the gate would be warned about a knob it does not use, every cycle.
+    resetWarnedFeeUnread()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const d = deps({
+        reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+          datanetId: id,
+          economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        })) }),
+      })
+      await runCycle(mintOnly(), 'cyc-feegate-unread-off', d) // no mintFeeRatioMax
+      expect(err.mock.calls.map((c) => String(c[0])).filter((m) => /fee gate cannot evaluate/.test(m))).toHaveLength(0)
+    } finally {
+      err.mockRestore()
+    }
   })
 })
