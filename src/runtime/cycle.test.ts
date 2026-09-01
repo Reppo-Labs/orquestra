@@ -1270,6 +1270,40 @@ describe('runCycle rewards-pool runway', () => {
     await runCycle(config, 'cyc-poolfail', d)
     expect((d.executor.executeVote as any).mock.calls.length).toBe(2)  // both datanets voted
   })
+
+  it('a dry rewards pool gates MINTS too — no discovery, no mint fee (mint-only datanet)', async () => {
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+      onchain: onchainReads({ getSubnetPools: vi.fn(async () => ({ reppoWei: 0n, primaryWei: 0n })) }),
+    })
+    const cfg = StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1 },
+      datanets: { '9': { vote: false, mint: true, adapter: 'hyperliquid' } },
+    })
+    await runCycle(cfg, 'cyc-dry-mint', d)
+    expect(discover).not.toHaveBeenCalled()                          // no adapter/LLM spend
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0) // no mint fee
+    const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
+      .find((e: any) => e.kind === 'skip' && /rewards pool dry — skipping mint/.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+  })
+
+  it('a FAILED pool read never gates mints — fail-open, minting proceeds', async () => {
+    const d = deps({
+      onchain: onchainReads({ getSubnetPools: vi.fn(async () => { throw new Error('rpc down') }) }),
+    })
+    await runCycle(config, 'cyc-poolfail-mint', d)
+    expect((d.executor.executeMint as any).mock.calls.length).toBeGreaterThan(0)
+  })
 })
 
 
