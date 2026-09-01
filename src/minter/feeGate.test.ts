@@ -25,7 +25,7 @@ describe('mintFeeRatioExceeded', () => {
     expect(mintFeeRatioExceeded(econ({ publishingFeeReppo: 60 }), 0.03)).toBe(false)
   })
 
-  it('blocks datanet 2 at 5%, the measured 0.77x loss', () => {
+  it('blocks datanet 2 at ~5%, the measured 0.77x loss', () => {
     expect(mintFeeRatioExceeded(econ({ publishingFeeReppo: 99 }), 0.03)).toBe(true)
   })
 
@@ -39,6 +39,9 @@ describe('mintFeeRatioExceeded', () => {
 
   it('never gates a non-REPPO datanet', () => {
     expect(mintFeeRatioExceeded(econ({ nativeTokenSymbol: 'WOOD' }), 0.03)).toBe(false)
+  })
+
+  it('gates a REPPO datanet regardless of symbol casing', () => {
     // case-insensitive: 'reppo' is still REPPO, so the gate still applies
     expect(mintFeeRatioExceeded(econ({ nativeTokenSymbol: 'reppo' }), 0.03)).toBe(true)
   })
