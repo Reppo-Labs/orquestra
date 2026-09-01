@@ -1753,9 +1753,57 @@ describe('runCycle — mint fee-to-emissions gate', () => {
     await runCycle(mintOnly(), 'cyc-feecost-zero', d)
     expect(executeMint).toHaveBeenCalled()
     const intent = executeMint.mock.calls[0][0]
-    // Falsy (0 or undefined) is what makes `intent.estReppoCost || MINT_REPPO_FALLBACK`
-    // in executor.ts fall back to the conservative flat reserve — the safety property
-    // this task must not weaken.
-    expect(intent.estReppoCost).toBeFalsy()
+    // select.ts:83 forwards `opts.estReppoCost ?? 0` — for this input that is
+    // deterministically exactly 0, never undefined/null/NaN, so this layer must emit
+    // exactly 0. It's the EXECUTOR (executor.ts:150, `intent.estReppoCost ||
+    // MINT_REPPO_FALLBACK`) that tolerates falsy and substitutes the conservative flat
+    // reserve — that fallback behavior lives downstream, not here.
+    expect(intent.estReppoCost).toBe(0)
+  })
+
+  it('under-gates without the fix: a fee above the flat fallback but within real headroom must still skip discovery', async () => {
+    // fee 300 > flat 200, but the ledger only has ~250 headroom — real spend (300) would
+    // be refused by executeMint, so discovery (adapter fetch + LLM scoring) must not run
+    // at all. Before the fix, canMint(MINT_REPPO_FALLBACK) checks 200, which THIS ledger
+    // allows, so discovery would wrongly proceed only to be refused downstream.
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 300, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+      ledger: {
+        startCycle: vi.fn(), canVote: () => true, votesRemaining: () => 99,
+        canMint: vi.fn((est: number) => est <= 250),
+      } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(mintOnly(), 'cyc-feecost-undergate', d)
+    expect(discover).not.toHaveBeenCalled()
+    const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
+      .find((e: any) => e.kind === 'skip' && /mint budget/i.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+  })
+
+  it('over-gates without the fix: a cheap fee within real headroom must not skip discovery just because the flat fallback would not fit', async () => {
+    // fee 5, ledger has ~100 headroom — real spend (5) fits comfortably, so discovery
+    // must run. Before the fix, canMint(MINT_REPPO_FALLBACK) checks 200, which THIS
+    // ledger refuses, so the datanet would be wrongly starved of minting.
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const d = deps({
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 5, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+      ledger: {
+        startCycle: vi.fn(), canVote: () => true, votesRemaining: () => 99,
+        canMint: vi.fn((est: number) => est <= 100),
+      } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(mintOnly(), 'cyc-feecost-overgate', d)
+    expect(discover).toHaveBeenCalled()
   })
 })
