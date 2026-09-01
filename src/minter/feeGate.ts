@@ -1,10 +1,30 @@
 import type { RubricEconomics } from '../rubric/types.js'
 
-/** A datanet is REPPO-denominated when it names no native token or names REPPO.
- *  Both the gate and the unread-probe must agree on this, so it lives in one place —
- *  they previously expressed it as two differently-phrased inverses. */
-const isReppoDenominated = (symbol: string | undefined): boolean =>
-  !symbol || symbol.toUpperCase() === 'REPPO'
+/** A datanet is REPPO-denominated when it names no native token or names REPPO —
+ *  AND nothing address-derived says otherwise. Both the gate and the unread-probe
+ *  must agree on this, so it lives in one place — they previously expressed it as
+ *  two differently-phrased inverses.
+ *
+ *  Why the symbol alone is NOT sufficient: `rubric/parse.ts` defaults an
+ *  unreadable/absent catalog symbol to the literal `'REPPO'`
+ *  (`str(...) || 'REPPO'`), so `nativeTokenSymbol === 'REPPO'` cannot distinguish
+ *  "this datanet pays REPPO" from "the CLI could not read the symbol". A genuinely
+ *  non-REPPO datanet whose symbol read failed would therefore be GATED — precisely
+ *  the fail-open violation this predicate exists to prevent.
+ *
+ *  `accessFeeToken` is the trustworthy signal because it is derived from the primary
+ *  token's ADDRESS, never from the catalog symbol — parse.ts states that rationale
+ *  itself ("The REPPO/non-REPPO decision keys off the primary token ADDRESS, never
+ *  the catalog `nativeSymbol` — a non-REPPO datanet with an empty/missing catalog
+ *  symbol must still be detected"). Its presence proves a non-REPPO denomination.
+ *
+ *  Honestly: this NARROWS the hole, it does not close it. `accessFeeToken` is also
+ *  undefined when the access fee is zero or unavailable, so a non-REPPO datanet with
+ *  no readable primary access fee AND no readable symbol still looks REPPO-denominated
+ *  here. Adding this conjunct can only ever SUPPRESS the gate and never make it fire,
+ *  so it is safe by construction in the fail-open direction. */
+const isReppoDenominated = (e: RubricEconomics): boolean =>
+  e.accessFeeToken === undefined && (!e.nativeTokenSymbol || e.nativeTokenSymbol.toUpperCase() === 'REPPO')
 
 /** Pure predicate: should a datanet's mint be gated on its publishing fee being
  *  too large relative to what it pays out?
@@ -35,7 +55,7 @@ export function mintFeeRatioExceeded(economics: RubricEconomics, maxRatio: numbe
   // Only a REPPO-denominated datanet has a REPPO emissions rate that means
   // anything to divide by. Case-insensitive: the CLI's casing of the symbol
   // is not a contract we should trust.
-  if (!isReppoDenominated(economics.nativeTokenSymbol)) return false
+  if (!isReppoDenominated(economics)) return false
   if (economics.emissionsPerEpochReppo <= 0) return false
   // `publishingFeeReppo` is 0 when the field was absent or unparseable
   // (rubric/parse.ts `num()` cannot distinguish "no fee" from "genuinely
@@ -56,7 +76,7 @@ export function mintFeeRatioExceeded(economics: RubricEconomics, maxRatio: numbe
  *  the fee".
  */
 export function mintFeeLooksUnread(economics: RubricEconomics): boolean {
-  return isReppoDenominated(economics.nativeTokenSymbol) && economics.publishingFeeReppo <= 0 && economics.emissionsPerEpochReppo > 0
+  return isReppoDenominated(economics) && economics.publishingFeeReppo <= 0 && economics.emissionsPerEpochReppo > 0
 }
 
 /** The fee-to-emissions ratio as a percentage, for display/logging. Returns 0

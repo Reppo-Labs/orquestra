@@ -1621,6 +1621,11 @@ describe('runCycle robinhood voting-power mirror', () => {
 })
 
 describe('runCycle — mint fee-to-emissions gate', () => {
+  // The warn latch is MODULE-level state shared with every other suite in this file, so
+  // reset it here rather than inside individual test bodies: a body-only reset leaves
+  // datanet '9' latched on the way OUT, silently suppressing the warning for anything
+  // that runs later. beforeEach also guarantees ordering-independence within this suite.
+  beforeEach(resetWarnedFeeUnread)
   // Mint-only datanet throughout so it is idle this cycle and the skip is persisted as
   // an activity entry (a datanet that also voted gets the stderr line only).
   const mintOnly = (over: Record<string, unknown> = {}) =>
@@ -1683,7 +1688,6 @@ describe('runCycle — mint fee-to-emissions gate', () => {
   })
 
   it('warns on stderr when the publishing fee reads 0 — the fail-open branch is otherwise silent', async () => {
-    resetWarnedFeeUnread()
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const d = deps({
@@ -1703,10 +1707,32 @@ describe('runCycle — mint fee-to-emissions gate', () => {
     }
   })
 
+  it('re-arms the warning after the fee reads again (edge-triggered, not once-forever)', async () => {
+    // Warn-once must be per OUTAGE, not per process lifetime: a fee that reads again and
+    // then breaks a second time months later would otherwise be completely silent.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const fees = [0, 300, 0] // unread → readable (clears the latch) → unread again
+      let call = 0
+      const d = deps({
+        reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+          datanetId: id,
+          economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: fees[call++] ?? 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        })) }),
+      })
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-rearm-1', d)
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-rearm-2', d)
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-rearm-3', d)
+      const warns = err.mock.calls.map((c) => String(c[0])).filter((m) => /fee gate cannot evaluate/.test(m))
+      expect(warns).toHaveLength(2)
+    } finally {
+      err.mockRestore()
+    }
+  })
+
   it('stays quiet about an unreadable fee on a node that never opted into the gate', async () => {
     // Pins the `mintFeeRatioMax !== undefined` conjunct: without it every node that never
     // configured the gate would be warned about a knob it does not use, every cycle.
-    resetWarnedFeeUnread()
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       const d = deps({

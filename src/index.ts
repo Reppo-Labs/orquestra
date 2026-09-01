@@ -337,14 +337,20 @@ async function start(): Promise<void> {
     ? (txHash: string, token: string, decimals: number) => readClaimedToken(rpcUrl, txHash, token, decimals)
     : undefined
   const executor = new WalletExecutor(defaultReppoCli, ledger, reppoFeeReader, claimReppoReader, claimTokenReader)
-  // A mint reserves a conservative MINT_REPPO_FALLBACK against mintReppoMax before
-  // signing (refuse-before, not after). If the cap is below one such reserve, EVERY
-  // mint is refused — warn loudly so the operator isn't left wondering why nothing mints.
+  // A mint reserves the datanet's REAL publishing fee against mintReppoMax before
+  // signing (refuse-before, not after), falling back to the conservative flat
+  // MINT_REPPO_FALLBACK only where that fee is unknown. So a cap below the flat
+  // fallback does NOT necessarily refuse everything — a 5-REPPO datanet still mints
+  // fine at mintReppoMax 50 — but it DOES refuse every datanet whose fee is
+  // unreadable, and every datanet whose real fee exceeds the cap. Warn (not fail) so
+  // the operator isn't left wondering why nothing mints.
   const mintEnabled = Object.entries(config.datanets).some(([k, d]) => k !== '*' && d.mint)
   if (mintEnabled && config.budget.mintReppoMax < MINT_REPPO_FALLBACK) {
     console.error(
       `orquestra: WARNING — budget.mintReppoMax (${config.budget.mintReppoMax}) is below the conservative ` +
-        `per-mint reserve (${MINT_REPPO_FALLBACK} REPPO), so every mint will be refused before signing. ` +
+        `per-mint reserve (${MINT_REPPO_FALLBACK} REPPO), so mints may be refused before signing — ` +
+        `the reserve is the datanet's real publishing fee where that is readable, and this flat ` +
+        `fallback where it is not. ` +
         `Raise mintReppoMax to at least ${MINT_REPPO_FALLBACK}` +
         (reppoFeeReader ? '' : ', or set RPC_URL so the cap tracks the real (often lower) fee') + ' to mint.',
     )

@@ -25,7 +25,9 @@ import { mintFeeRatioExceeded, mintFeeLooksUnread, feeRatioPercent } from '../mi
  *  be masked by the first). Without the latch this fires for every mint-enabled datanet on
  *  every cycle: ~312 lines/day at 13 datanets on an hourly cadence, the same volume the
  *  yield-line comment below cites when rejecting per-datanet info rows as drowning real
- *  events. Stays on stderr and out of the activity log for that same reason. */
+ *  events. Stays on stderr and out of the activity log for that same reason.
+ *  Edge-triggered: the caller DELETES a datanet from this set the moment its fee reads
+ *  again, so the warning re-arms and a later, independent outage is not silent. */
 const warnedFeeUnread = new Set<string>()
 /** test hook: reset the per-datanet warn-once latches. */
 export function resetWarnedFeeUnread(): void { warnedFeeUnread.clear() }
@@ -815,12 +817,22 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // payload shape change would disable the gate with NO signal. Warn once per
       // datanet on stderr so "nothing to gate" stays distinguishable from "we can no
       // longer read the fee".
-      if (policy.mint && feeRatioMax !== undefined && mintFeeLooksUnread(rubric.economics) && !warnedFeeUnread.has(datanetId)) {
-        warnedFeeUnread.add(datanetId)
-        console.error(
-          `orquestra: datanet ${datanetId} — publishing fee read as 0 while the datanet emits ` +
-            `${rubric.economics.emissionsPerEpochReppo} REPPO/epoch; the mint fee gate cannot evaluate and is OPEN for this datanet`,
-        )
+      // EDGE-TRIGGERED, not warn-once-forever: the latch is cleared as soon as the fee
+      // reads again, so a fee that breaks a SECOND time (months later, after a payload
+      // change is reverted and re-broken) warns again instead of being permanently
+      // silent. Within one outage the behavior is unchanged — one line, then quiet.
+      if (policy.mint && feeRatioMax !== undefined) {
+        if (mintFeeLooksUnread(rubric.economics)) {
+          if (!warnedFeeUnread.has(datanetId)) {
+            warnedFeeUnread.add(datanetId)
+            console.error(
+              `orquestra: datanet ${datanetId} — publishing fee read as 0 while the datanet emits ` +
+                `${rubric.economics.emissionsPerEpochReppo} REPPO/epoch; the mint fee gate cannot evaluate and is OPEN for this datanet`,
+            )
+          }
+        } else {
+          warnedFeeUnread.delete(datanetId)
+        }
       }
       if (policy.mint && !policy.adapter) {
         recordSkip('mint enabled but no adapter is configured for this datanet — minting not possible', { activity: idleThisCycle })
@@ -842,7 +854,15 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           // exists to prevent), and over-gate a cheap datanet (real fee well under 200)
           // whenever the shared cap has less than 200 left but plenty for the real fee.
           // Record a skip when otherwise idle so the dashboard still explains the silence.
-          recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
+          // Name the actual reserve: it varies per datanet now, and this gate sits AHEAD
+          // of the fee gate, so a high-fee datanet trips THIS message for what is really a
+          // fee problem. Without the number the operator cannot tell the two apart.
+          recordSkip(
+            `mint budget below one mint reserve (${rubric.economics.publishingFeeReppo || MINT_REPPO_FALLBACK} REPPO` +
+              `${rubric.economics.publishingFeeReppo ? ", this datanet's publishing fee" : ', conservative fallback — fee unreadable'}) ` +
+              `— skipping mint discovery`,
+            { activity: idleThisCycle },
+          )
         } else if (computeYield(datanetId, rubric.economics, null, rewardPools).poolDry) {
           // Same gate the vote path applies, for the same reason with a higher stake:
           // a vote into a dry pool wastes gas, but a MINT pays the datanet's mint fee
