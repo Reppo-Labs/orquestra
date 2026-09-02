@@ -36,6 +36,11 @@ export const OnboardingAnswersSchema = z.object({
   lockDurationDays: z.number().int().nonnegative(),
   voteRateMaxPerCycle: z.number().int().nonnegative(),
   mintReppoMax: z.number().nonnegative(),
+  // Optional mint fee gate: refuse to mint on a datanet whose per-mint publishing fee
+  // exceeds this share of one epoch's emissions (0.035 = 3.5%). Bounds mirror
+  // config/schema.ts exactly. NO default on purpose — absent means the gate is off, and
+  // a value the operator never asked for would silently stop the node minting.
+  mintFeeRatioMax: z.number().positive().max(1).optional(),
   horizonDays: z.number().int().positive(),
   cadenceHours: z.number().min(0.1), // fractional ok (0.5 = 30 min); floor matches config schema
   notes: z.string().default(''),
