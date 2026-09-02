@@ -4,17 +4,18 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { drainErrorSignatures, resetErrorBuffer } from '../telemetry/errorBuffer.js'
-import { runCycle, scanFailureHint, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
+import { runCycle, scanFailureHint, resetWarnedFeeUnread, type CycleDeps, type OnchainReads, type OnchainWalletReads, type Dedup, type GrantCache, type ActivityStore, type Scorers, type CycleReads, type AdapterHub } from './cycle.js'
 import { StrategyConfigSchema } from '../config/schema.js'
 import type { DatanetRubric, VoteRubric } from '../rubric/types.js'
 import type { DatanetAdapter } from '../adapter/types.js'
 import type { LockArgs } from '../reppo/cli.js'
+import type { MintIntent } from '../wallet/intents.js'
 import { markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 
 const rubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
   canVote: true, canMint: true, status: 'ACTIVE', subnetUuid: 'cm-test-9',
-  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
   ...over,
 })
 
@@ -658,7 +659,7 @@ describe('runCycle', () => {
   it('skips a non-REPPO-fee datanet with a recorded reason when the CLI cannot pay primary (capability OFF)', async () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -678,7 +679,7 @@ describe('runCycle', () => {
   it('grants a non-REPPO-fee datanet with token=primary when the CLI supports it (capability ON)', async () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -697,7 +698,7 @@ describe('runCycle', () => {
     // EXY has 6 decimals; need 50 EXY = 50_000_000 raw. Wallet holds 49 EXY = 49_000_000 raw.
     const readTokenBalance = vi.fn(async () => 49_000_000n)
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -720,7 +721,7 @@ describe('runCycle', () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const readTokenBalance = vi.fn(async () => 50_000_000n) // exactly 50 EXY @ 6 dp — enough
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -738,7 +739,7 @@ describe('runCycle', () => {
   it('does NOT block the grant when no balance reader is wired (CLI still fails closed)', async () => {
     const executeGrantAccess = vi.fn(async () => ({ ok: true as const, status: 'executed' as const, txHash: '0xg' }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -759,7 +760,7 @@ describe('runCycle', () => {
       feeAmount: '50', feeToken: { symbol: 'EXY', address: exyToken.address, decimals: 6 },
     }))
     const d = deps({
-      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({ datanetId: id, subnetUuid: 'cm-42', economics: { accessFeeReppo: 0, accessFeeToken: exyToken, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) }),
       executor: {
         executeVote: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xv' })),
         executeMint: vi.fn(async () => ({ ok: true, status: 'executed', txHash: '0xm' })),
@@ -1244,7 +1245,7 @@ describe('runCycle rewards-pool runway', () => {
       scorers: fakeScorers({ voteScorerFor: () => ({ scorer: { scorePod } }) }),
       reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
         datanetId: id,
-        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
       })) }),
       onchain: onchainReads({ getSubnetPools: vi.fn(async () => ({ reppoWei: 0n, primaryWei: 0n })) }),
     })
@@ -1279,7 +1280,7 @@ describe('runCycle rewards-pool runway', () => {
       adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
       reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
         datanetId: id,
-        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 1000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
       })) }),
       onchain: onchainReads({ getSubnetPools: vi.fn(async () => ({ reppoWei: 0n, primaryWei: 0n })) }),
     })
@@ -1616,5 +1617,219 @@ describe('runCycle robinhood voting-power mirror', () => {
     const onchain = healingWallet(() => {})
     const d = deps({ onchain: onchain as unknown as CycleDeps['onchain'] }) // no syncVotingPower
     await expect(runCycle(config, 'c-nosyncdep', d)).resolves.toBeDefined()
+  })
+})
+
+describe('runCycle — mint fee-to-emissions gate', () => {
+  // The warn latch is MODULE-level state shared with every other suite in this file, so
+  // reset it here rather than inside individual test bodies: a body-only reset leaves
+  // datanet '9' latched on the way OUT, silently suppressing the warning for anything
+  // that runs later. beforeEach also guarantees ordering-independence within this suite.
+  beforeEach(resetWarnedFeeUnread)
+  // Mint-only datanet throughout so it is idle this cycle and the skip is persisted as
+  // an activity entry (a datanet that also voted gets the stderr line only).
+  const mintOnly = (over: Record<string, unknown> = {}) =>
+    StrategyConfigSchema.parse({
+      horizonDays: 30, cadenceHours: 6,
+      stake: { lockReppo: 0, lockDurationDays: 30 },
+      budget: { voteGasEthMax: 1, voteRateMaxPerCycle: 99, mintReppoMax: 1000, mintGasEthMax: 1, claimGasEthMax: 1, ...over },
+      datanets: { '9': { vote: false, mint: true, adapter: 'hyperliquid' } },
+    })
+
+  it('gates mint discovery when the publishing fee is too large a share of emissions', async () => {
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        // 300 / 2000 = 15%, far above the 3% threshold configured below.
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 300, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+    })
+    await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate', d)
+    // The whole point of gating BEFORE discovery: no adapter fetch, no LLM scoring.
+    expect(discover).not.toHaveBeenCalled()
+    expect((d.executor.executeMint as any).mock.calls.length).toBe(0)
+    const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
+      .find((e: any) => e.kind === 'skip' && /publishing fee/i.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+    // The NUMBERS are the actionable part and the only consumer of feeRatioPercent —
+    // an inverted ratio (666.7%), a dropped figure, or a raw 0.15 under a "%" sign
+    // would all pass a message-shape-only assertion.
+    expect(skip.reason).toMatch(/15\.0%/)
+    expect(skip.reason).toMatch(/max 3\.0%/)
+    // and name the lever the operator would reach for, like every sibling message.
+    expect(skip.reason).toMatch(/budget\.mintFeeRatioMax/)
+  })
+
+  it('never gates a native-token datanet — the ratio is not two REPPO quantities', async () => {
+    // Non-vacuity control for the fail-open rule, and the symbol check is the ONLY thing
+    // holding it: a POSITIVE rate is deliberate here so the guard order cannot make this
+    // pass for free. 300/7200 = 4.2% WOULD gate at the 3% threshold if this datanet were
+    // REPPO-denominated. The zero-rate-implies-native-token pairing is only an ASSUMED
+    // catalog invariant (voter/yield.ts says so explicitly, and rubric/parse.ts reads the
+    // single fixed emissionsPerEpochREPPO field denomination-blind), so a WOOD datanet
+    // populating a rate is plausible and must still not be gated — some nodes run WOOD
+    // datanets exclusively and gating them strands the whole node.
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const d = deps({
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 7200, publishingFeeReppo: 300, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'WOOD' },
+      })) }),
+      // No `onchain` wiring, so the rewards-pool read yields null and poolDry is false
+      // (fail-open) — the pool gate cannot be what decides whether discovery runs here.
+    })
+    await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-native', d)
+    expect(discover).toHaveBeenCalled()
+  })
+
+  it('warns on stderr when the publishing fee reads 0 — the fail-open branch is otherwise silent', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const d = deps({
+        reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+          datanetId: id,
+          economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        })) }),
+      })
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-unread', d)
+      // Second cycle, same datanet: the warn-once latch must hold, or this line runs
+      // every cycle forever (~312/day at 13 datanets hourly) and drowns real events.
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-feegate-unread-2', d)
+      const warns = err.mock.calls.map((c) => String(c[0])).filter((m) => /fee gate cannot evaluate/.test(m))
+      expect(warns).toHaveLength(1)
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it('re-arms the warning after the fee reads again (edge-triggered, not once-forever)', async () => {
+    // Warn-once must be per OUTAGE, not per process lifetime: a fee that reads again and
+    // then breaks a second time months later would otherwise be completely silent.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const fees = [0, 300, 0] // unread → readable (clears the latch) → unread again
+      let call = 0
+      const d = deps({
+        reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+          datanetId: id,
+          economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: fees[call++] ?? 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        })) }),
+      })
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-rearm-1', d)
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-rearm-2', d)
+      await runCycle(mintOnly({ mintFeeRatioMax: 0.03 }), 'cyc-rearm-3', d)
+      const warns = err.mock.calls.map((c) => String(c[0])).filter((m) => /fee gate cannot evaluate/.test(m))
+      expect(warns).toHaveLength(2)
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it('stays quiet about an unreadable fee on a node that never opted into the gate', async () => {
+    // Pins the `mintFeeRatioMax !== undefined` conjunct: without it every node that never
+    // configured the gate would be warned about a knob it does not use, every cycle.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const d = deps({
+        reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+          datanetId: id,
+          economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+        })) }),
+      })
+      await runCycle(mintOnly(), 'cyc-feegate-unread-off', d) // no mintFeeRatioMax
+      expect(err.mock.calls.map((c) => String(c[0])).filter((m) => /fee gate cannot evaluate/.test(m))).toHaveLength(0)
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it('reserves the datanet real publishing fee on the mint intent, not the flat fallback', async () => {
+    const executeMint = vi.fn(async (_intent: MintIntent) => ({ ok: true, status: 'executed', txHash: '0xm' }))
+    const d = deps({
+      executor: { executeVote: vi.fn(), executeMint } as unknown as CycleDeps['executor'],
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 5, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+    })
+    // No mintFeeRatioMax configured — the fee gate (Task 4) must not intercept this datanet
+    // before discovery runs.
+    await runCycle(mintOnly(), 'cyc-feecost', d)
+    // Vacuity guard: prove the mint actually happened before trusting any assertion on
+    // what it was called with.
+    expect(executeMint).toHaveBeenCalled()
+    const intent = executeMint.mock.calls[0][0]
+    expect(intent.estReppoCost).toBe(5)
+  })
+
+  it('does not let a 0 publishing fee reserve 0 — falls through to the executor fallback', async () => {
+    const executeMint = vi.fn(async (_intent: MintIntent) => ({ ok: true, status: 'executed', txHash: '0xm' }))
+    const d = deps({
+      executor: { executeVote: vi.fn(), executeMint } as unknown as CycleDeps['executor'],
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+    })
+    await runCycle(mintOnly(), 'cyc-feecost-zero', d)
+    expect(executeMint).toHaveBeenCalled()
+    const intent = executeMint.mock.calls[0][0]
+    // select.ts:83 forwards `opts.estReppoCost ?? 0` — for this input that is
+    // deterministically exactly 0, never undefined/null/NaN, so this layer must emit
+    // exactly 0. It's the EXECUTOR (executor.ts:150, `intent.estReppoCost ||
+    // MINT_REPPO_FALLBACK`) that tolerates falsy and substitutes the conservative flat
+    // reserve — that fallback behavior lives downstream, not here.
+    expect(intent.estReppoCost).toBe(0)
+  })
+
+  it('under-gates without the fix: a fee above the flat fallback but within real headroom must still skip discovery', async () => {
+    // fee 300 > flat 200, but the ledger only has ~250 headroom — real spend (300) would
+    // be refused by executeMint, so discovery (adapter fetch + LLM scoring) must not run
+    // at all. Before the fix, canMint(MINT_REPPO_FALLBACK) checks 200, which THIS ledger
+    // allows, so discovery would wrongly proceed only to be refused downstream.
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const recordActivity = vi.fn()
+    const d = deps({
+      activity: fakeActivity({ record: recordActivity }),
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 300, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+      ledger: {
+        startCycle: vi.fn(), canVote: () => true, votesRemaining: () => 99,
+        canMint: vi.fn((est: number) => est <= 250),
+      } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(mintOnly(), 'cyc-feecost-undergate', d)
+    expect(discover).not.toHaveBeenCalled()
+    const skip = recordActivity.mock.calls.map((c: any[]) => c[0])
+      .find((e: any) => e.kind === 'skip' && /mint budget/i.test(e.reason ?? ''))
+    expect(skip).toBeDefined()
+  })
+
+  it('over-gates without the fix: a cheap fee within real headroom must not skip discovery just because the flat fallback would not fit', async () => {
+    // fee 5, ledger has ~100 headroom — real spend (5) fits comfortably, so discovery
+    // must run. Before the fix, canMint(MINT_REPPO_FALLBACK) checks 200, which THIS
+    // ledger refuses, so the datanet would be wrongly starved of minting.
+    const discover = vi.fn(async () => [{ canonicalKey: 'k1', podName: 'HL perps', podDescription: 'd', dataset: { a: 1 } }])
+    const d = deps({
+      adapters: adapterHub({ get: () => ({ id: 'hyperliquid', discover }) }),
+      reads: fakeReads({ getRubric: vi.fn(async (id: string) => rubric({
+        datanetId: id,
+        economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 2000, publishingFeeReppo: 5, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+      })) }),
+      ledger: {
+        startCycle: vi.fn(), canVote: () => true, votesRemaining: () => 99,
+        canMint: vi.fn((est: number) => est <= 100),
+      } as unknown as CycleDeps['ledger'],
+    })
+    await runCycle(mintOnly(), 'cyc-feecost-overgate', d)
+    expect(discover).toHaveBeenCalled()
   })
 })

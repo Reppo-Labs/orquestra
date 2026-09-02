@@ -126,7 +126,7 @@ describe('buildScorers video seam (scorer → VideoPodPipeline)', () => {
   const rubric: VoteRubric = {
     datanetId: '9', name: 'net', goal: 'g', publisherSpec: '', voterRubric: 'score by quality',
     subnetUuid: '', canVote: true, canMint: false, status: 'active',
-    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
   }
   const fakePipeline = () => {
     const scoreVideoPod = vi.fn(async (..._args: unknown[]) => ({ score: 7, reason: 'good clip' }))

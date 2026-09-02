@@ -71,6 +71,7 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
       accessFeeReppo: num(m['accessFeeREPPO']),
       ...accessFeeToken(m, nativeToken, nativeSymbol),
       emissionsPerEpochReppo: num(m['emissionsPerEpochREPPO']),
+      publishingFeeReppo: num(m['publishingFeeREPPO']),
       upVoteVolume: num(m['upVoteVolume']),
       downVoteVolume: num(m['downVoteVolume']),
       nativeTokenSymbol: nativeSymbol,

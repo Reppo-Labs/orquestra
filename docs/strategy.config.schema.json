@@ -41,6 +41,12 @@
               "type": "number",
               "minimum": 0
             },
+            "mintFeeRatioMax": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "description": "Refuse to mint on a datanet whose per-mint publishing fee exceeds this fraction of its per-epoch REPPO emissions (0.03 = 3%). Omit to disable. Only applies to REPPO-emitting datanets."
+            },
             "voteGasEthMax": {
               "type": "number",
               "minimum": 0,

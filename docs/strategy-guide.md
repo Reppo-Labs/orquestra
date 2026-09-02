@@ -21,6 +21,7 @@ There are two layers to a strategy:
 | `budget.voteSpendHorizonHours` | Optional. Pace the epoch's voting power over at most this many hours instead of the whole epoch. Vote weight decays linearly within the epoch, so a short horizon (e.g. `4`) **front-loads** your weight where it resolves highest; omit to spread evenly across the full epoch (default — never runs dry before late pods appear). |
 | `budget.mintReppoMax` | Max REPPO spent on mint fees per `horizonDays` window. The ledger refuses **before** signing. |
 | `budget.mintRateMaxPerCycle` | Optional cap on mints per cycle. |
+| `budget.mintFeeRatioMax` | Optional. Refuse to mint on a datanet whose per-mint publishing fee is too large a slice of what that datanet emits per epoch — `0.03` caps the fee at 3% of one epoch's emissions. Omit and the check is off entirely; there's no safe default, since the right threshold depends on how much of a datanet's emissions your own pods realistically capture. Only fires when both the fee and the emissions are denominated in REPPO, so it never blocks datanets that pay a native token — safe to set even on a node that also mints on non-REPPO datanets. Runs before candidate discovery, so a blocked datanet costs no adapter fetch and no LLM call; when it trips, the dashboard skip names the fee, the computed percentage, the datanet's emission rate, and the configured max. |
 | `horizonDays` | The rolling window the budget caps apply to. |
 | `stake.lockReppo` | veREPPO lock target — topped up automatically at startup/each cycle until reached. |
 

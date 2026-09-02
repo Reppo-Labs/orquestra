@@ -19,7 +19,7 @@ function deps(model: OnboardingAgentDeps['model']): OnboardingAgentDeps {
     model,
     prompter: silentPrompter,
     listDatanets: vi.fn(async () => [{ id: '9', name: 'TradingGym AI', status: 'ACTIVE', description: 'HL', accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1 }]),
-    getDatanetDetails: vi.fn(async () => ({ datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v', subnetUuid: 'cm-test-9', canVote: true, canMint: true, status: 'ACTIVE', economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' } })),
+    getDatanetDetails: vi.fn(async () => ({ datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'v', subnetUuid: 'cm-test-9', canVote: true, canMint: true, status: 'ACTIVE', economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, publishingFeeReppo: 0, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' } })),
     getBalance: vi.fn(async () => ({ eth: 0.05, reppo: 1234.5, veReppo: 500, usdc: 10 })),
   }
 }
@@ -191,13 +191,13 @@ describe('non-REPPO access fee surfacing in onboarding', () => {
   const baseRubric = (over: Partial<DatanetRubric> = {}): DatanetRubric => ({
     datanetId: '42', name: 'Exylos', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
     subnetUuid: 'cm-42', canVote: true, canMint: false, status: 'ACTIVE',
-    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
+    economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
     ...over,
   })
 
   it('summarizeAccessFee returns a funding + approve note for a NON-REPPO fee datanet', () => {
     const note = summarizeAccessFee(baseRubric({
-      economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
+      economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' },
     }))
     expect(note).toMatch(/50 EXY/)
     expect(note).toMatch(/fund this node's wallet with EXY/)
@@ -219,7 +219,7 @@ describe('non-REPPO access fee surfacing in onboarding', () => {
     const dummy = null as unknown as OnboardingAgentDeps['model']
     // non-REPPO datanet → note attached
     const exy = buildOnboardingTools(
-      { ...deps(dummy), getDatanetDetails: vi.fn(async () => baseRubric({ economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) },
+      { ...deps(dummy), getDatanetDetails: vi.fn(async () => baseRubric({ economics: { accessFeeReppo: 0, accessFeeToken: { address: '0xExy', symbol: 'EXY', decimals: 6, amount: 50, amountRaw: '50000000' }, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'EXY' } })) },
       () => {},
     )
     const exyRes = await exy.get_datanet_details.execute({ datanetId: '42' }, { toolCallId: 'a', messages: [] } as never)

@@ -10,7 +10,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 const rubric: DatanetRubric = {
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'HL perp data', voterRubric: 'v',
   canVote: true, canMint: true, status: 'ACTIVE', subnetUuid: 'cm-subnet-9',
-  economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' },
+  economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, publishingFeeReppo: 0, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' },
 }
 const cand = (key: string): CandidatePod => ({ canonicalKey: key, podName: `pod-${key}`, podDescription: 'd', dataset: { rows: [key] } })
 const scorerOf = (scores: Record<string, number>): CandidateScorer => ({

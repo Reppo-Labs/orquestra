@@ -218,3 +218,26 @@ describe('parseDatanetRubric — non-REPPO access fee (accessFeeToken)', () => {
     expect(r.economics.accessFeeToken).toBeUndefined()
   })
 })
+
+describe('parseDatanetRubric — publishingFeeReppo', () => {
+  it('parses publishingFeeREPPO from the {formatted, raw} object shape', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      publishingFeeREPPO: { raw: '300000000000000000000', formatted: '300' },
+    })
+    expect(r.economics.publishingFeeReppo).toBe(300)
+  })
+
+  it('parses publishingFeeREPPO from a bare number', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      publishingFeeREPPO: 5,
+    })
+    expect(r.economics.publishingFeeReppo).toBe(5)
+  })
+
+  it('defaults publishingFeeReppo to 0 when absent', () => {
+    const r = parseDatanetRubric(fixture)
+    expect(r.economics.publishingFeeReppo).toBe(0)
+  })
+})

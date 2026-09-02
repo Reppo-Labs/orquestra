@@ -18,6 +18,19 @@ import { selectVotes } from '../voter/select.js'
 import { createVotePlanner } from '../voter/plan.js'
 import { createVoteWeigher, type VoteWeigher } from '../voter/weight.js'
 import { selectMints } from '../minter/select.js'
+import { mintFeeRatioExceeded, mintFeeLooksUnread, feeRatioPercent } from '../minter/feeGate.js'
+
+/** Warn-once latch for the "publishing fee reads 0, the fee gate cannot evaluate" notice,
+ *  keyed PER DATANET (not process-wide — a second datanet with an unreadable fee must not
+ *  be masked by the first). Without the latch this fires for every mint-enabled datanet on
+ *  every cycle: ~312 lines/day at 13 datanets on an hourly cadence, the same volume the
+ *  yield-line comment below cites when rejecting per-datanet info rows as drowning real
+ *  events. Stays on stderr and out of the activity log for that same reason.
+ *  Edge-triggered: the caller DELETES a datanet from this set the moment its fee reads
+ *  again, so the warning re-arms and a later, independent outage is not silent. */
+const warnedFeeUnread = new Set<string>()
+/** test hook: reset the per-datanet warn-once latches. */
+export function resetWarnedFeeUnread(): void { warnedFeeUnread.clear() }
 import { planStakeTopUp, stakeTopUpKey, wasStakeTargetAttempted, markStakeTargetAttempted } from '../wallet/stakeTopUp.js'
 import { isRobinhood } from '../reppo/network.js'
 import { advertisedRangeCap } from '../reppo/emissionsOnchain.js'
@@ -793,6 +806,34 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
       // Only surface mint-incapability as a dashboard skip entry when the datanet is
       // otherwise idle this cycle (no votes) — see recordSkip's note on health idle.
       const idleThisCycle = votes.length === 0
+      // Hoisted so the compiler NARROWS it for the gate branch below. A `const` alone
+      // would not: a function's return value never narrows its argument, so relying on
+      // "mintFeeRatioExceeded returns false when undefined" would leave the message
+      // rendering NaN% if that fallback ever changed inside feeGate.ts — a change with
+      // no reason to look here. The explicit `!== undefined` conjunct is the enforcement.
+      const feeRatioMax = config.budget.mintFeeRatioMax
+      // The fee gate fails open when the fee reads 0 (rubric/parse.ts cannot tell an
+      // absent field from a genuinely free mint), which is silent by design — so a
+      // payload shape change would disable the gate with NO signal. Warn once per
+      // datanet on stderr so "nothing to gate" stays distinguishable from "we can no
+      // longer read the fee".
+      // EDGE-TRIGGERED, not warn-once-forever: the latch is cleared as soon as the fee
+      // reads again, so a fee that breaks a SECOND time (months later, after a payload
+      // change is reverted and re-broken) warns again instead of being permanently
+      // silent. Within one outage the behavior is unchanged — one line, then quiet.
+      if (policy.mint && feeRatioMax !== undefined) {
+        if (mintFeeLooksUnread(rubric.economics)) {
+          if (!warnedFeeUnread.has(datanetId)) {
+            warnedFeeUnread.add(datanetId)
+            console.error(
+              `orquestra: datanet ${datanetId} — publishing fee read as 0 while the datanet emits ` +
+                `${rubric.economics.emissionsPerEpochReppo} REPPO/epoch; the mint fee gate cannot evaluate and is OPEN for this datanet`,
+            )
+          }
+        } else {
+          warnedFeeUnread.delete(datanetId)
+        }
+      }
       if (policy.mint && !policy.adapter) {
         recordSkip('mint enabled but no adapter is configured for this datanet — minting not possible', { activity: idleThisCycle })
       } else if (policy.mint && policy.adapter && !rubric.canMint) {
@@ -801,19 +842,47 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         const adapter = deps.adapters.get(policy.adapter)
         if (!adapter) {
           recordSkip(`mint enabled but adapter "${policy.adapter}" is not registered on this node`, { activity: idleThisCycle })
-        } else if (!deps.ledger.canMint(MINT_REPPO_FALLBACK)) {
-          // Mint budget can't fit even one conservative reserve (executeMint reserves
-          // MINT_REPPO_FALLBACK pre-sign) — discovering + LLM-scoring candidates that
-          // would all be refused is wasted spend. Use the fallback, not 0: canMint(0)
-          // would pass with 1-199 REPPO of headroom and then every mint still refuses.
+        } else if (!deps.ledger.canMint(rubric.economics.publishingFeeReppo || MINT_REPPO_FALLBACK)) {
+          // Mirrors executeMint's own reservation (executor.ts:150) exactly, so this
+          // pre-discovery gate and the post-discovery reserve agree on what a mint here
+          // will actually cost: the datanet's real publishing fee, falling back to the
+          // conservative flat reserve only when the fee is unknown (0/absent — parse.ts's
+          // num() can't tell "free" from "unreadable"). Checking the flat fallback here
+          // regardless of the real fee would disagree with executeMint in both directions:
+          // under-gate a datanet whose real fee exceeds 200 headroom (discovery + LLM
+          // scoring run, then executeMint refuses — the exact wasted spend this gate
+          // exists to prevent), and over-gate a cheap datanet (real fee well under 200)
+          // whenever the shared cap has less than 200 left but plenty for the real fee.
           // Record a skip when otherwise idle so the dashboard still explains the silence.
-          recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
+          // Name the actual reserve: it varies per datanet now, and this gate sits AHEAD
+          // of the fee gate, so a high-fee datanet trips THIS message for what is really a
+          // fee problem. Without the number the operator cannot tell the two apart.
+          recordSkip(
+            `mint budget below one mint reserve (${rubric.economics.publishingFeeReppo || MINT_REPPO_FALLBACK} REPPO` +
+              `${rubric.economics.publishingFeeReppo ? ", this datanet's publishing fee" : ', conservative fallback — fee unreadable'}) ` +
+              `— skipping mint discovery`,
+            { activity: idleThisCycle },
+          )
         } else if (computeYield(datanetId, rubric.economics, null, rewardPools).poolDry) {
           // Same gate the vote path applies, for the same reason with a higher stake:
           // a vote into a dry pool wastes gas, but a MINT pays the datanet's mint fee
           // for emissions that cannot be claimed until someone re-seeds the pool.
           // Fail-open like every economics read — an unread pool never blocks minting.
           recordSkip('rewards pool dry — skipping mint discovery until the datanet is re-seeded (mint fee would buy unclaimable emissions)', { activity: idleThisCycle })
+        } else if (feeRatioMax !== undefined && mintFeeRatioExceeded(rubric.economics, feeRatioMax)) {
+          // Fee gate: this datanet's per-mint publishing fee is a large share of what it
+          // emits per epoch. Sits with the other pre-discovery gates so a blocked datanet
+          // costs no adapter fetch and no LLM scoring. Fails open whenever the ratio is not
+          // two REPPO quantities — a native-token datanet is never gated (see minter/feeGate.ts).
+          // Names the knob, like every sibling skip message: the operator's next move is to
+          // raise budget.mintFeeRatioMax or leave this datanet gated.
+          recordSkip(
+            `publishing fee ${rubric.economics.publishingFeeReppo} REPPO is ` +
+              `${feeRatioPercent(rubric.economics).toFixed(1)}% of this datanet's ` +
+              `${rubric.economics.emissionsPerEpochReppo} REPPO/epoch emissions ` +
+              `(max ${(feeRatioMax * 100).toFixed(1)}%, budget.mintFeeRatioMax) — skipping mint discovery`,
+            { activity: idleThisCycle },
+          )
         } else if (policy.mintMode === 'pin' && deps.pinataPreflight && !(await preflightPinata(idleThisCycle))) {
           // recordSkip happened inside preflightPinata with the probe's reason.
         } else {
@@ -828,6 +897,12 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           const intents = await selectMints(datanetId, candidates, toMintRubric(rubric), {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.scorers.candidateScorer,
             mintMode: policy.mintMode,
+            // Feeds WalletExecutor's pre-sign reservation (executor.ts:150) so
+            // mintReppoMax denominates the datanet's real publishing fee instead of a
+            // flat 200 for every mint. A 0/absent fee falls through unchanged to
+            // MINT_REPPO_FALLBACK downstream — this layer never substitutes a fallback
+            // itself (select.ts:83 forwards exactly `?? 0`).
+            estReppoCost: rubric.economics.publishingFeeReppo,
           })
           // Surface the otherwise-silent case where the adapter found candidates but
           // none cleared scoring/dedup — the difference between "no data" and "data
