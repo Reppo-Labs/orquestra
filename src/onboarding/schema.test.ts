@@ -53,6 +53,18 @@ describe('OnboardingAnswersSchema LLM stringification tolerance', () => {
   })
 })
 
+describe('OnboardingAnswersSchema mintFeeRatioMax', () => {
+  it('accepts an in-range ratio; absent stays absent (the gate is opt-in)', () => {
+    expect(OnboardingAnswersSchema.parse({ ...good, mintFeeRatioMax: 0.035 }).mintFeeRatioMax).toBe(0.035)
+    expect(OnboardingAnswersSchema.parse(good).mintFeeRatioMax).toBeUndefined()
+  })
+  it('rejects 0, negatives, and anything above 1 (mirrors config/schema.ts bounds)', () => {
+    for (const v of [0, -0.01, 1.01]) {
+      expect(OnboardingAnswersSchema.safeParse({ ...good, mintFeeRatioMax: v }).success).toBe(false)
+    }
+  })
+})
+
 describe('OnboardingAnswersSchema adapterParams', () => {
   const base = {
     datanets: [{ id: '2', vote: true, mint: true, strictness: 'balanced' as const, adapter: 'gdelt',

@@ -27,6 +27,9 @@ export interface OnboardingAnswers {
   lockDurationDays: number
   voteRateMaxPerCycle: number
   mintReppoMax: number
+  /** Optional opt-in mint fee gate → StrategyConfig.budget.mintFeeRatioMax.
+   *  Absent → the gate is off (config/schema.ts leaves it optional, no default). */
+  mintFeeRatioMax?: number
   horizonDays: number
   cadenceHours: number
   notes: string
