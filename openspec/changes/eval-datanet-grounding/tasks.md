@@ -7,9 +7,9 @@
 - [x] 2.2 `client.ts`: strict lease schema; remove `fetchCorpus`; add `deny()`; complete body = new shape; tests
 
 ## 3. Datanet source
-- [ ] 3.1 `datanet.ts`: `DatanetSource` port, `DatanetPod`, `InMemoryDatanetSource`, `cachedSource(source, ttlMs)`
-- [ ] 3.2 `datanetClient.ts`: provisional HTTP binding (Bearer node key, base override env), throws on any failure; tests with injected fetch
-- [ ] 3.3 `retrieve.ts`: `RankedPod.pod` is a `DatanetPod`; `gatherEvidence(source, request, k)` = fetch all accessible → rank; tests
+- [x] 3.1 `datanet.ts`: `DatanetSource` port, `DatanetPod`, `InMemoryDatanetSource`, `cachedSource(source, ttlMs)`
+- [x] 3.2 `datanetClient.ts`: provisional HTTP binding (Bearer node key, base override env), throws on any failure; tests with injected fetch
+- [x] 3.3 `retrieve.ts`: `RankedPod.pod` is a `DatanetPod`; `gatherEvidence(source, request, k)` = fetch all accessible → rank; tests
 
 ## 4. Relevance gate
 - [ ] 4.1 `gate.ts`: `gateEvidence(model, request, candidates) → { supported: Map<criterion, DatanetPod[]>, unsupported: string[], datanetsSearched: number[] }`; schema post-checks; zero candidates short-circuits without an LLM call; tests with a mocked generator + direct schema tests

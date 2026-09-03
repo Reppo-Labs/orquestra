@@ -1,13 +1,20 @@
-// Top-k evidence retrieval over the corpus snapshot.
+// Evidence retrieval: fetch every datanet this node can read, then rank the
+// union lexically against the job (eval-datanet-grounding design D2).
 //
 // DESIGN AMENDMENT vs eval-judge-v1 design.md decision 3: the design sketched
-// node-side cosine over gateway-computed embeddings, but scoring a QUERY that
-// way needs an embeddings endpoint on the node, and several supported LLM
-// providers (notably anthropic-oauth) have none. v1 therefore ranks lexically —
+// node-side cosine over embeddings, but scoring a QUERY that way needs an
+// embeddings endpoint on the node, and several supported LLM providers
+// (notably anthropic-oauth) have none. Ranking is therefore lexical —
 // tokenized tf-style overlap weighted by inverse document frequency — which
-// needs no provider call at all. The corpus snapshot already carries pod text,
-// so swapping in embeddings later is a drop-in change on this one function.
-import type { CorpusPod } from './types.js'
+// needs no provider call at all. Lexical overlap is only a CANDIDATE filter:
+// the relevance gate (gate.ts) decides what actually counts as evidence.
+import type { DatanetSource } from './datanet.js'
+import type { DatanetPod, EvalJobRequest } from './types.js'
+
+/** Top-k candidates handed to the relevance gate (design D2). */
+export const DEFAULT_TOP_K = 12
+/** Per-datanet read cap — datanets are fetched whole, bounded (design D2). */
+export const DEFAULT_PODS_PER_DATANET = 200
 
 const tokenize = (s: string): string[] =>
   s
@@ -16,12 +23,12 @@ const tokenize = (s: string): string[] =>
     .filter((t) => t.length > 2)
 
 export interface RankedPod {
-  pod: CorpusPod
+  pod: DatanetPod
   score: number
 }
 
 /** Rank pods by lexical relevance to the query; return the top k with score > 0. */
-export function topKRelevant(query: string, pods: CorpusPod[], k = 5): RankedPod[] {
+export function topKRelevant(query: string, pods: DatanetPod[], k = 5): RankedPod[] {
   const queryTokens = new Set(tokenize(query))
   if (queryTokens.size === 0 || pods.length === 0) return []
 
@@ -45,4 +52,28 @@ export function topKRelevant(query: string, pods: CorpusPod[], k = 5): RankedPod
   }
   ranked.sort((a, b) => b.score - a.score)
   return ranked.slice(0, k)
+}
+
+export interface GatheredEvidence {
+  /** Top-k lexical candidates across every accessible datanet. */
+  candidates: RankedPod[]
+  /** Every datanet id read — what a denial reports as `datanetsSearched`. */
+  datanetsSearched: number[]
+}
+
+/** Read every accessible datanet (bounded) and rank the union against the
+ *  request. Any source failure propagates: the worker must :fail, never deny,
+ *  when it could not look. */
+export async function gatherEvidence(
+  source: DatanetSource,
+  request: EvalJobRequest,
+  k = DEFAULT_TOP_K,
+  podsPerDatanet = DEFAULT_PODS_PER_DATANET,
+): Promise<GatheredEvidence> {
+  const datanets = await source.listAccessible()
+  const datanetsSearched = datanets.map((d) => d.datanetId)
+  const perDatanet = await Promise.all(datanets.map((d) => source.fetchPods(d.datanetId, podsPerDatanet)))
+  const pods = perDatanet.flat()
+  const query = `${request.payload} ${request.criteria.join(' ')}`
+  return { candidates: topKRelevant(query, pods, k), datanetsSearched }
 }
