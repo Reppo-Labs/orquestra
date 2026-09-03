@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EvalBudget } from './budget.js'
-import { startEvalWorker, type EvalWorkerDeps } from './worker.js'
+import { buildDenyReason, startEvalWorker, type EvalWorkerDeps } from './worker.js'
 import { GatewayError, type GatewayClient } from './client.js'
 import { InMemoryDatanetSource, type DatanetSource } from './datanet.js'
 import type { DatanetPod, LeasedJob } from './types.js'
@@ -506,5 +506,47 @@ describe('startEvalWorker (datanet grounding)', () => {
     await w.stop()
     expect(deny.mock.calls.length).toBe(2)
     expect(client.failed).toHaveLength(0)
+  })
+})
+
+// ── H1: the gateway caps a denial reason at 2000 chars (eval-api
+//    denyRequestSchema); intake caps the criteria COUNT, not their length ─────
+
+describe('buildDenyReason', () => {
+  const long = (i: number) => `criterion ${i}: ` + 'the plan must survive an adverse funding regime for a sustained period '.repeat(4)
+
+  it('stays inside the gateway 2000-char cap with 10 long unsupported criteria, naming each by index', () => {
+    const criteria = Array.from({ length: 10 }, (_, i) => long(i + 1))
+    const reason = buildDenyReason(criteria, criteria, [27, 31])
+    expect(reason.length).toBeLessThanOrEqual(2000)
+    for (let i = 1; i <= 10; i++) expect(reason).toContain(`#${i}`)
+    expect(reason).toContain('27, 31')
+  })
+
+  it('hard-clamps even when the excerpts alone would overflow', () => {
+    const criteria = Array.from({ length: 40 }, (_, i) => long(i + 1))
+    expect(buildDenyReason(criteria, criteria, [27]).length).toBeLessThanOrEqual(2000)
+  })
+
+  it('reads naturally for a normal two-criterion denial (full text, no truncation)', () => {
+    const criteria = ['entry historically profitable', 'sizing survives a stop hunt']
+    const reason = buildDenyReason([criteria[1]!], criteria, [27])
+    expect(reason).toContain('#2 "sizing survives a stop hunt"')
+    expect(reason).not.toContain('...')
+    expect(reason).toMatch(/searched datanets 27/)
+  })
+})
+
+describe('startEvalWorker (deny reason bound)', () => {
+  it('posts a deny reason the gateway will accept even with 10 long criteria', async () => {
+    const criteria = Array.from({ length: 10 }, (_, i) => `criterion ${i + 1}: ` + 'x'.repeat(300))
+    const longJob: LeasedJob = { ...job('j-long'), request: { type: 'answer', payload: 'p', criteria } }
+    const client = makeClient([longJob, null])
+    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: criteria, datanetsSearched: [27] }) }))
+    await waitFor(() => client.denied.length === 1)
+    await w.stop()
+    const reason = (client.denied[0] as { reason: string }).reason
+    expect(reason.length).toBeLessThanOrEqual(2000)
+    expect(reason).toContain('#10')
   })
 })

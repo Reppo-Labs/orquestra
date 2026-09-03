@@ -48,6 +48,32 @@ export interface EvalWorkerDeps {
   log?: (msg: string) => void
 }
 
+/** The gateway caps a denial reason at 2000 characters (eval-api
+ *  `denyRequestSchema`) while intake caps the criteria COUNT (10), not their
+ *  length — so the full text of ten long criteria overflows the cap, and a 400
+ *  INVALID_DENIAL is terminal here: every node would :fail and the job would
+ *  settle `failed` instead of `denied`. Name each unsupported criterion by its
+ *  1-based index with a bounded excerpt, and hard-clamp the whole string.
+ *  ASCII-only truncation markers so length in characters == length in bytes. */
+export const DENY_REASON_MAX = 2000
+const CRITERION_EXCERPT_MAX = 120
+
+const excerpt = (s: string): string => {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return flat.length > CRITERION_EXCERPT_MAX ? `${flat.slice(0, CRITERION_EXCERPT_MAX - 3)}...` : flat
+}
+
+export function buildDenyReason(unsupported: string[], criteria: string[], datanetsSearched: number[]): string {
+  const named = unsupported.map((c) => {
+    const i = criteria.indexOf(c)
+    return `${i >= 0 ? `#${i + 1}` : '#?'} "${excerpt(c)}"`
+  })
+  const reason =
+    `no pod on the datanets this node can read bears on criteria ${named.join(', ')}` +
+    ` (searched datanets ${datanetsSearched.join(', ')})`
+  return reason.length > DENY_REASON_MAX ? `${reason.slice(0, DENY_REASON_MAX - 3)}...` : reason
+}
+
 export interface EvalWorkerHandle {
   stop(): Promise<void>
 }
@@ -146,9 +172,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       }
       const gate = await deps.gate(job.request, evidence.candidates)
       if (gate.unsupported.length > 0) {
-        const reason =
-          `no pod on the datanets this node can read bears on: ${gate.unsupported.map((c) => `"${c}"`).join(', ')}` +
-          ` (searched datanets ${evidence.datanetsSearched.join(', ')})`
+        const reason = buildDenyReason(gate.unsupported, job.request.criteria, evidence.datanetsSearched)
         await submitWithRetry(job.jobId, 'deny', () => deps.client.deny(job.jobId, reason, evidence.datanetsSearched))
         submitted = true
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'denied', reason })

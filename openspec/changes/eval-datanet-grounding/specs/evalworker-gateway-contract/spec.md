@@ -19,7 +19,11 @@ The worker SHALL parse a lease as `{ jobId, request, epoch, answerCutoff }` and 
 - **THEN** the body sent equals the fixture byte-for-byte after JSON parse
 
 ### Requirement: Deny route
-The worker SHALL expose `deny(jobId, reason, datanetsSearched)` posting `{ jobId, reason, datanetsSearched }` to `/v1/node/jobs/{jobId}:deny`, and SHALL treat `409 ALREADY_ANSWERED` / `409 PAST_CUTOFF` / `400 INVALID_DENIAL` as terminal (no retry).
+The worker SHALL expose `deny(jobId, reason, datanetsSearched)` posting `{ jobId, reason, datanetsSearched }` to `/v1/node/jobs/{jobId}:deny`, and SHALL treat `409 ALREADY_ANSWERED` / `409 PAST_CUTOFF` / `400 INVALID_DENIAL` as terminal (no retry). `reason` SHALL be at most **2000 characters** (the gateway's `denyRequestSchema` cap): the worker builds it by naming each unsupported criterion by its 1-based index plus a bounded excerpt, and hard-clamps the result. Overflowing the cap is a terminal 400 INVALID_DENIAL, which would settle the job `failed` rather than `denied`.
+
+#### Scenario: Ten long unsupported criteria
+- **WHEN** all ten criteria of a job are long and unsupported
+- **THEN** the reason posted is at most 2000 characters and still names every unsupported criterion by index
 
 #### Scenario: Deny fixture round-trip
 - **WHEN** the vendored `deny-request.json` is submitted through the client
