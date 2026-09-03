@@ -147,6 +147,18 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
 
   async function serve(job: LeasedJob): Promise<void> {
     let submitted = false
+    // The reservation is a pre-spend gate taken BEFORE retrieval (a lease/
+    // reserve race would otherwise burn jobs — see the slow-judge concurrency
+    // test). But a job that dies before the first model call spent nothing, so
+    // a datanet outage or a bad key would otherwise drain the day's cap for
+    // free. `spent` flips the moment a model call becomes unavoidable.
+    let reserved = false
+    let spent = false
+    const releaseIfUnspent = (): void => {
+      if (!reserved || spent) return
+      reserved = false
+      deps.budget.release()
+    }
     try {
       // Past the epoch answer cut-off the gateway rejects every answer —
       // judging would spend LLM budget on a guaranteed 409. Hand it back.
@@ -162,6 +174,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'skipped', reason: 'budget exhausted' })
         return
       }
+      reserved = true
       // A source failure throws out of here → :fail (retryable). It must never
       // read as "no evidence": an outage is not a denial.
       const evidence = await gatherEvidence(deps.datanet, job.request)
@@ -170,14 +183,19 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         // and a node that can read nothing is misconfigured, not uninformed.
         throw new Error('no accessible datanets — this node cannot ground any verdict (check the node credentials / EVAL_DATANET_API_URL)')
       }
+      // Zero candidates short-circuit the gate with no model call (gate.ts), so
+      // that denial is free — anything else means the gate is about to spend.
+      if (evidence.candidates.length > 0) spent = true
       const gate = await deps.gate(job.request, evidence.candidates)
       if (gate.unsupported.length > 0) {
+        releaseIfUnspent()
         const reason = buildDenyReason(gate.unsupported, job.request.criteria, evidence.datanetsSearched)
         await submitWithRetry(job.jobId, 'deny', () => deps.client.deny(job.jobId, reason, evidence.datanetsSearched))
         submitted = true
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'denied', reason })
         return
       }
+      spent = true
       const outcome = await deps.judge(job.request, gate.supported)
       const answer = { jobId: job.jobId, model: deps.modelId(), verdicts: outcome.verdicts }
       await submitWithRetry(job.jobId, 'complete', () => deps.client.complete(answer))
@@ -191,6 +209,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         reason: `judged ${outcome.verdicts.length} criteria, ${cited} citation(s) across datanets ${evidence.datanetsSearched.join(', ')}`,
       })
     } catch (e) {
+      releaseIfUnspent()
       const msg = e instanceof Error ? e.message : String(e)
       log(`job ${job.jobId} failed: ${e instanceof Error ? (e.stack ?? msg) : msg}`)
       safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'error', reason: msg })

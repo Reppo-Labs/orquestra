@@ -36,7 +36,7 @@ lease → cutoff check → budget.reserve() → retrieve → gate
   → unsupported ≠ ∅ : client.deny(...)      → activity 'denied'
   → else            : judge → complete       → activity 'executed'
 ```
-Budget: one reservation covers gate + judge (they are one job's spend). `:deny` errors: 4xx except 408/429 terminal; a 409 ALREADY_ANSWERED means the gateway adjudicated. `EvalActivityRow.status` gains `'denied'`; `appendActivity` kind stays `'eval'`.
+Budget: one reservation covers gate + judge (they are one job's spend), taken before retrieval so no lease/reserve race can burn jobs — and **released** on any path that fails before the first model call (datanet outage, no accessible datanets, the zero-candidate denial the gate short-circuits), so an outage cannot drain `maxJudgeCallsPerDay` with zero LLM spend. `:deny` errors: 4xx except 408/429 terminal; a 409 ALREADY_ANSWERED means the gateway adjudicated. `EvalActivityRow.status` gains `'denied'`; `appendActivity` kind stays `'eval'`.
 
 ### D6. Contract fixtures copied, not re-authored
 `cp` the five files from eval-api `fixtures/lease-ack/` at `ad217dd`, delete `corpus-snapshot.json`, re-pin checksums in `leaseAckContract.test.ts` from eval-api's `CHECKSUMS.sha256`. Contract tests: lease parse (and old-shape rejection), complete round-trip, deny round-trip, fail round-trip.

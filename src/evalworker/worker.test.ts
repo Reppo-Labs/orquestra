@@ -550,3 +550,90 @@ describe('startEvalWorker (deny reason bound)', () => {
     expect(reason).toContain('#10')
   })
 })
+
+// ── M1: a reservation covers LLM spend; a failure BEFORE the first model call
+//    must give it back, or an outage drains the day's cap for free ───────────
+
+describe('startEvalWorker (budget release on pre-LLM failures)', () => {
+  it('a datanet source error gives the reservation back', async () => {
+    const client = makeClient([job('j-src'), null])
+    const b = budget(5)
+    const w = startEvalWorker(
+      deps({
+        client,
+        budget: b,
+        datanet: {
+          listAccessible: async () => {
+            throw new Error('datanet api HTTP 503')
+          },
+          fetchPods: async () => [],
+        },
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(b.usedToday()).toBe(0)
+  })
+
+  it('no accessible datanets gives the reservation back', async () => {
+    const client = makeClient([job('j-none'), null])
+    const b = budget(5)
+    const w = startEvalWorker(deps({ client, budget: b, datanet: new InMemoryDatanetSource([]) }))
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(b.usedToday()).toBe(0)
+  })
+
+  it('a zero-candidate denial gives the reservation back (the gate short-circuits without a model call)', async () => {
+    const client = makeClient([job('j-empty'), null])
+    const b = budget(5)
+    const w = startEvalWorker(
+      deps({
+        client,
+        budget: b,
+        gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [] }),
+        datanet: new InMemoryDatanetSource([{ datanetId: 27, name: 'a', pods: [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }] }]),
+      }),
+    )
+    await waitFor(() => client.denied.length === 1)
+    await w.stop()
+    expect(b.usedToday()).toBe(0)
+  })
+
+  it('a successful judge keeps the reservation spent', async () => {
+    const client = makeClient([job('j-ok'), null])
+    const b = budget(5)
+    const w = startEvalWorker(deps({ client, budget: b }))
+    await waitFor(() => client.completed.length === 1)
+    await w.stop()
+    expect(b.usedToday()).toBe(1)
+  })
+
+  it('a judge failure AFTER the gate call keeps the reservation spent', async () => {
+    const client = makeClient([job('j-judge'), null])
+    const b = budget(5)
+    const w = startEvalWorker(
+      deps({
+        client,
+        budget: b,
+        judge: async () => {
+          throw new Error('model exploded')
+        },
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(b.usedToday()).toBe(1)
+  })
+
+  it('a denial after a real gate call (candidates present) keeps the reservation spent', async () => {
+    const client = makeClient([job('j-deny'), null])
+    const b = budget(5)
+    const w = startEvalWorker(
+      deps({ client, budget: b, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }),
+    )
+    await waitFor(() => client.denied.length === 1)
+    await w.stop()
+    expect(b.usedToday()).toBe(1)
+  })
+})

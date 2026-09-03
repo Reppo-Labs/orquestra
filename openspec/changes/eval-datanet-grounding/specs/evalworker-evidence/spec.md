@@ -45,7 +45,11 @@ The judge SHALL cite at least one gated pod per criterion, as `{ datanetId, podI
 - **THEN** the node reports `:fail` and does not submit
 
 ### Requirement: Denials and gate calls are budgeted and recorded
-The relevance gate SHALL count as one judge call against `maxJudgeCallsPerDay`. A denial SHALL be recorded in the activity log with status `denied` and the reason.
+The relevance gate SHALL count as one judge call against `maxJudgeCallsPerDay`. A denial SHALL be recorded in the activity log with status `denied` and the reason. A reservation SHALL be released when the job fails before the first model call.
+
+#### Scenario: Datanet outage after reserving
+- **WHEN** the reservation is taken and retrieval then fails (or no datanet is accessible, or the gate short-circuits on zero candidates)
+- **THEN** the reservation is released and the day's used count is unchanged
 
 #### Scenario: Budget exhausted before the gate
 - **WHEN** the budget has no calls left

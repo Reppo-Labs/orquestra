@@ -70,6 +70,16 @@ export class EvalBudget {
     return true
   }
 
+  /** Give back a reservation whose spend never happened (the job failed before
+   *  the first model call). Floors at 0: releasing twice must never manufacture
+   *  budget. Persisted like reserve(), so a restart cannot resurrect the slot. */
+  release(): void {
+    this.roll()
+    if (this.state.used === 0) return
+    this.state.used -= 1
+    this.persist()
+  }
+
   usedToday(): number {
     this.roll()
     return this.state.used
