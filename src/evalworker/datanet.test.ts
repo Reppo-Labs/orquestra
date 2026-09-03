@@ -86,3 +86,16 @@ describe('cachedSource', () => {
     expect(inner.fetch).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('cachedSource.invalidate', () => {
+  it('drops cached pods so the next read hits the source again (a deleted pod must not be cited twice)', async () => {
+    const fetchPods = vi.fn(async () => [{ datanetId: 1, podId: 'p', name: 'n', text: 't' }])
+    const src = cachedSource({ listAccessible: async () => [{ datanetId: 1, name: 'a' }], fetchPods }, 60_000)
+    await src.fetchPods(1, 10)
+    await src.fetchPods(1, 10)
+    expect(fetchPods).toHaveBeenCalledTimes(1)
+    src.invalidate?.()
+    await src.fetchPods(1, 10)
+    expect(fetchPods).toHaveBeenCalledTimes(2)
+  })
+})

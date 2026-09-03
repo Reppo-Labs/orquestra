@@ -677,3 +677,33 @@ describe('startEvalWorker (datanet auth rejection)', () => {
     expect(logs.some((l) => /credentials/.test(l))).toBe(false)
   })
 })
+
+// ── L3: a pod deleted after caching is served from the 5-min cache, so every
+//    job in the TTL window earns another UNRESOLVABLE_CITATION discard ──────
+
+describe('startEvalWorker (stale pod cache)', () => {
+  const source = (invalidate: () => void): DatanetSource => Object.assign(datanet(), { invalidate })
+
+  it('a 422 UNRESOLVABLE_CITATION busts the pod cache once (the next job re-reads)', async () => {
+    const client = makeClient([job('j-stale'), null])
+    ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"UNRESOLVABLE_CITATION"}'))
+    const invalidate = vi.fn()
+    const w = startEvalWorker(deps({ client, datanet: source(invalidate) }))
+    await waitFor(() => (client.complete as ReturnType<typeof vi.fn>).mock.calls.length >= 1)
+    await new Promise((r) => setTimeout(r, 40))
+    await w.stop()
+    expect(invalidate).toHaveBeenCalledTimes(1)
+    expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
+  })
+
+  it('a 422 CRITERIA_MISMATCH leaves the cache alone (the pods were fine)', async () => {
+    const client = makeClient([job('j-mismatch'), null])
+    ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"CRITERIA_MISMATCH"}'))
+    const invalidate = vi.fn()
+    const w = startEvalWorker(deps({ client, datanet: source(invalidate) }))
+    await waitFor(() => (client.complete as ReturnType<typeof vi.fn>).mock.calls.length >= 1)
+    await new Promise((r) => setTimeout(r, 40))
+    await w.stop()
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+})

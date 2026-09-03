@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gatherEvidence, topKRelevant } from './retrieve.js'
 import { InMemoryDatanetSource } from './datanet.js'
 import type { DatanetPod, EvalJobRequest } from './types.js'
@@ -39,6 +39,10 @@ describe('topKRelevant', () => {
   })
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('gatherEvidence', () => {
   const request: EvalJobRequest = {
     type: 'plan',
@@ -71,6 +75,25 @@ describe('gatherEvidence', () => {
     const out = await gatherEvidence(source, request, 12)
     expect(out.candidates).toEqual([])
     expect(out.datanetsSearched).toEqual([27])
+  })
+
+  it('one flaky datanet does not fail the job: keeps what the others answered, names only those', async () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const source = {
+      listAccessible: async () => [
+        { datanetId: 27, name: 'perps' },
+        { datanetId: 31, name: 'flaky' },
+      ],
+      fetchPods: async (datanetId: number) => {
+        if (datanetId === 31) throw new Error('datanet api HTTP 503')
+        return [pod('482', 'ETH funding backtest', 'negative funding ETH perp backtest expectancy', 27)]
+      },
+    }
+    const out = await gatherEvidence(source, request, 12)
+    expect(out.candidates.map((c) => c.pod.podId)).toEqual(['482'])
+    // a denial must never claim a datanet this node never read
+    expect(out.datanetsSearched).toEqual([27])
+    expect(errs.mock.calls.filter((c) => String(c[0]).includes('31'))).toHaveLength(1)
   })
 
   it('propagates a source failure (an outage is never "no evidence")', async () => {

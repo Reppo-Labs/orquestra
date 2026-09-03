@@ -71,9 +71,27 @@ export async function gatherEvidence(
   podsPerDatanet = DEFAULT_PODS_PER_DATANET,
 ): Promise<GatheredEvidence> {
   const datanets = await source.listAccessible()
-  const datanetsSearched = datanets.map((d) => d.datanetId)
-  const perDatanet = await Promise.all(datanets.map((d) => source.fetchPods(d.datanetId, podsPerDatanet)))
-  const pods = perDatanet.flat()
+  // Per-datanet, not all-or-nothing: one flaky datanet must not cost the job
+  // the evidence the others answered with. `datanetsSearched` therefore lists
+  // only the datanets actually READ — a denial may never claim to have looked
+  // somewhere it could not reach. Only a total failure is an outage (→ :fail),
+  // and it rethrows the FIRST reason so a typed DatanetError (401/403) keeps
+  // its status for the worker's auth backoff.
+  const settled = await Promise.allSettled(datanets.map((d) => source.fetchPods(d.datanetId, podsPerDatanet)))
+  const pods: DatanetPod[] = []
+  const datanetsSearched: number[] = []
+  for (const [i, r] of settled.entries()) {
+    const id = datanets[i]!.datanetId
+    if (r.status === 'fulfilled') {
+      pods.push(...r.value)
+      datanetsSearched.push(id)
+      continue
+    }
+    console.error(`orquestra: evalwork: datanet ${id} unreadable (${r.reason instanceof Error ? r.reason.message : String(r.reason)}) — excluded from this job's evidence`)
+  }
+  if (datanets.length > 0 && datanetsSearched.length === 0) {
+    throw (settled[0] as PromiseRejectedResult).reason
+  }
   const query = `${request.payload} ${request.criteria.join(' ')}`
   return { candidates: topKRelevant(query, pods, k), datanetsSearched }
 }

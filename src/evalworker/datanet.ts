@@ -36,6 +36,11 @@ export interface DatanetSource {
   listAccessible(): Promise<AccessibleDatanet[]>
   /** Up to `limit` pods of one datanet, each tagged with its datanetId. */
   fetchPods(datanetId: number, limit: number): Promise<DatanetPod[]>
+  /** Drop any cached pods (a caching source only). Called when the gateway
+   *  rejects a citation as unresolvable: the pod was deleted after we cached
+   *  it, and without this every job in the TTL window cites it again and earns
+   *  another discard against this node. */
+  invalidate?(): void
 }
 
 export interface InMemoryDatanet extends AccessibleDatanet {
@@ -87,6 +92,10 @@ export function cachedSource(source: DatanetSource, ttlMs: number, now: () => nu
       })
       list = { value, expiresAt: now() + ttlMs, limit: 0 }
       return value
+    },
+    invalidate() {
+      // Pods only: the accessible-datanet list is not what went stale.
+      pods.clear()
     },
     fetchPods(datanetId, limit) {
       const hit = pods.get(datanetId)

@@ -11,8 +11,12 @@ For each leased job the node SHALL retrieve candidate pods from every datanet it
 - **WHEN** the node can read datanets 27 and 31 and leases a job
 - **THEN** candidate pods are drawn from both, each tagged with its datanet id
 
+#### Scenario: One datanet of several is unreadable
+- **WHEN** one accessible datanet fails while another answers
+- **THEN** the job proceeds on what was read, and `datanetsSearched` names only the datanets actually read
+
 #### Scenario: Datanet source unavailable
-- **WHEN** the datanet source throws while listing or fetching
+- **WHEN** the datanet source throws while listing, or every accessible datanet fails to answer
 - **THEN** the node reports `:fail` with the error (retryable) and does not deny or judge
 
 ### Requirement: Relevance gate before judging
