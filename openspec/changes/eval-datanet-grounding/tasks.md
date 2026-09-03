@@ -1,6 +1,6 @@
 ## 1. Contract fixtures
-- [ ] 1.1 Copy eval-api `fixtures/lease-ack/{lease-response,complete-request,deny-request,error-codes,fail-request}.json` at `ad217dd` into `test/fixtures/lease-ack/`; delete `corpus-snapshot.json`
-- [ ] 1.2 Re-pin `CHECKSUMS` in `test/integration/leaseAckContract.test.ts` from eval-api `CHECKSUMS.sha256`; remove corpus tests; add deny round-trip and old-shape-lease rejection tests
+- [x] 1.1 Copy eval-api `fixtures/lease-ack/{lease-response,complete-request,deny-request,error-codes,fail-request}.json` at `ad217dd` into `test/fixtures/lease-ack/`; delete `corpus-snapshot.json`
+- [x] 1.2 Re-pin `CHECKSUMS` in `test/integration/leaseAckContract.test.ts` from eval-api `CHECKSUMS.sha256`; remove corpus tests; add deny round-trip and old-shape-lease rejection tests
 
 ## 2. Types and client
 - [ ] 2.1 `types.ts`: `Citation { datanetId, podId }`; `CriterionVerdict.citations: Citation[]`; `EvalAnswer` without `evidenceBasis`; `LeasedJob` without corpus fields; `DatanetPod`; `EvalDenial { jobId, reason, datanetsSearched }`; remove `CorpusPod`/`CorpusSnapshot`

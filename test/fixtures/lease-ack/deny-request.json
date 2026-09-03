@@ -1,0 +1,8 @@
+{
+  "jobId": "job_01J9ZX4T8RE",
+  "reason": "no pods on the datanets this node can read bear on the stated criteria",
+  "datanetsSearched": [
+    27,
+    31
+  ]
+}

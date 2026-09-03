@@ -1,12 +1,58 @@
 {
   "comment": "Error codes the gateway's node API can answer — the worker side pins these so a new rejection class is a contract change, not a surprise.",
-  "lease": { "401": ["UNAUTHENTICATED", "INVALID_CREDENTIALS"], "503": ["AUTH_UNAVAILABLE"] },
+  "lease": {
+    "401": [
+      "UNAUTHENTICATED",
+      "INVALID_CREDENTIALS"
+    ],
+    "503": [
+      "AUTH_UNAVAILABLE"
+    ]
+  },
   "complete": {
-    "400": ["JOB_ID_MISMATCH"],
-    "401": ["UNAUTHENTICATED", "INVALID_CREDENTIALS"],
-    "404": ["UNKNOWN_JOB"],
-    "409": ["PAST_CUTOFF"],
-    "422": ["INVALID_ANSWER", "CRITERIA_MISMATCH", "UNRESOLVABLE_CITATION"],
-    "503": ["AUTH_UNAVAILABLE"]
+    "400": [
+      "JOB_ID_MISMATCH"
+    ],
+    "401": [
+      "UNAUTHENTICATED",
+      "INVALID_CREDENTIALS"
+    ],
+    "404": [
+      "UNKNOWN_JOB"
+    ],
+    "409": [
+      "PAST_CUTOFF",
+      "ALREADY_DENIED"
+    ],
+    "422": [
+      "INVALID_ANSWER",
+      "CRITERIA_MISMATCH",
+      "UNGROUNDED_VERDICT",
+      "UNRESOLVABLE_CITATION"
+    ],
+    "503": [
+      "AUTH_UNAVAILABLE",
+      "DATANET_UNAVAILABLE"
+    ]
+  },
+  "deny": {
+    "400": [
+      "JOB_ID_MISMATCH",
+      "INVALID_DENIAL"
+    ],
+    "401": [
+      "UNAUTHENTICATED",
+      "INVALID_CREDENTIALS"
+    ],
+    "404": [
+      "UNKNOWN_JOB"
+    ],
+    "409": [
+      "PAST_CUTOFF",
+      "ALREADY_ANSWERED"
+    ],
+    "503": [
+      "AUTH_UNAVAILABLE"
+    ]
   }
 }
