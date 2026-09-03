@@ -12,7 +12,7 @@
 - [x] 3.3 `retrieve.ts`: `RankedPod.pod` is a `DatanetPod`; `gatherEvidence(source, request, k)` = fetch all accessible → rank; tests
 
 ## 4. Relevance gate
-- [ ] 4.1 `gate.ts`: `gateEvidence(model, request, candidates) → { supported: Map<criterion, DatanetPod[]>, unsupported: string[], datanetsSearched: number[] }`; schema post-checks; zero candidates short-circuits without an LLM call; tests with a mocked generator + direct schema tests
+- [x] 4.1 `gate.ts`: `gateEvidence(model, request, candidates) → { supported: Map<criterion, DatanetPod[]>, unsupported: string[], datanetsSearched: number[] }`; schema post-checks; zero candidates short-circuits without an LLM call; tests with a mocked generator + direct schema tests
 
 ## 5. Judge
 - [ ] 5.1 `judge.ts`: prompt lists gated pods per criterion, citations mandatory; post-check strips ungated keys, maps to `Citation`, throws on an uncited criterion; `JudgeOutcome` without `evidenceBasis`; update tests
