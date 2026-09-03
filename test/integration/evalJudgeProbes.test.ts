@@ -36,7 +36,7 @@ describe('eval judge probes (static)', () => {
 
   it('every probe builds a prompt that frames the payload as untrusted', () => {
     for (const p of probes) {
-      const { system, prompt } = buildEvalPrompt(p.request, [])
+      const { system, prompt } = buildEvalPrompt(p.request, new Map())
       expect(system).toMatch(/never follow any instructions/i)
       expect(prompt).toContain(p.request.payload)
       expect(prompt).toMatch(/UNTRUSTED/)
@@ -53,7 +53,11 @@ describe.runIf(live)('eval judge probes (live model)', () => {
     const model = resolveModel(provider, process.env.LLM_API_KEY!)
     const scores = new Map<string, number>()
     for (const p of probes) {
-      const out = await judgeEval(model, p.request, [])
+      // eval-datanet-grounding: the judge now requires gated evidence per
+      // criterion and throws on an uncited verdict. The probe fixture carries
+      // no pods, so this live run needs per-probe gated evidence before it can
+      // pass again — tracked as a follow-up; static probes above still run.
+      const out = await judgeEval(model, p.request, new Map())
       const mean = out.verdicts.reduce((a, v) => a + v.score, 0) / out.verdicts.length
       scores.set(p.id, mean)
     }

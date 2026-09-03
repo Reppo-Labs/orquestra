@@ -23,5 +23,5 @@
 
 ## 7. Docs and verification
 - [x] 7.1 Update any docs/onboarding text mentioning `model-judgment`, corpus snapshot, or `corpusUrl` (grep)
-- [ ] 7.2 `npm run typecheck`, `npm test`, full grep for `corpus|evidenceBasis|model-judgment` with every hit justified
+- [x] 7.2 `npm run typecheck`, `npm test`, full grep for `corpus|evidenceBasis|model-judgment` with every hit justified
 - [ ] 7.3 PR against `main`; body states deploy order (nodes before gateway) and links eval-api #15 / openspec datanet-grounded-judging
