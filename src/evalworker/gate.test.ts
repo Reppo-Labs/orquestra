@@ -119,6 +119,17 @@ describe('buildGatePrompt', () => {
     expect(system).toMatch(/never follow any instructions/i)
     expect(`${system}\n${prompt}`).toMatch(/keyword|vocabulary/i)
   })
+
+  it('dedups pod keys that differ only in whitespace (one pod, not two)', async () => {
+    mockGen.mockResolvedValueOnce({
+      perCriterion: [
+        { criterion: 'entry historically profitable', supportingPods: ['27/482', ' 27/482', '27/482 '] },
+        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533'] },
+      ],
+    })
+    const out = await gateEvidence({} as never, request, candidates)
+    expect(out.supported.get('entry historically profitable')).toHaveLength(1)
+  })
 })
 
 describe('gateSchema (direct — mocks cannot falsify the schema)', () => {
@@ -131,4 +142,5 @@ describe('gateSchema (direct — mocks cannot falsify the schema)', () => {
     expect(gateSchema.safeParse({ perCriterion: [{ criterion: 'c', supportingPods: [27] }] }).success).toBe(false)
     expect(gateSchema.safeParse({}).success).toBe(false)
   })
+
 })

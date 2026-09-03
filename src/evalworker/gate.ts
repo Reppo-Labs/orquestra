@@ -92,8 +92,11 @@ export async function gateEvidence(model: LanguageModel, request: EvalJobRequest
     }
     const pods: DatanetPod[] = []
     const seen = new Set<string>()
-    for (const key of entry.supportingPods ?? []) {
-      const pod = byKey.get(key.trim())
+    for (const raw of entry.supportingPods ?? []) {
+      // Normalize ONCE: looking up the trimmed key while deduping on the raw
+      // one let " 27/482" and "27/482" both push the same pod.
+      const key = raw.trim()
+      const pod = byKey.get(key)
       if (!pod) {
         dropped++
         continue
