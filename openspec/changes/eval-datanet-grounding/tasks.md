@@ -25,3 +25,13 @@
 - [x] 7.1 Update any docs/onboarding text mentioning `model-judgment`, corpus snapshot, or `corpusUrl` (grep)
 - [x] 7.2 `npm run typecheck`, `npm test`, full grep for `corpus|evidenceBasis|model-judgment` with every hit justified
 - [ ] 7.3 PR against `main`; body states deploy order (nodes before gateway) and links eval-api #15 / openspec datanet-grounded-judging
+
+## 8. Stage 2 review fixes (PR #214)
+- [x] 8.1 H1 `buildDenyReason`: index + bounded excerpt + hard clamp to the gateway's 2000-char `reason` cap; spec pins the cap
+- [x] 8.2 M1 `EvalBudget.release()`; worker releases on every pre-LLM failure (source throw, no accessible datanets, zero-candidate deny)
+- [x] 8.3 M2 `DatanetError(status)`; 401/403 gets the credential message and a 10x lease backoff
+- [x] 8.4 L2 `gatherEvidence` = allSettled; `datanetsSearched` names only the datanets read; total failure rethrows
+- [x] 8.5 L3 `DatanetSource.invalidate()` on `cachedSource`, called on a 422 UNRESOLVABLE_CITATION
+- [x] 8.6 L5 gate dedups on the normalized pod key
+- [x] 8.7 L6 probes carry per-probe gated evidence so the live run works again
+- [x] 8.8 L1/L4/L7/I1/I2 doc + comment corrections; `GateResult.datanetsSearched` (dead) removed
