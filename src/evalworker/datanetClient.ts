@@ -13,7 +13,7 @@
 // :fail-s the job, retryable) — never "no evidence". Adjust paths/auth/field
 // names here only; nothing outside this file knows the wire shape.
 import { z } from 'zod'
-import type { AccessibleDatanet, DatanetSource } from './datanet.js'
+import { DatanetError, type AccessibleDatanet, type DatanetSource } from './datanet.js'
 import type { DatanetPod } from './types.js'
 
 export interface DatanetClientOpts {
@@ -59,7 +59,7 @@ export function makeDatanetClient(opts: DatanetClientOpts): DatanetSource {
       } catch {
         /* body unreadable — status alone is the message */
       }
-      throw new Error(`datanet api HTTP ${res.status} for ${path}${detail ? ` — ${detail}` : ''}`)
+      throw new DatanetError(res.status, `datanet api HTTP ${res.status} for ${path}${detail ? ` — ${detail}` : ''}`)
     }
     return res.json()
   }

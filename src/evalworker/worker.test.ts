@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { EvalBudget } from './budget.js'
 import { buildDenyReason, startEvalWorker, type EvalWorkerDeps } from './worker.js'
 import { GatewayError, type GatewayClient } from './client.js'
-import { InMemoryDatanetSource, type DatanetSource } from './datanet.js'
+import { DatanetError, InMemoryDatanetSource, type DatanetSource } from './datanet.js'
 import type { DatanetPod, LeasedJob } from './types.js'
 import type { GateResult } from './gate.js'
 
@@ -635,5 +635,45 @@ describe('startEvalWorker (budget release on pre-LLM failures)', () => {
     await waitFor(() => client.denied.length === 1)
     await w.stop()
     expect(b.usedToday()).toBe(1)
+  })
+})
+
+// ── M2: a datanet 401/403 is a node misconfiguration, not a transient job
+//    failure — it needs a named cause and the same 10x backoff as the lease
+//    path, or the node fails every lease at full cadence forever ────────────
+
+describe('startEvalWorker (datanet auth rejection)', () => {
+  const authSource = (status: number): DatanetSource => ({
+    listAccessible: async () => {
+      throw new DatanetError(status, `datanet api HTTP ${status} for /datanets — bad key`)
+    },
+    fetchPods: async () => [],
+  })
+
+  it('names the credentials in the log and backs off 10x instead of re-leasing at full cadence', async () => {
+    const client = makeClient([])
+    ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(async () => job(`j${Math.random()}`))
+    const logs: string[] = []
+    const w = startEvalWorker(
+      deps({ client, datanet: authSource(401), idleMs: 50, getConfig: () => ({ enabled: true, maxConcurrent: 1 }), log: (m) => logs.push(m) }),
+    )
+    await waitFor(() => client.failed.length >= 1)
+    await new Promise((r) => setTimeout(r, 200))
+    await w.stop()
+    expect(logs.some((l) => /credentials \(HTTP 401\)/.test(l) && /REPPO_API_KEY/.test(l))).toBe(true)
+    // 200ms at idleMs=50 would be several leases without the 10x (500ms) backoff
+    expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(2)
+  })
+
+  it('a non-auth datanet failure keeps the normal cadence (no 10x backoff)', async () => {
+    const client = makeClient([])
+    ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(async () => job(`j${Math.random()}`))
+    const logs: string[] = []
+    const w = startEvalWorker(
+      deps({ client, datanet: authSource(503), idleMs: 5, getConfig: () => ({ enabled: true, maxConcurrent: 1 }), log: (m) => logs.push(m) }),
+    )
+    await waitFor(() => client.failed.length >= 3)
+    await w.stop()
+    expect(logs.some((l) => /credentials/.test(l))).toBe(false)
   })
 })

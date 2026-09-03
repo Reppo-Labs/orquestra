@@ -7,7 +7,7 @@
 // relevance gate finds nothing for a criterion — never judges without evidence.
 import { GatewayError, type GatewayClient } from './client.js'
 import type { EvalBudget } from './budget.js'
-import type { DatanetSource } from './datanet.js'
+import { DatanetError, type DatanetSource } from './datanet.js'
 import type { GateResult } from './gate.js'
 import type { EvalJobRequest, LeasedJob } from './types.js'
 import type { GatedEvidence, JudgeOutcome } from './judge.js'
@@ -83,6 +83,10 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
   const idleMs = deps.idleMs ?? 30_000
   const completeRetries = deps.completeRetries ?? 2
   const inFlight = new Set<Promise<void>>()
+  // Set by serve() when the DATANET api rejects this node's credentials.
+  // serve() still swallows the error itself (nothing escapes it); the loop
+  // owns the sleep, so the backoff applies to leasing, where it belongs.
+  let datanetAuthBackoff = false
   let stopped = false
   let wake: (() => void) | undefined
 
@@ -211,7 +215,15 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
     } catch (e) {
       releaseIfUnspent()
       const msg = e instanceof Error ? e.message : String(e)
-      log(`job ${job.jobId} failed: ${e instanceof Error ? (e.stack ?? msg) : msg}`)
+      // A datanet 401/403 is this node's configuration, not this job's luck:
+      // retrying every idleMs is noise. Same treatment the lease path gives a
+      // gateway 401 (PR #205) — actionable message + 10x backoff.
+      if (e instanceof DatanetError && (e.status === 401 || e.status === 403)) {
+        log(`datanet api rejected this node's credentials (HTTP ${e.status}) — check REPPO_API_KEY/EVAL_DATANET_API_URL (job ${job.jobId}): ${msg}`)
+        datanetAuthBackoff = true
+      } else {
+        log(`job ${job.jobId} failed: ${e instanceof Error ? (e.stack ?? msg) : msg}`)
+      }
       safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'error', reason: msg })
       // Only tell the gateway "I cannot serve this" when we truly didn't: a
       // bookkeeping error AFTER a successful :complete/:deny must not retract
@@ -226,6 +238,11 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
   const loop = (async () => {
     while (!stopped) {
       try {
+        if (datanetAuthBackoff) {
+          datanetAuthBackoff = false
+          await sleep(idleMs * 10)
+          continue
+        }
         const cfg = deps.getConfig()
         if (!cfg.enabled || inFlight.size >= cfg.maxConcurrent || !deps.budget.hasBudget()) {
           await sleep(idleMs)

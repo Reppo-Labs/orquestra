@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeDatanetClient } from './datanetClient.js'
+import { DatanetError } from './datanet.js'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -54,6 +55,14 @@ describe('makeDatanetClient (provisional binding)', () => {
     const c = makeDatanetClient({ baseUrl: 'https://b', apiKey: 'k', fetchImpl })
     await expect(c.listAccessible()).rejects.toThrow(/shape/)
     await expect(c.fetchPods(1, 1)).rejects.toThrow(/shape/)
+  })
+
+  it('throws a typed DatanetError carrying the status (401/403 are actionable, not generic)', async () => {
+    const { fetchImpl } = capture(() => new Response('bad key', { status: 401 }))
+    const c = makeDatanetClient({ baseUrl: 'https://b', apiKey: 'k', fetchImpl })
+    await expect(c.listAccessible()).rejects.toBeInstanceOf(DatanetError)
+    await expect(c.listAccessible()).rejects.toMatchObject({ status: 401 })
+    await expect(c.fetchPods(1, 1)).rejects.toMatchObject({ status: 401 })
   })
 
   it('propagates network errors', async () => {

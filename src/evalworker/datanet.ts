@@ -11,6 +11,21 @@ import type { DatanetPod } from './types.js'
 
 export type { DatanetPod } from './types.js'
 
+/** A datanet API rejection carrying its HTTP status. The status is what lets
+ *  the worker tell "this node's credentials are wrong" (401/403 — a node
+ *  misconfiguration that needs a named cause and a long backoff, exactly like
+ *  the gateway lease path) from a transient outage. Lives here, on the port,
+ *  not in the HTTP binding: the worker must never import the binding. */
+export class DatanetError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'DatanetError'
+  }
+}
+
 export interface AccessibleDatanet {
   datanetId: number
   name: string
