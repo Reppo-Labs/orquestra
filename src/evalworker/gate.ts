@@ -92,7 +92,7 @@ export async function gateEvidence(model: LanguageModel, request: EvalJobRequest
     }
     const pods: DatanetPod[] = []
     const seen = new Set<string>()
-    for (const key of entry.supportingPods) {
+    for (const key of entry.supportingPods ?? []) {
       const pod = byKey.get(key.trim())
       if (!pod) {
         dropped++

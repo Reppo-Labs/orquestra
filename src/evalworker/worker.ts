@@ -1,13 +1,18 @@
 // The always-on eval worker loop. Runs BESIDE the scheduler, never inside the
 // vote/mint cycle; every failure is caught here so evalwork can never affect
-// voting or minting. The node is quorum-oblivious: lease → judge → submit,
-// always — settlement is entirely the gateway's concern.
+// voting or minting. The node is quorum-oblivious: lease → retrieve → gate →
+// judge → submit (or deny), always — settlement is entirely the gateway's
+// concern. Evidence is node-side (eval-datanet-grounding design D5): the node
+// grounds every verdict in pods it read itself, and denies the job when the
+// relevance gate finds nothing for a criterion — never judges without evidence.
 import { GatewayError, type GatewayClient } from './client.js'
 import type { EvalBudget } from './budget.js'
+import type { DatanetSource } from './datanet.js'
+import type { GateResult } from './gate.js'
 import type { EvalJobRequest, LeasedJob } from './types.js'
-import type { JudgeOutcome } from './judge.js'
+import type { GatedEvidence, JudgeOutcome } from './judge.js'
 import type { RankedPod } from './retrieve.js'
-import { topKRelevant } from './retrieve.js'
+import { gatherEvidence } from './retrieve.js'
 
 export interface EvalWorkConfig {
   enabled: boolean
@@ -18,7 +23,7 @@ export interface EvalActivityRow {
   ts: string
   kind: 'eval'
   jobId: string
-  status: 'executed' | 'error' | 'skipped'
+  status: 'executed' | 'denied' | 'error' | 'skipped'
   reason: string
 }
 
@@ -27,14 +32,18 @@ export interface EvalWorkerDeps {
   budget: EvalBudget
   /** Read live config each iteration — hot-reload for free. */
   getConfig: () => EvalWorkConfig
+  /** Where this node reads evidence: the datanets its credentials can access. */
+  datanet: DatanetSource
+  /** The relevance gate (one LLM call); injected so the loop is testable without an LLM. */
+  gate: (request: EvalJobRequest, candidates: RankedPod[]) => Promise<GateResult>
   /** The actual judge call; injected so the loop is testable without an LLM. */
-  judge: (request: EvalJobRequest, evidence: RankedPod[]) => Promise<JudgeOutcome>
+  judge: (request: EvalJobRequest, gated: GatedEvidence) => Promise<JudgeOutcome>
   /** Model id reported in answers (judge discipline: provenance names the model). */
   modelId: () => string
   record?: (row: EvalActivityRow) => void
   /** Idle delay between polls when disabled/at-capacity/out of budget. */
   idleMs?: number
-  /** Extra attempts for :complete on transient failure (idempotent gateway-side). */
+  /** Extra attempts for :complete / :deny on transient failure (idempotent gateway-side). */
   completeRetries?: number
   log?: (msg: string) => void
 }
@@ -83,26 +92,27 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
     }
   }
 
-  /** :complete with bounded retries — the gateway is idempotent per jobId+node,
-   *  so resubmitting on a transient blip is safe and beats discarding a
-   *  fully-computed (LLM-paid) judgment. */
-  const submitWithRetry = async (answer: Parameters<GatewayClient['complete']>[0]): Promise<void> => {
+  /** A gateway submission with bounded retries — :complete and :deny are both
+   *  idempotent per jobId+node, so resubmitting on a transient blip is safe
+   *  and beats discarding a fully-computed (LLM-paid) outcome. */
+  const submitWithRetry = async (jobId: string, label: 'complete' | 'deny', send: () => Promise<void>): Promise<void> => {
     let lastErr: unknown
     for (let attempt = 0; attempt <= completeRetries; attempt++) {
       try {
-        await deps.client.complete(answer)
+        await send()
         return
       } catch (e) {
         lastErr = e
-        // Deterministic gateway rejections (400 JOB_ID_MISMATCH, 409
-        // PAST_CUTOFF, 422 CRITERIA_MISMATCH/UNRESOLVABLE_CITATION — see
-        // the error-codes.json contract fixture) never change on resend;
-        // retrying only wastes traffic. 408/429 stay retryable.
+        // Deterministic gateway rejections (400 JOB_ID_MISMATCH / INVALID_DENIAL,
+        // 409 PAST_CUTOFF / ALREADY_ANSWERED, 422 CRITERIA_MISMATCH /
+        // UNGROUNDED_VERDICT / UNRESOLVABLE_CITATION — see the error-codes.json
+        // contract fixture) never change on resend; retrying only wastes
+        // traffic. 408/429 stay retryable.
         if (e instanceof GatewayError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) {
           throw e
         }
         if (attempt < completeRetries) {
-          log(`:complete attempt ${attempt + 1} failed for job ${answer.jobId}, retrying: ${e instanceof Error ? e.message : String(e)}`)
+          log(`:${label} attempt ${attempt + 1} failed for job ${jobId}, retrying: ${e instanceof Error ? e.message : String(e)}`)
         }
       }
     }
@@ -119,38 +129,52 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'skipped', reason: 'past answer cut-off' })
         return
       }
-      // Reserve BEFORE the judge call — the budget is a pre-spend gate.
+      // Reserve BEFORE retrieval — the budget is a pre-spend gate, and one
+      // reservation covers gate + judge (they are one job's spend).
       if (!deps.budget.reserve()) {
         await reportFail(job.jobId, 'node eval budget exhausted')
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'skipped', reason: 'budget exhausted' })
         return
       }
-      const corpus = await deps.client.fetchCorpus(job.corpusUrl)
-      const evidence = topKRelevant(`${job.request.payload} ${job.request.criteria.join(' ')}`, corpus.pods)
-      const outcome = await deps.judge(job.request, evidence)
-      await submitWithRetry({
-        jobId: job.jobId,
-        model: deps.modelId(),
-        verdicts: outcome.verdicts,
-        evidenceBasis: outcome.evidenceBasis,
-      })
+      // A source failure throws out of here → :fail (retryable). It must never
+      // read as "no evidence": an outage is not a denial.
+      const evidence = await gatherEvidence(deps.datanet, job.request)
+      if (evidence.datanetsSearched.length === 0) {
+        // The gateway refuses a denial naming no datanet (400 INVALID_DENIAL),
+        // and a node that can read nothing is misconfigured, not uninformed.
+        throw new Error('no accessible datanets — this node cannot ground any verdict (check the node credentials / EVAL_DATANET_API_URL)')
+      }
+      const gate = await deps.gate(job.request, evidence.candidates)
+      if (gate.unsupported.length > 0) {
+        const reason =
+          `no pod on the datanets this node can read bears on: ${gate.unsupported.map((c) => `"${c}"`).join(', ')}` +
+          ` (searched datanets ${evidence.datanetsSearched.join(', ')})`
+        await submitWithRetry(job.jobId, 'deny', () => deps.client.deny(job.jobId, reason, evidence.datanetsSearched))
+        submitted = true
+        safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'denied', reason })
+        return
+      }
+      const outcome = await deps.judge(job.request, gate.supported)
+      const answer = { jobId: job.jobId, model: deps.modelId(), verdicts: outcome.verdicts }
+      await submitWithRetry(job.jobId, 'complete', () => deps.client.complete(answer))
       submitted = true
+      const cited = outcome.verdicts.reduce((n, v) => n + v.citations.length, 0)
       safeRecord({
         ts: new Date().toISOString(),
         kind: 'eval',
         jobId: job.jobId,
         status: 'executed',
-        reason: `judged ${outcome.verdicts.length} criteria (${outcome.evidenceBasis})`,
+        reason: `judged ${outcome.verdicts.length} criteria, ${cited} citation(s) across datanets ${evidence.datanetsSearched.join(', ')}`,
       })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       log(`job ${job.jobId} failed: ${e instanceof Error ? (e.stack ?? msg) : msg}`)
       safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'error', reason: msg })
       // Only tell the gateway "I cannot serve this" when we truly didn't: a
-      // bookkeeping error AFTER a successful :complete must not retract the
-      // answer the gateway already accepted. A 409/422 on :complete means the
-      // gateway ADJUDICATED the answer (past cut-off, or discarded and
-      // recorded against this node) — a :fail on top would double-record.
+      // bookkeeping error AFTER a successful :complete/:deny must not retract
+      // what the gateway already accepted. A 409/422 on :complete, or a 409
+      // on :deny (ALREADY_ANSWERED / PAST_CUTOFF), means the gateway
+      // ADJUDICATED the job — a :fail on top would double-record.
       const adjudicated = e instanceof GatewayError && (e.status === 409 || e.status === 422)
       if (!submitted && !adjudicated) await reportFail(job.jobId, msg)
     }

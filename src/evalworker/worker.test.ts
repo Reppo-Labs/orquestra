@@ -5,27 +5,40 @@ import { join } from 'node:path'
 import { EvalBudget } from './budget.js'
 import { startEvalWorker, type EvalWorkerDeps } from './worker.js'
 import { GatewayError, type GatewayClient } from './client.js'
-import type { LeasedJob } from './types.js'
+import { InMemoryDatanetSource, type DatanetSource } from './datanet.js'
+import type { DatanetPod, LeasedJob } from './types.js'
+import type { GateResult } from './gate.js'
 
 const job = (id: string): LeasedJob => ({
   jobId: id,
-  request: { type: 'answer', payload: 'the payload', criteria: ['is good'] },
-  datanetId: 1,
-  corpusUrl: 'https://example.com/corpus.json',
-  corpusVersion: '20260826T110000Z',
+  request: { type: 'answer', payload: 'the payload is good', criteria: ['is good'] },
   epoch: 128,
   answerCutoff: new Date(Date.now() + 300_000).toISOString(),
 })
 
-const corpus = { datanetId: 1, generatedAt: new Date().toISOString(), pods: [] }
+const pod: DatanetPod = { datanetId: 27, podId: '482', name: 'good things', text: 'the payload is good evidence' }
 
-function makeClient(jobs: (LeasedJob | null)[]): GatewayClient & { completed: unknown[]; failed: unknown[] } {
+/** One accessible datanet holding one pod that lexically matches every job above. */
+const datanet = (): DatanetSource => new InMemoryDatanetSource([{ datanetId: 27, name: 'perps', pods: [pod] }])
+
+/** Gate that admits every candidate for every criterion. */
+const admitAll = async (req: { criteria: string[] }, cands: { pod: DatanetPod }[]): Promise<GateResult> => ({
+  supported: new Map(req.criteria.map((c) => [c, cands.map((x) => x.pod)])),
+  unsupported: [],
+  datanetsSearched: [...new Set(cands.map((x) => x.pod.datanetId))],
+})
+
+type TestClient = GatewayClient & { completed: unknown[]; failed: unknown[]; denied: unknown[] }
+
+function makeClient(jobs: (LeasedJob | null)[]): TestClient {
   const queue = [...jobs]
   const completed: unknown[] = []
   const failed: unknown[] = []
+  const denied: unknown[] = []
   return {
     completed,
     failed,
+    denied,
     lease: vi.fn(async () => queue.shift() ?? null),
     complete: vi.fn(async (a: unknown) => {
       completed.push(a)
@@ -33,8 +46,10 @@ function makeClient(jobs: (LeasedJob | null)[]): GatewayClient & { completed: un
     fail: vi.fn(async (id: string, reason: string) => {
       failed.push({ id, reason })
     }),
-    fetchCorpus: vi.fn(async () => corpus),
-  } as unknown as GatewayClient & { completed: unknown[]; failed: unknown[] }
+    deny: vi.fn(async (id: string, reason: string, datanetsSearched: number[]) => {
+      denied.push({ id, reason, datanetsSearched })
+    }),
+  } as unknown as TestClient
 }
 
 const budget = (cap: number) =>
@@ -45,9 +60,15 @@ function deps(over: Partial<EvalWorkerDeps>): EvalWorkerDeps {
     client: makeClient([]),
     budget: budget(100),
     getConfig: () => ({ enabled: true, maxConcurrent: 2 }),
-    judge: async (req) => ({
-      verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
-      evidenceBasis: 'model-judgment' as const,
+    datanet: datanet(),
+    gate: admitAll,
+    judge: async (req, gated) => ({
+      verdicts: req.criteria.map((criterion) => ({
+        criterion,
+        score: 7,
+        critique: 'ok',
+        citations: (gated.get(criterion) ?? []).map((p) => ({ datanetId: p.datanetId, podId: p.podId })),
+      })),
     }),
     modelId: () => 'test/model',
     idleMs: 5,
@@ -74,6 +95,8 @@ describe('startEvalWorker', () => {
     expect(client.completed).toHaveLength(2)
     expect(rows).toHaveLength(2)
     expect((client.completed[0] as { model: string }).model).toBe('test/model')
+    expect((client.completed[0] as { verdicts: { citations: unknown[] }[] }).verdicts[0]?.citations).toEqual([{ datanetId: 27, podId: '482' }])
+    expect(rows[0]).toMatchObject({ status: 'executed' })
   })
 
   it('stops leasing when disabled (hot-reload)', async () => {
@@ -219,21 +242,20 @@ describe('startEvalWorker (review regressions)', () => {
     // job is never even leased (no lease/reserve race to burn jobs on).
     const gate = deferred<void>()
     const client = makeClient([job('j1'), job('j2'), null])
+    let judgeStarted = 0
     const w = startEvalWorker(
       deps({
         client,
         budget: budget(1),
         judge: async (req) => {
+          judgeStarted++
           await gate.promise
-          return {
-            verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
-            evidenceBasis: 'model-judgment' as const,
-          }
+          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }] })) }
         },
       }),
     )
-    // j1 is being served (corpus fetched) and holds the only budget slot
-    await waitFor(() => (client.fetchCorpus as ReturnType<typeof vi.fn>).mock.calls.length === 1)
+    // j1 is being served (judge entered) and holds the only budget slot
+    await waitFor(() => judgeStarted === 1)
     const leaseCallsAtExhaustion = (client.lease as ReturnType<typeof vi.fn>).mock.calls.length
     await new Promise((r) => setTimeout(r, 30))
     expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBe(leaseCallsAtExhaustion)
@@ -247,19 +269,18 @@ describe('startEvalWorker (review regressions)', () => {
   it('stop() drains an in-flight job before resolving', async () => {
     const gate = deferred<void>()
     const client = makeClient([job('slow'), null])
+    let judgeStarted = 0
     const w = startEvalWorker(
       deps({
         client,
         judge: async (req) => {
+          judgeStarted++
           await gate.promise
-          return {
-            verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
-            evidenceBasis: 'model-judgment' as const,
-          }
+          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }] })) }
         },
       }),
     )
-    await waitFor(() => (client.fetchCorpus as ReturnType<typeof vi.fn>).mock.calls.length === 1)
+    await waitFor(() => judgeStarted === 1)
     const stopping = w.stop()
     gate.resolve()
     await stopping
@@ -282,10 +303,7 @@ describe('startEvalWorker (review regressions)', () => {
           peak = Math.max(peak, running)
           await gate.promise
           running--
-          return {
-            verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [] })),
-            evidenceBasis: 'model-judgment' as const,
-          }
+          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }] })) }
         },
       }),
     )
@@ -314,5 +332,179 @@ describe('startEvalWorker (review regressions)', () => {
     expect(client.failed).toHaveLength(1)
     expect(client.failed[0]).toMatchObject({ id: 'late', reason: 'node shutting down' })
     expect(client.completed).toHaveLength(0)
+  })
+})
+
+// ── eval-datanet-grounding: deny path, evidence errors, budget ordering ──────
+
+describe('startEvalWorker (datanet grounding)', () => {
+  it('gate leaves a criterion unsupported → :deny with the criteria named and the datanets searched; never :complete', async () => {
+    const client = makeClient([job('j-deny'), null])
+    const rows: { status: string; reason: string }[] = []
+    const judge = vi.fn()
+    const w = startEvalWorker(
+      deps({
+        client,
+        judge,
+        gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }),
+        record: (r) => rows.push(r),
+      }),
+    )
+    await waitFor(() => client.denied.length === 1)
+    await w.stop()
+    expect(client.denied[0]).toMatchObject({ id: 'j-deny', datanetsSearched: [27] })
+    expect((client.denied[0] as { reason: string }).reason).toContain('is good')
+    expect(judge).not.toHaveBeenCalled()
+    expect(client.completed).toHaveLength(0)
+    expect(client.failed).toHaveLength(0)
+    expect(rows[0]).toMatchObject({ status: 'denied', jobId: 'j-deny' })
+    expect(rows[0]?.reason).toContain('is good')
+  })
+
+  it('zero candidates (nothing relevant on any datanet) → :deny naming every datanet read, without a gate/judge call', async () => {
+    const client = makeClient([job('j-empty'), null])
+    const gate = vi.fn(async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [] }))
+    const w = startEvalWorker(
+      deps({
+        client,
+        gate,
+        datanet: new InMemoryDatanetSource([
+          { datanetId: 27, name: 'a', pods: [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }] },
+          { datanetId: 31, name: 'b', pods: [] },
+        ]),
+      }),
+    )
+    await waitFor(() => client.denied.length === 1)
+    await w.stop()
+    // the injected gate is what decides; the worker still reports every datanet it READ
+    expect(client.denied[0]).toMatchObject({ id: 'j-empty', datanetsSearched: [27, 31] })
+    expect(client.completed).toHaveLength(0)
+  })
+
+  it('datanet source error → :fail (retryable), never deny or judge', async () => {
+    const client = makeClient([job('j-src'), null])
+    const judge = vi.fn()
+    const gate = vi.fn()
+    const w = startEvalWorker(
+      deps({
+        client,
+        judge,
+        gate,
+        datanet: {
+          listAccessible: async () => {
+            throw new Error('datanet api HTTP 503')
+          },
+          fetchPods: async () => [],
+        },
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.failed[0]).toMatchObject({ id: 'j-src', reason: expect.stringContaining('HTTP 503') })
+    expect(client.denied).toHaveLength(0)
+    expect(gate).not.toHaveBeenCalled()
+    expect(judge).not.toHaveBeenCalled()
+  })
+
+  it('no accessible datanets at all → :fail (a denial must name a datanet; this is node config, not evidence)', async () => {
+    const client = makeClient([job('j-none'), null])
+    const w = startEvalWorker(deps({ client, datanet: new InMemoryDatanetSource([]) }))
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.failed[0]).toMatchObject({ id: 'j-none', reason: expect.stringMatching(/no accessible datanets/i) })
+    expect(client.denied).toHaveLength(0)
+  })
+
+  it('gate error → :fail', async () => {
+    const client = makeClient([job('j-gate'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        gate: async () => {
+          throw new Error('gate omitted criterion: is good')
+        },
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.failed[0]).toMatchObject({ id: 'j-gate', reason: 'gate omitted criterion: is good' })
+    expect(client.denied).toHaveLength(0)
+    expect(client.completed).toHaveLength(0)
+  })
+
+  it('judge cites nothing → :fail, nothing submitted', async () => {
+    const client = makeClient([job('j-uncited'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        judge: async () => {
+          throw new Error('judge cited nothing for criterion: is good')
+        },
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.failed[0]).toMatchObject({ id: 'j-uncited', reason: 'judge cited nothing for criterion: is good' })
+    expect(client.completed).toHaveLength(0)
+  })
+
+  it('budget is reserved before retrieval: exhausted → :fail without touching the datanet source', async () => {
+    const client = makeClient([job('j-budget'), null])
+    const listAccessible = vi.fn(async () => [{ datanetId: 27, name: 'a' }])
+    const w = startEvalWorker(deps({ client, budget: budget(0), datanet: { listAccessible, fetchPods: async () => [] } }))
+    // hasBudget() is false from the start, so the loop never leases — give it room to misbehave
+    await new Promise((r) => setTimeout(r, 40))
+    await w.stop()
+    expect(listAccessible).not.toHaveBeenCalled()
+    expect(client.lease).not.toHaveBeenCalled()
+  })
+
+  it('a denial spends one budget reservation (the gate is an LLM call)', async () => {
+    const client = makeClient([job('j1'), job('j2'), null])
+    const b = budget(1)
+    const w = startEvalWorker(deps({ client, budget: b, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }))
+    await waitFor(() => client.denied.length === 1)
+    await new Promise((r) => setTimeout(r, 40))
+    await w.stop()
+    expect(b.usedToday()).toBe(1)
+    expect(client.denied).toHaveLength(1)
+  })
+
+  it(':deny 409 ALREADY_ANSWERED is terminal and adjudicated — no retry, no :fail on top', async () => {
+    const client = makeClient([job('j-409'), null])
+    const deny = client.deny as ReturnType<typeof vi.fn>
+    deny.mockRejectedValue(new GatewayError(409, 'deny failed: HTTP 409 ALREADY_ANSWERED'))
+    const rows: { status: string }[] = []
+    const w = startEvalWorker(
+      deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }), record: (r) => rows.push(r) }),
+    )
+    await waitFor(() => deny.mock.calls.length >= 1)
+    await new Promise((r) => setTimeout(r, 50))
+    await w.stop()
+    expect(deny.mock.calls.length).toBe(1)
+    expect(client.failed).toHaveLength(0)
+    expect(rows[0]).toMatchObject({ status: 'error' })
+  })
+
+  it(':deny 400 INVALID_DENIAL is terminal (no retry) but not adjudicated → :fail reported', async () => {
+    const client = makeClient([job('j-400'), null])
+    const deny = client.deny as ReturnType<typeof vi.fn>
+    deny.mockRejectedValue(new GatewayError(400, 'deny failed: HTTP 400 INVALID_DENIAL'))
+    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }))
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(deny.mock.calls.length).toBe(1)
+    expect(client.failed[0]).toMatchObject({ id: 'j-400' })
+  })
+
+  it(':deny retries a transient failure (429) before giving up', async () => {
+    const client = makeClient([job('j-d429'), null])
+    const deny = client.deny as ReturnType<typeof vi.fn>
+    deny.mockRejectedValueOnce(new GatewayError(429, 'deny failed: HTTP 429')).mockResolvedValueOnce(undefined)
+    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }))
+    await waitFor(() => deny.mock.calls.length >= 2)
+    await w.stop()
+    expect(deny.mock.calls.length).toBe(2)
+    expect(client.failed).toHaveLength(0)
   })
 })

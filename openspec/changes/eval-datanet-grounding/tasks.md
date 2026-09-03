@@ -18,8 +18,8 @@
 - [x] 5.1 `judge.ts`: prompt lists gated pods per criterion, citations mandatory; post-check strips ungated keys, maps to `Citation`, throws on an uncited criterion; `JudgeOutcome` without `evidenceBasis`; update tests
 
 ## 6. Worker
-- [ ] 6.1 `worker.ts`: deps gain `datanet: DatanetSource`, `gate`; serve() per design D5; deny path with terminal-4xx rule; `EvalActivityRow.status` adds `'denied'`; update tests (deny path, gate/judge errors → :fail, datanet source error → :fail, budget before retrieval)
-- [ ] 6.2 `src/index.ts`: bind `datanetClient` with `REPPO_API_KEY` + `EVAL_DATANET_API_URL ?? platformBase()`; bind gate with the default model
+- [x] 6.1 `worker.ts`: deps gain `datanet: DatanetSource`, `gate`; serve() per design D5; deny path with terminal-4xx rule; `EvalActivityRow.status` adds `'denied'`; update tests (deny path, gate/judge errors → :fail, datanet source error → :fail, budget before retrieval)
+- [x] 6.2 `src/index.ts`: bind `datanetClient` with `REPPO_API_KEY` + `EVAL_DATANET_API_URL ?? platformBase()`; bind gate with the default model
 
 ## 7. Docs and verification
 - [ ] 7.1 Update any docs/onboarding text mentioning `model-judgment`, corpus snapshot, or `corpusUrl` (grep)
