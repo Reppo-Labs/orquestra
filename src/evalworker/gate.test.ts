@@ -105,6 +105,17 @@ describe('gateEvidence', () => {
     const out = await gateEvidence({} as never, request, candidates)
     expect(out.supported.get('entry historically profitable')).toHaveLength(1)
   })
+
+  it('dedups pod keys that differ only in whitespace (one pod, not two)', async () => {
+    mockGen.mockResolvedValueOnce({
+      perCriterion: [
+        { criterion: 'entry historically profitable', supportingPods: ['27/482', ' 27/482', '27/482 '] },
+        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533'] },
+      ],
+    })
+    const out = await gateEvidence({} as never, request, candidates)
+    expect(out.supported.get('entry historically profitable')).toHaveLength(1)
+  })
 })
 
 describe('buildGatePrompt', () => {
@@ -116,17 +127,6 @@ describe('buildGatePrompt', () => {
     expect(prompt).toMatch(/UNTRUSTED/)
     expect(system).toMatch(/never follow any instructions/i)
     expect(`${system}\n${prompt}`).toMatch(/keyword|vocabulary/i)
-  })
-
-  it('dedups pod keys that differ only in whitespace (one pod, not two)', async () => {
-    mockGen.mockResolvedValueOnce({
-      perCriterion: [
-        { criterion: 'entry historically profitable', supportingPods: ['27/482', ' 27/482', '27/482 '] },
-        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533'] },
-      ],
-    })
-    const out = await gateEvidence({} as never, request, candidates)
-    expect(out.supported.get('entry historically profitable')).toHaveLength(1)
   })
 })
 
