@@ -42,7 +42,7 @@ Budget: one reservation covers gate + judge (they are one job's spend), taken be
 `cp` the five files from eval-api `fixtures/lease-ack/` at `ad217dd`, delete `corpus-snapshot.json`, re-pin checksums in `leaseAckContract.test.ts` from eval-api's `CHECKSUMS.sha256`. Contract tests: lease parse (and old-shape rejection), complete round-trip, deny round-trip, fail round-trip.
 
 ## Risks / Trade-offs
-- [Gate cost doubles LLM calls per job] → gate uses the small default model, bounded k = 12; denial without evidence costs zero calls.
+- [Gate cost doubles LLM calls per job] → the gate runs on the SAME model as the judge (`liveDefaultModel()`; this repo has no small-model helper), bounded k = 12, and one budget reservation covers both calls — so `maxJudgeCallsPerDay` bounds JOBS, not LLM calls, and a job can cost up to two full-price calls. A denial with zero candidates costs no call at all (and gives its reservation back).
 - [Gate too strict → denial rate high] → activity log + dashboard count `denied`; tune k and prompt from data.
 - [Datanet API shape wrong] → isolated to `datanetClient.ts`; contract test uses the fake; first real run is the launch smoke.
 - [Fleet must ship before gateway deploys] → stated in both PR bodies; eval-api task 9.3 tracks it.

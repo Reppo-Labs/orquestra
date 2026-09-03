@@ -117,8 +117,11 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       await deps.client.fail(jobId, reason)
     } catch (e) {
       // Not silent: without this line the operator cannot distinguish "fail
-      // reported cleanly" from "job dangles until lease expiry server-side".
-      log(`could not report :fail for job ${jobId} (lease will expire server-side): ${e instanceof Error ? e.message : String(e)}`)
+      // reported cleanly" from "this node stays on the hook for the job".
+      // The gateway writes no lease expiry: the (job, node) pair is pinned
+      // until the job's own answerCutoff, and this node is not offered it
+      // again — other nodes still serve it, so the job is not stuck.
+      log(`could not report :fail for job ${jobId} (this node will not be offered it again before the answer cut-off): ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -133,11 +136,14 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         return
       } catch (e) {
         lastErr = e
-        // Deterministic gateway rejections (400 JOB_ID_MISMATCH / INVALID_DENIAL,
-        // 409 PAST_CUTOFF / ALREADY_ANSWERED, 422 CRITERIA_MISMATCH /
-        // UNGROUNDED_VERDICT / UNRESOLVABLE_CITATION — see the error-codes.json
-        // contract fixture) never change on resend; retrying only wastes
-        // traffic. 408/429 stay retryable.
+        // Deterministic gateway rejections never change on resend; retrying
+        // only wastes traffic. Per route (error-codes.json contract fixture):
+        //   :complete — 400 JOB_ID_MISMATCH, 409 PAST_CUTOFF / ALREADY_DENIED,
+        //               422 CRITERIA_MISMATCH / UNGROUNDED_VERDICT /
+        //               UNRESOLVABLE_CITATION
+        //   :deny     — 400 INVALID_DENIAL, 409 PAST_CUTOFF / ALREADY_ANSWERED
+        // (the 409 is the OTHER route's outcome in each case). 408/429 stay
+        // retryable.
         if (e instanceof GatewayError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) {
           throw e
         }

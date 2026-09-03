@@ -46,8 +46,6 @@ export interface GateResult {
   supported: Map<string, DatanetPod[]>
   /** Criteria (as leased) with no supporting pod — non-empty means deny. */
   unsupported: string[]
-  /** Distinct datanet ids among the candidates, ascending. */
-  datanetsSearched: number[]
 }
 
 export function buildGatePrompt(request: EvalJobRequest, candidates: RankedPod[]): { system: string; prompt: string } {
@@ -64,9 +62,8 @@ export function buildGatePrompt(request: EvalJobRequest, candidates: RankedPod[]
 }
 
 export async function gateEvidence(model: LanguageModel, request: EvalJobRequest, candidates: RankedPod[]): Promise<GateResult> {
-  const datanetsSearched = [...new Set(candidates.map((c) => c.pod.datanetId))].sort((a, b) => a - b)
   if (candidates.length === 0) {
-    return { supported: new Map(), unsupported: [...request.criteria], datanetsSearched }
+    return { supported: new Map(), unsupported: [...request.criteria] }
   }
 
   const built = buildGatePrompt(request, candidates)
@@ -113,5 +110,5 @@ export async function gateEvidence(model: LanguageModel, request: EvalJobRequest
     // see — correct it, but never invisibly.
     console.error(`orquestra: evalwork: gate named ${dropped} pod key(s) outside the candidate set — dropped`)
   }
-  return { supported, unsupported, datanetsSearched }
+  return { supported, unsupported }
 }

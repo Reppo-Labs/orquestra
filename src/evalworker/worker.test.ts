@@ -25,7 +25,6 @@ const datanet = (): DatanetSource => new InMemoryDatanetSource([{ datanetId: 27,
 const admitAll = async (req: { criteria: string[] }, cands: { pod: DatanetPod }[]): Promise<GateResult> => ({
   supported: new Map(req.criteria.map((c) => [c, cands.map((x) => x.pod)])),
   unsupported: [],
-  datanetsSearched: [...new Set(cands.map((x) => x.pod.datanetId))],
 })
 
 type TestClient = GatewayClient & { completed: unknown[]; failed: unknown[]; denied: unknown[] }
@@ -346,7 +345,7 @@ describe('startEvalWorker (datanet grounding)', () => {
       deps({
         client,
         judge,
-        gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }),
+        gate: async () => ({ supported: new Map(), unsupported: ['is good'] }),
         record: (r) => rows.push(r),
       }),
     )
@@ -363,7 +362,7 @@ describe('startEvalWorker (datanet grounding)', () => {
 
   it('zero candidates (nothing relevant on any datanet) → :deny naming every datanet read, without a gate/judge call', async () => {
     const client = makeClient([job('j-empty'), null])
-    const gate = vi.fn(async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [] }))
+    const gate = vi.fn(async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'] }))
     const w = startEvalWorker(
       deps({
         client,
@@ -462,7 +461,7 @@ describe('startEvalWorker (datanet grounding)', () => {
   it('a denial spends one budget reservation (the gate is an LLM call)', async () => {
     const client = makeClient([job('j1'), job('j2'), null])
     const b = budget(1)
-    const w = startEvalWorker(deps({ client, budget: b, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }))
+    const w = startEvalWorker(deps({ client, budget: b, gate: async () => ({ supported: new Map(), unsupported: ['is good'] }) }))
     await waitFor(() => client.denied.length === 1)
     await new Promise((r) => setTimeout(r, 40))
     await w.stop()
@@ -476,7 +475,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     deny.mockRejectedValue(new GatewayError(409, 'deny failed: HTTP 409 ALREADY_ANSWERED'))
     const rows: { status: string }[] = []
     const w = startEvalWorker(
-      deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }), record: (r) => rows.push(r) }),
+      deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'] }), record: (r) => rows.push(r) }),
     )
     await waitFor(() => deny.mock.calls.length >= 1)
     await new Promise((r) => setTimeout(r, 50))
@@ -490,7 +489,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     const client = makeClient([job('j-400'), null])
     const deny = client.deny as ReturnType<typeof vi.fn>
     deny.mockRejectedValue(new GatewayError(400, 'deny failed: HTTP 400 INVALID_DENIAL'))
-    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }))
+    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'] }) }))
     await waitFor(() => client.failed.length === 1)
     await w.stop()
     expect(deny.mock.calls.length).toBe(1)
@@ -501,7 +500,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     const client = makeClient([job('j-d429'), null])
     const deny = client.deny as ReturnType<typeof vi.fn>
     deny.mockRejectedValueOnce(new GatewayError(429, 'deny failed: HTTP 429')).mockResolvedValueOnce(undefined)
-    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }))
+    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: ['is good'] }) }))
     await waitFor(() => deny.mock.calls.length >= 2)
     await w.stop()
     expect(deny.mock.calls.length).toBe(2)
@@ -542,7 +541,7 @@ describe('startEvalWorker (deny reason bound)', () => {
     const criteria = Array.from({ length: 10 }, (_, i) => `criterion ${i + 1}: ` + 'x'.repeat(300))
     const longJob: LeasedJob = { ...job('j-long'), request: { type: 'answer', payload: 'p', criteria } }
     const client = makeClient([longJob, null])
-    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: criteria, datanetsSearched: [27] }) }))
+    const w = startEvalWorker(deps({ client, gate: async () => ({ supported: new Map(), unsupported: criteria }) }))
     await waitFor(() => client.denied.length === 1)
     await w.stop()
     const reason = (client.denied[0] as { reason: string }).reason
@@ -591,7 +590,7 @@ describe('startEvalWorker (budget release on pre-LLM failures)', () => {
       deps({
         client,
         budget: b,
-        gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [] }),
+        gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'] }),
         datanet: new InMemoryDatanetSource([{ datanetId: 27, name: 'a', pods: [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }] }]),
       }),
     )
@@ -630,7 +629,7 @@ describe('startEvalWorker (budget release on pre-LLM failures)', () => {
     const client = makeClient([job('j-deny'), null])
     const b = budget(5)
     const w = startEvalWorker(
-      deps({ client, budget: b, gate: async () => ({ supported: new Map(), unsupported: ['is good'], datanetsSearched: [27] }) }),
+      deps({ client, budget: b, gate: async () => ({ supported: new Map(), unsupported: ['is good'] }) }),
     )
     await waitFor(() => client.denied.length === 1)
     await w.stop()

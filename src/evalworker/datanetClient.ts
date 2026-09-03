@@ -2,16 +2,27 @@
 //
 // ENDPOINT SHAPE IS PROVISIONAL: the datanet API docs were not in hand when
 // this was written (openspec eval-datanet-grounding, design.md Open
-// Questions) — this mirrors the same assumption eval-api makes in its
-// src/datanet/client.ts. The assumed contract:
+// Questions). eval-api's src/datanet/client.ts is an independent PROVISIONAL
+// GUESS at the same undocumented API — NOT the same endpoints, and this file
+// does not mirror it: the node needs LIST endpoints (what can I read, what is
+// in it), the gateway needs an EXISTENCE endpoint for one pod
+// (`{base}/api/v1/datanets/{id}/pods/{podId}`). The two bases are separate
+// env vars on separate deployments — `EVAL_DATANET_API_URL` here, the
+// gateway's `DATANET_API_URL` there — and the node's default `platformBase()`
+// ALREADY ends in `/api/v1`, so do not copy the gateway's value into this one.
+// Both files change together when the docs land.
+//
+// The assumed contract here:
 //   GET {base}/datanets                → the datanets this credential can read
 //   GET {base}/datanets/{id}/pods?limit=N → up to N pods, each with id/name/text
 // with `Authorization: Bearer <REPPO_API_KEY>` (the node's platform agent key)
 // and base = EVAL_DATANET_API_URL ?? platformBase(). Lists may arrive bare or
 // wrapped (`{ datanets: [...] }` / `{ pods: [...] }` / `{ items }` / `{ data }`).
 // Every non-2xx and every unparseable body is a FAILURE (throws → the worker
-// :fail-s the job, retryable) — never "no evidence". Adjust paths/auth/field
-// names here only; nothing outside this file knows the wire shape.
+// :fail-s the job, retryable) — never "no evidence". Non-2xx throws a typed
+// DatanetError so the worker can tell a bad credential from an outage.
+// Adjust paths/auth/field names here only; nothing outside this file knows the
+// wire shape.
 import { z } from 'zod'
 import { DatanetError, type AccessibleDatanet, type DatanetSource } from './datanet.js'
 import type { DatanetPod } from './types.js'

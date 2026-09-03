@@ -30,7 +30,6 @@ describe('gateEvidence', () => {
     expect(mockGen).not.toHaveBeenCalled()
     expect(out.unsupported).toEqual(request.criteria)
     expect(out.supported.size).toBe(0)
-    expect(out.datanetsSearched).toEqual([])
   })
 
   it('maps supporting keys back to pods per criterion; all supported → unsupported empty', async () => {
@@ -46,7 +45,6 @@ describe('gateEvidence', () => {
     expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual(['27/482'])
     expect(out.supported.get('sizing survives adverse candle')?.map(podKey)).toEqual(['27/533', '31/9'])
     expect(out.supported.get('entry historically profitable')?.[0]).toEqual({ datanetId: 27, podId: '482', name: 'ETH funding backtest', text: expect.any(String) })
-    expect(out.datanetsSearched).toEqual([27, 31])
   })
 
   it('drops keys outside the candidate set; a criterion left empty is unsupported', async () => {
