@@ -3,8 +3,8 @@
 - [x] 1.2 Re-pin `CHECKSUMS` in `test/integration/leaseAckContract.test.ts` from eval-api `CHECKSUMS.sha256`; remove corpus tests; add deny round-trip and old-shape-lease rejection tests
 
 ## 2. Types and client
-- [ ] 2.1 `types.ts`: `Citation { datanetId, podId }`; `CriterionVerdict.citations: Citation[]`; `EvalAnswer` without `evidenceBasis`; `LeasedJob` without corpus fields; `DatanetPod`; `EvalDenial { jobId, reason, datanetsSearched }`; remove `CorpusPod`/`CorpusSnapshot`
-- [ ] 2.2 `client.ts`: strict lease schema; remove `fetchCorpus`; add `deny()`; complete body = new shape; tests
+- [x] 2.1 `types.ts`: `Citation { datanetId, podId }`; `CriterionVerdict.citations: Citation[]`; `EvalAnswer` without `evidenceBasis`; `LeasedJob` without corpus fields; `DatanetPod`; `EvalDenial { jobId, reason, datanetsSearched }`; remove `CorpusPod`/`CorpusSnapshot`
+- [x] 2.2 `client.ts`: strict lease schema; remove `fetchCorpus`; add `deny()`; complete body = new shape; tests
 
 ## 3. Datanet source
 - [ ] 3.1 `datanet.ts`: `DatanetSource` port, `DatanetPod`, `InMemoryDatanetSource`, `cachedSource(source, ttlMs)`

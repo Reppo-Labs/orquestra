@@ -10,29 +10,26 @@
 //    would otherwise hang a lease forever with no error — invisible stall,
 //    wedged shutdown.
 import { z } from 'zod'
-import type { CorpusSnapshot, EvalAnswer, LeasedJob } from './types.js'
+import type { EvalAnswer, EvalDenial, LeasedJob } from './types.js'
 import { EVAL_TYPES } from './types.js'
 
-const leasedJobSchema = z.object({
-  jobId: z.string().min(1),
-  request: z.object({
-    type: z.enum(EVAL_TYPES),
-    payload: z.string(),
-    criteria: z.array(z.string()).min(1),
-    context: z.string().optional(),
-  }),
-  datanetId: z.number(),
-  corpusUrl: z.string().url(),
-  corpusVersion: z.string().min(1),
-  epoch: z.number().int(),
-  answerCutoff: z.string(),
-})
-
-const corpusSnapshotSchema = z.object({
-  datanetId: z.number(),
-  generatedAt: z.string(),
-  pods: z.array(z.object({ podId: z.string().min(1), name: z.string(), text: z.string() })),
-})
+// `.strict()`: a lease still carrying the retired corpus fields (corpusUrl /
+// corpusVersion / top-level datanetId) is an OLD gateway build — evidence is
+// node-side now, and judging against a gateway that expects corpus-pinned
+// citations would fail every :complete. Surface it as version skew instead.
+const leasedJobSchema = z
+  .object({
+    jobId: z.string().min(1),
+    request: z.object({
+      type: z.enum(EVAL_TYPES),
+      payload: z.string(),
+      criteria: z.array(z.string()).min(1),
+      context: z.string().optional(),
+    }),
+    epoch: z.number().int(),
+    answerCutoff: z.string(),
+  })
+  .strict()
 
 export interface GatewayClientOpts {
   baseUrl: string
@@ -123,15 +120,15 @@ export class GatewayClient {
     if (!res.ok) throw new GatewayError(res.status, `fail failed: HTTP ${res.status}${await errorDetail(res)}`)
   }
 
-  /** Fetch the evidence corpus snapshot (presigned URL — no auth headers: the
-   *  signature is in the URL, and extra headers break S3 presigning). */
-  async fetchCorpus(corpusUrl: string): Promise<CorpusSnapshot> {
-    const res = await this.fetchImpl(corpusUrl, { signal: AbortSignal.timeout(this.requestTimeoutMs) })
-    if (!res.ok) throw new GatewayError(res.status, `corpus fetch failed: HTTP ${res.status}${await errorDetail(res)}`)
-    const parsed = corpusSnapshotSchema.safeParse(await res.json())
-    if (!parsed.success) {
-      throw new GatewayError(res.status, `corpus shape mismatch: ${parsed.error.issues[0]?.path.join('.')} ${parsed.error.issues[0]?.message}`)
-    }
-    return parsed.data
+  /** Report that this node looked and found no evidence for the job (the
+   *  relevance gate left at least one criterion unsupported). Not a fault:
+   *  the gateway counts denials at settlement. */
+  async deny(jobId: string, reason: string, datanetsSearched: number[]): Promise<void> {
+    const body: EvalDenial = { jobId, reason, datanetsSearched }
+    const res = await this.fetchImpl(
+      `${this.opts.baseUrl}/v1/node/jobs/${encodeURIComponent(jobId)}:deny`,
+      { method: 'POST', headers: this.headers(), body: JSON.stringify(body), signal: AbortSignal.timeout(this.requestTimeoutMs) },
+    )
+    if (!res.ok) throw new GatewayError(res.status, `deny failed: HTTP ${res.status}${await errorDetail(res)}`)
   }
 }
