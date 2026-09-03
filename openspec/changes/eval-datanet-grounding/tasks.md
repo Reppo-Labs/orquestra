@@ -15,7 +15,7 @@
 - [x] 4.1 `gate.ts`: `gateEvidence(model, request, candidates) → { supported: Map<criterion, DatanetPod[]>, unsupported: string[], datanetsSearched: number[] }`; schema post-checks; zero candidates short-circuits without an LLM call; tests with a mocked generator + direct schema tests
 
 ## 5. Judge
-- [ ] 5.1 `judge.ts`: prompt lists gated pods per criterion, citations mandatory; post-check strips ungated keys, maps to `Citation`, throws on an uncited criterion; `JudgeOutcome` without `evidenceBasis`; update tests
+- [x] 5.1 `judge.ts`: prompt lists gated pods per criterion, citations mandatory; post-check strips ungated keys, maps to `Citation`, throws on an uncited criterion; `JudgeOutcome` without `evidenceBasis`; update tests
 
 ## 6. Worker
 - [ ] 6.1 `worker.ts`: deps gain `datanet: DatanetSource`, `gate`; serve() per design D5; deny path with terminal-4xx rule; `EvalActivityRow.status` adds `'denied'`; update tests (deny path, gate/judge errors → :fail, datanet source error → :fail, budget before retrieval)
