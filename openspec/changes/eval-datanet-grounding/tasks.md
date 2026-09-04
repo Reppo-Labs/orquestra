@@ -8,7 +8,7 @@
 
 ## 3. Datanet source
 - [x] 3.1 `datanet.ts`: `DatanetSource` port, `DatanetPod`, `InMemoryDatanetSource`, `cachedSource(source, ttlMs)`
-- [x] 3.2 `datanetClient.ts`: provisional HTTP binding (Bearer node key, base override env), throws on any failure; tests with injected fetch
+- [x] 3.2 `datanetClient.ts`: HTTP binding (base override env), throws on any failure; tests with injected fetch
 - [x] 3.3 `retrieve.ts`: `RankedPod.pod` is a `DatanetPod`; `gatherEvidence(source, request, k)` = fetch all accessible → rank; tests
 
 ## 4. Relevance gate
@@ -39,3 +39,16 @@
 ## 9. Stage 2b review fixes (PR #214)
 - [x] 9.1 A `gatherEvidence` returns `unreadable`; the worker :fails (never denies) on unsupported criteria while any datanet was unreadable; the two now-false in-source invariant comments corrected
 - [x] 9.2 B design.md D1 drops the false "mirrors eval-api's `client.ts`" claim (matches the corrected `datanetClient.ts` header); D2 documents the partial-read/`unreadable` behaviour
+
+## 10. Real datanet API binding (follow-up to PR #214; lands with eval-api PR #16)
+The provisional guess in `datanetClient.ts` was wrong. The API was probed live on 2026-09-04; see design D1 for the endpoints, envelopes and the cuid decision.
+- [x] 10.1 `types.ts`: `Citation.datanetId`, `DatanetPod.datanetId` and `EvalDenial.datanetsSearched` become subnet-cuid strings; doc comments say so
+- [x] 10.2 `datanetClient.ts`: rewritten against `GET /public/subnets` and `GET /public/pods?filters[subnet]=<cuid>`; `apiKey` option dropped (the API is public); envelopes read strictly at `data.subnets` / `data.pods`; `limit` applied client-side; factual header replaces the PROVISIONAL one
+- [x] 10.3 `datanet.ts` (port, `InMemoryDatanetSource`, `cachedSource` map key) keyed by string
+- [x] 10.4 `retrieve.ts`: `datanetsSearched`/`unreadable` are `string[]`; partial-read behaviour unchanged (a partial outage still `:fail`s, never denies)
+- [x] 10.5 `gate.ts`: `"datanetId/podId"` key scheme verified against cuids (no `/` in a cuid); trim/dedup fix re-verified by mutation
+- [x] 10.6 `worker.ts`: deny payload `string[]`; `buildDenyReason` re-checked for the worst case now that ids are ~25 chars each — new test pins 26 cuids + 10 long criteria inside the 2000-char cap, with a non-vacuity check that the unclamped string overflows
+- [x] 10.7 `src/index.ts` drops the datanet `apiKey` and says "public, no credential" in the startup log; `.env.example` says the datanet API needs none
+- [x] 10.8 `test/fixtures/lease-ack/`: re-synced verbatim from eval-api `datanet-api-binding` @ 3d97995; checksums re-pinned
+- [x] 10.9 `datanetClient.live.test.ts`: non-hermetic guard gated on `DATANET_LIVE`, run against the real API and mutation-verified (reading `data` instead of `data.pods` turns it red)
+- [x] 10.10 design D1/D2 + both spec deltas record the endpoints, envelopes, the cuid decision and both reasons the numeric id was rejected

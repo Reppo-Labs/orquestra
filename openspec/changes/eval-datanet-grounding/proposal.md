@@ -5,7 +5,7 @@ eval-api PR #15 (merged, `ad217dd`) removed the pod mint and the gateway-frozen 
 ## What Changes
 
 - **BREAKING** Lease/complete wire contract: `LeasedJob` loses `datanetId` / `corpusUrl` / `corpusVersion`; `CriterionVerdict.citations` becomes `{ datanetId, podId }[]` (non-empty); `EvalAnswer.evidenceBasis` removed; `fetchCorpus` removed; new `GatewayClient.deny(jobId, reason, datanetsSearched)`. Vendored `test/fixtures/lease-ack/` re-synced with eval-api and checksums re-pinned.
-- Evidence moves node-side: a `DatanetSource` port lists the datanets this node can read and fetches their pods; retrieval ranks across all of them. The HTTP binding is provisional until the datanet API docs land (same caveat as eval-api's `src/datanet/client.ts`).
+- Evidence moves node-side: a `DatanetSource` port lists the datanets this node can read and fetches their pods; retrieval ranks across all of them. The HTTP binding reads the real public datanet API (`/public/subnets`, `/public/pods?filters[subnet]=`), probed live 2026-09-04; datanets are identified by subnet cuid and the endpoints take no credential.
 - A **relevance gate** before judging: one bounded LLM call decides, per criterion, which retrieved pods actually bear on it. If any criterion has no supporting pod, the node **denies** the job (reason + datanets searched). Lexical overlap alone is no longer grounds to judge.
 - The judge must cite at least one gated pod per criterion; a verdict that comes back uncited is a judge error (`:fail`, retryable), never an ungrounded submission.
 - Worker outcomes become `executed | denied | error | skipped`; denials are recorded in the activity log and counted against the judge-call budget (the gate is an LLM call).
@@ -22,7 +22,7 @@ eval-api PR #15 (merged, `ad217dd`) removed the pod mint and the gateway-frozen 
 
 ## Impact
 
-- `src/evalworker/{types,client,worker,judge,retrieve}.ts` and tests; new `src/evalworker/datanet.ts` (port + fake) and `datanetClient.ts` (provisional HTTP binding); new `gate.ts`.
+- `src/evalworker/{types,client,worker,judge,retrieve}.ts` and tests; new `src/evalworker/datanet.ts` (port + fake) and `datanetClient.ts` (HTTP binding to the public datanet API, with a `DATANET_LIVE`-gated live test); new `gate.ts`.
 - `src/index.ts` evalwork wiring (datanet source bound with the node's platform credentials; `EVAL_DATANET_API_URL` optional override).
 - `test/fixtures/lease-ack/` + `test/integration/leaseAckContract.test.ts` (checksums, deny fixture, no corpus fixture).
 - Deployment: nodes must ship BEFORE the gateway is deployed (eval-api PR #15 body). Closes eval-api openspec task 9.3.

@@ -5,10 +5,12 @@ Defines how an orquestra node grounds an evaluation verdict in datanet pods it c
 ## ADDED Requirements
 
 ### Requirement: Evidence comes from the datanets this node can read
-For each leased job the node SHALL retrieve candidate pods from every datanet its own credentials can access, rank them by relevance to the request and criteria, and consider only those candidates as evidence. The node SHALL NOT use any gateway-provided corpus.
+For each leased job the node SHALL retrieve candidate pods from every datanet it can access, rank them by relevance to the request and criteria, and consider only those candidates as evidence. The node SHALL NOT use any gateway-provided corpus.
+
+A datanet SHALL be identified by its **subnet cuid string** (e.g. `cms3uejpj0001jf040zjgwqwm`) everywhere it is named — in `Citation.datanetId`, `DatanetPod.datanetId`, `datanetsSearched`, and the `"datanetId/podId"` pod keys the gate and judge prompts use. The node SHALL NOT identify a datanet by the numeric `tokenId` on its subnet row: that value collides across chains, and pods exist on subnets that carry no listed numeric id at all. The datanet API the node reads is public and unauthenticated, so "the datanets this node can access" is every datanet the API lists, not a per-credential subset.
 
 #### Scenario: Two accessible datanets
-- **WHEN** the node can read datanets 27 and 31 and leases a job
+- **WHEN** the node can read datanets `cms3uejpj0001jf040zjgwqwm` and `cmnhuowns000bic04e16t6735` and leases a job
 - **THEN** candidate pods are drawn from both, each tagged with its datanet id
 
 #### Scenario: One datanet of several is unreadable
