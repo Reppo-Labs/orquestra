@@ -18,10 +18,10 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 
 // Pinned in BOTH repos — eval-api pins the same bytes via
 // fixtures/lease-ack/CHECKSUMS.sha256 (`npm run fixtures:check` in its CI).
-// Copied verbatim from eval-api @ ad217dd.
+// Copied verbatim from eval-api @ 3d97995 (branch datanet-api-binding).
 const CHECKSUMS: Record<string, string> = {
-  'complete-request.json': '3e4655efbde3813dff3e2bc1c2ea0a93503249d9d5c00003070cac7674d6dc18',
-  'deny-request.json': '74f5d991102b8316e28a5becd4a5a04e50b8fdcdc52ae29072558ef885268b49',
+  'complete-request.json': '19e9ed86672169c1ab223e89062ee9798ad9e12042af04cf50ebc6b1848f0e9e',
+  'deny-request.json': '90e8957a7e1de201cd34a841b5b53a7003267585477a9e4be7924f9108b6edcc',
   'error-codes.json': 'cfcc493d5c2ece4d3abe1a3c88556811849655b596ae6b4a0f4bed237f6d992e',
   'fail-request.json': '73fde433d66db0ee93e14e84fc31246e309939134aef874521bf54af8108714d',
   'lease-response.json': 'a011ed4a499532a05e3191977f4b9ce1d80a635a2c28c32762ab419fbdabefc7',
@@ -68,7 +68,7 @@ describe('lease/ack contract fixtures', () => {
   })
 
   it('client rejects an old-shape lease (corpusUrl/corpusVersion/datanetId) as version skew', async () => {
-    const old = { ...JSON.parse(read('lease-response.json')), datanetId: 27, corpusUrl: 'https://bucket/corpus.json', corpusVersion: '20260826T110000Z' }
+    const old = { ...JSON.parse(read('lease-response.json')), datanetId: 'cms3uejpj0001jf040zjgwqwm', corpusUrl: 'https://bucket/corpus.json', corpusVersion: '20260826T110000Z' }
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify(old), { status: 200 }))
     const err = await makeClient(fetchImpl).lease().catch((e: unknown) => e)
     expect(err).toBeInstanceOf(GatewayError)
@@ -82,8 +82,9 @@ describe('lease/ack contract fixtures', () => {
     expect(calls[0]?.body).toEqual(answer)
     expect(calls[0]?.url).toBe('https://gw/v1/node/jobs/job_01J9ZX4T8RE:complete')
     // The wire shape is what the gateway's .strict() schema accepts: object
-    // citations, no evidenceBasis.
-    expect(answer.verdicts[0]?.citations[0]).toEqual({ datanetId: 27, podId: '482' })
+    // citations, no evidenceBasis. A datanetId is the SUBNET CUID string —
+    // never the numeric tokenId (it collides across chains).
+    expect(answer.verdicts[0]?.citations[0]).toEqual({ datanetId: 'cms3uejpj0001jf040zjgwqwm', podId: 'cmth6huiz0000l704x8lt4te2' })
     expect('evidenceBasis' in answer).toBe(false)
   })
 
@@ -107,7 +108,7 @@ describe('lease/ack contract fixtures', () => {
     const { calls, fetchImpl } = capturing()
     const client = makeClient(fetchImpl)
     await client.lease().catch(() => {}) // `{}` is not a lease — shape error is fine here
-    await client.deny('j', 'r', [1])
+    await client.deny('j', 'r', ['cms3uejpj0001jf040zjgwqwm'])
     await client.fail('j', 'r')
     expect(calls).toHaveLength(3)
     for (const c of calls) expect(c.headers).toMatchObject({ 'x-agent-id': 'agent-7', 'x-api-key': 'secret' })

@@ -8,12 +8,12 @@
       "critique": "Matches backtest pods showing positive expectancy; decay noted in trending regimes.",
       "citations": [
         {
-          "datanetId": 27,
-          "podId": "482"
+          "datanetId": "cms3uejpj0001jf040zjgwqwm",
+          "podId": "cmth6huiz0000l704x8lt4te2"
         },
         {
-          "datanetId": 27,
-          "podId": "517"
+          "datanetId": "cms3uejpj0001jf040zjgwqwm",
+          "podId": "cmsmcxx8u0000jr04cbdl20p4"
         }
       ]
     },
@@ -23,8 +23,8 @@
       "critique": "3x with a -2% stop is stop-hunt fragile per documented wick behavior.",
       "citations": [
         {
-          "datanetId": 27,
-          "podId": "533"
+          "datanetId": "cmnhuowns000bic04e16t6735",
+          "podId": "cmtlq203t0000jz04ifr0s3gz"
         }
       ]
     }
