@@ -15,12 +15,19 @@ const request: EvalJobRequest = {
   criteria: ['entry historically profitable', 'sizing survives adverse candle'],
 }
 
-const rp = (datanetId: number, podId: string, name: string, text: string): RankedPod => ({ pod: { datanetId, podId, name, text }, score: 1 })
+
+// Datanet ids are subnet cuids on the wire (datanetClient.ts). Using real ones
+// here proves the "datanetId/podId" key scheme survives them: a cuid contains
+// no "/", so the join stays unambiguous.
+const DN_A = 'cms3uejpj0001jf040zjgwqwm'
+const DN_B = 'cmnhuowns000bic04e16t6735'
+const DN_OTHER = 'cmzzzzzzz0000zz00zzzzzzzz'
+const rp = (datanetId: string, podId: string, name: string, text: string): RankedPod => ({ pod: { datanetId, podId, name, text }, score: 1 })
 
 const candidates: RankedPod[] = [
-  rp(27, '482', 'ETH funding backtest', 'negative funding entries show positive expectancy 2022-2025'),
-  rp(27, '533', 'Wick statistics', '10% adverse candles occur monthly on ETH-PERP'),
-  rp(31, '9', 'Funding glossary', 'funding is the periodic payment between longs and shorts'),
+  rp(DN_A, '482', 'ETH funding backtest', 'negative funding entries show positive expectancy 2022-2025'),
+  rp(DN_A, '533', 'Wick statistics', '10% adverse candles occur monthly on ETH-PERP'),
+  rp(DN_B, '9', 'Funding glossary', 'funding is the periodic payment between longs and shorts'),
 ]
 
 describe('gateEvidence', () => {
@@ -35,27 +42,27 @@ describe('gateEvidence', () => {
   it('maps supporting keys back to pods per criterion; all supported → unsupported empty', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: 'entry historically profitable', supportingPods: ['27/482'] },
-        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533', '31/9'] },
+        { criterion: 'entry historically profitable', supportingPods: [`${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', supportingPods: [`${DN_A}/533`, `${DN_B}/9`] },
       ],
     })
     const out = await gateEvidence({} as never, request, candidates)
     expect(mockGen).toHaveBeenCalledTimes(1)
     expect(out.unsupported).toEqual([])
-    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual(['27/482'])
-    expect(out.supported.get('sizing survives adverse candle')?.map(podKey)).toEqual(['27/533', '31/9'])
-    expect(out.supported.get('entry historically profitable')?.[0]).toEqual({ datanetId: 27, podId: '482', name: 'ETH funding backtest', text: expect.any(String) })
+    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual([`${DN_A}/482`])
+    expect(out.supported.get('sizing survives adverse candle')?.map(podKey)).toEqual([`${DN_A}/533`, `${DN_B}/9`])
+    expect(out.supported.get('entry historically profitable')?.[0]).toEqual({ datanetId: DN_A, podId: '482', name: 'ETH funding backtest', text: expect.any(String) })
   })
 
   it('drops keys outside the candidate set; a criterion left empty is unsupported', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: 'entry historically profitable', supportingPods: ['27/482', '99/fake'] },
-        { criterion: 'sizing survives adverse candle', supportingPods: ['27/999'] },
+        { criterion: 'entry historically profitable', supportingPods: [`${DN_A}/482`, `${DN_OTHER}/fake`] },
+        { criterion: 'sizing survives adverse candle', supportingPods: [`${DN_A}/999`] },
       ],
     })
     const out = await gateEvidence({} as never, request, candidates)
-    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual(['27/482'])
+    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual([`${DN_A}/482`])
     expect(out.supported.has('sizing survives adverse candle')).toBe(false)
     expect(out.unsupported).toEqual(['sizing survives adverse candle'])
   })
@@ -63,32 +70,32 @@ describe('gateEvidence', () => {
   it('matches criteria by trimmed lowercase text', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: '  Sizing Survives Adverse Candle ', supportingPods: ['27/533'] },
-        { criterion: 'Entry Historically Profitable', supportingPods: ['27/482'] },
+        { criterion: '  Sizing Survives Adverse Candle ', supportingPods: [`${DN_A}/533`] },
+        { criterion: 'Entry Historically Profitable', supportingPods: [`${DN_A}/482`] },
       ],
     })
     const out = await gateEvidence({} as never, request, candidates)
     expect(out.unsupported).toEqual([])
-    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual(['27/482'])
+    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual([`${DN_A}/482`])
   })
 
   it('pairs by position when the model rephrased but counts match', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: 'Is the entry profitable historically?', supportingPods: ['27/482'] },
+        { criterion: 'Is the entry profitable historically?', supportingPods: [`${DN_A}/482`] },
         { criterion: 'Does the sizing survive a 10% candle?', supportingPods: [] },
       ],
     })
     const out = await gateEvidence({} as never, request, candidates)
-    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual(['27/482'])
+    expect(out.supported.get('entry historically profitable')?.map(podKey)).toEqual([`${DN_A}/482`])
     expect(out.unsupported).toEqual(['sizing survives adverse candle'])
   })
 
   it('throws when rephrased AND counts mismatch — never mispairs (routes to :fail)', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: 'something else', supportingPods: ['27/482'] },
-        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533'] },
+        { criterion: 'something else', supportingPods: [`${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', supportingPods: [`${DN_A}/533`] },
         { criterion: 'a third invented criterion', supportingPods: [] },
       ],
     })
@@ -98,8 +105,8 @@ describe('gateEvidence', () => {
   it('de-duplicates a key the model repeats', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: 'entry historically profitable', supportingPods: ['27/482', '27/482'] },
-        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533'] },
+        { criterion: 'entry historically profitable', supportingPods: [`${DN_A}/482`, `${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', supportingPods: [`${DN_A}/533`] },
       ],
     })
     const out = await gateEvidence({} as never, request, candidates)
@@ -109,8 +116,8 @@ describe('gateEvidence', () => {
   it('dedups pod keys that differ only in whitespace (one pod, not two)', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
-        { criterion: 'entry historically profitable', supportingPods: ['27/482', ' 27/482', '27/482 '] },
-        { criterion: 'sizing survives adverse candle', supportingPods: ['27/533'] },
+        { criterion: 'entry historically profitable', supportingPods: [`${DN_A}/482`, ` ${DN_A}/482`, `${DN_A}/482 `] },
+        { criterion: 'sizing survives adverse candle', supportingPods: [`${DN_A}/533`] },
       ],
     })
     const out = await gateEvidence({} as never, request, candidates)

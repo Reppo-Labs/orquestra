@@ -27,7 +27,8 @@ export class DatanetError extends Error {
 }
 
 export interface AccessibleDatanet {
-  datanetId: number
+  /** The datanet's subnet cuid — the only stable identifier the API offers. */
+  datanetId: string
   name: string
 }
 
@@ -35,7 +36,7 @@ export interface DatanetSource {
   /** Every datanet this node's credentials can read. */
   listAccessible(): Promise<AccessibleDatanet[]>
   /** Up to `limit` pods of one datanet, each tagged with its datanetId. */
-  fetchPods(datanetId: number, limit: number): Promise<DatanetPod[]>
+  fetchPods(datanetId: string, limit: number): Promise<DatanetPod[]>
   /** Drop any cached pods (a caching source only). Called when the gateway
    *  rejects a citation as unresolvable: the pod was deleted after we cached
    *  it, and without this every job in the TTL window cites it again and earns
@@ -56,7 +57,7 @@ export class InMemoryDatanetSource implements DatanetSource {
     return this.datanets.map(({ datanetId, name }) => ({ datanetId, name }))
   }
 
-  async fetchPods(datanetId: number, limit: number): Promise<DatanetPod[]> {
+  async fetchPods(datanetId: string, limit: number): Promise<DatanetPod[]> {
     const d = this.datanets.find((x) => x.datanetId === datanetId)
     if (!d) throw new Error(`datanet ${datanetId} is not accessible to this source`)
     return d.pods.slice(0, limit)
@@ -79,7 +80,7 @@ interface Entry<T> {
  *  read (the entry holds the promise, not the value). */
 export function cachedSource(source: DatanetSource, ttlMs: number, now: () => number = Date.now): DatanetSource {
   let list: Entry<AccessibleDatanet[]> | undefined
-  const pods = new Map<number, Entry<DatanetPod[]>>()
+  const pods = new Map<string, Entry<DatanetPod[]>>()
 
   const fresh = <T>(e: Entry<T> | undefined, limit: number): e is Entry<T> => !!e && e.expiresAt > now() && e.limit >= limit
 

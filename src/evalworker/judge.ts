@@ -44,7 +44,7 @@ export function buildEvalPrompt(request: EvalJobRequest, gated: GatedEvidence): 
   const unique = new Map<string, DatanetPod>()
   for (const pods of gated.values()) for (const p of pods) unique.set(podKey(p), p)
   const evidenceBlock =
-    '## Evidence pods (cite by the exact key before the dash, e.g. "27/482")\n' +
+    '## Evidence pods (cite by the exact key before the dash, e.g. "cms3uejpj0001jf040zjgwqwm/cmth6huiz0000l704x8lt4te2")\n' +
     [...unique.entries()].map(([key, p]) => `### ${key} — ${p.name}\n${p.text}`).join('\n\n')
   const contextBlock = request.context?.trim() ? `\n## Task background (from the submitter)\n${request.context.trim()}\n` : ''
   const criteriaBlock = request.criteria

@@ -16,10 +16,14 @@ const job = (id: string): LeasedJob => ({
   answerCutoff: new Date(Date.now() + 300_000).toISOString(),
 })
 
-const pod: DatanetPod = { datanetId: 27, podId: '482', name: 'good things', text: 'the payload is good evidence' }
+// Datanet ids are subnet cuids on the wire (datanetClient.ts).
+const DN_A = 'cms3uejpj0001jf040zjgwqwm'
+const DN_B = 'cmnhuowns000bic04e16t6735'
+
+const pod: DatanetPod = { datanetId: DN_A, podId: '482', name: 'good things', text: 'the payload is good evidence' }
 
 /** One accessible datanet holding one pod that lexically matches every job above. */
-const datanet = (): DatanetSource => new InMemoryDatanetSource([{ datanetId: 27, name: 'perps', pods: [pod] }])
+const datanet = (): DatanetSource => new InMemoryDatanetSource([{ datanetId: DN_A, name: 'perps', pods: [pod] }])
 
 /** Gate that admits every candidate for every criterion. */
 const admitAll = async (req: { criteria: string[] }, cands: { pod: DatanetPod }[]): Promise<GateResult> => ({
@@ -45,7 +49,7 @@ function makeClient(jobs: (LeasedJob | null)[]): TestClient {
     fail: vi.fn(async (id: string, reason: string) => {
       failed.push({ id, reason })
     }),
-    deny: vi.fn(async (id: string, reason: string, datanetsSearched: number[]) => {
+    deny: vi.fn(async (id: string, reason: string, datanetsSearched: string[]) => {
       denied.push({ id, reason, datanetsSearched })
     }),
   } as unknown as TestClient
@@ -94,7 +98,7 @@ describe('startEvalWorker', () => {
     expect(client.completed).toHaveLength(2)
     expect(rows).toHaveLength(2)
     expect((client.completed[0] as { model: string }).model).toBe('test/model')
-    expect((client.completed[0] as { verdicts: { citations: unknown[] }[] }).verdicts[0]?.citations).toEqual([{ datanetId: 27, podId: '482' }])
+    expect((client.completed[0] as { verdicts: { citations: unknown[] }[] }).verdicts[0]?.citations).toEqual([{ datanetId: DN_A, podId: '482' }])
     expect(rows[0]).toMatchObject({ status: 'executed' })
   })
 
@@ -249,7 +253,7 @@ describe('startEvalWorker (review regressions)', () => {
         judge: async (req) => {
           judgeStarted++
           await gate.promise
-          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }] })) }
+          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
         },
       }),
     )
@@ -275,7 +279,7 @@ describe('startEvalWorker (review regressions)', () => {
         judge: async (req) => {
           judgeStarted++
           await gate.promise
-          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }] })) }
+          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
         },
       }),
     )
@@ -302,7 +306,7 @@ describe('startEvalWorker (review regressions)', () => {
           peak = Math.max(peak, running)
           await gate.promise
           running--
-          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }] })) }
+          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
         },
       }),
     )
@@ -351,7 +355,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     )
     await waitFor(() => client.denied.length === 1)
     await w.stop()
-    expect(client.denied[0]).toMatchObject({ id: 'j-deny', datanetsSearched: [27] })
+    expect(client.denied[0]).toMatchObject({ id: 'j-deny', datanetsSearched: [DN_A] })
     expect((client.denied[0] as { reason: string }).reason).toContain('is good')
     expect(judge).not.toHaveBeenCalled()
     expect(client.completed).toHaveLength(0)
@@ -368,15 +372,15 @@ describe('startEvalWorker (datanet grounding)', () => {
         client,
         gate,
         datanet: new InMemoryDatanetSource([
-          { datanetId: 27, name: 'a', pods: [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }] },
-          { datanetId: 31, name: 'b', pods: [] },
+          { datanetId: DN_A, name: 'a', pods: [{ datanetId: DN_A, podId: '1', name: 'cats', text: 'felines purring' }] },
+          { datanetId: DN_B, name: 'b', pods: [] },
         ]),
       }),
     )
     await waitFor(() => client.denied.length === 1)
     await w.stop()
     // the injected gate is what decides; the worker still reports every datanet it READ
-    expect(client.denied[0]).toMatchObject({ id: 'j-empty', datanetsSearched: [27, 31] })
+    expect(client.denied[0]).toMatchObject({ id: 'j-empty', datanetsSearched: [DN_A, DN_B] })
     expect(client.completed).toHaveLength(0)
   })
 
@@ -394,16 +398,16 @@ describe('startEvalWorker (datanet grounding)', () => {
         client,
         budget: b,
         record: (r) => rows.push(r),
-        // 27 answers with nothing relevant (zero candidates → no model call),
-        // 31 is down and may hold the only supporting pod.
+        // DN_A answers with nothing relevant (zero candidates → no model call),
+        // DN_B is down and may hold the only supporting pod.
         datanet: {
           listAccessible: async () => [
-            { datanetId: 27, name: 'perps' },
-            { datanetId: 31, name: 'flaky' },
+            { datanetId: DN_A, name: 'perps' },
+            { datanetId: DN_B, name: 'flaky' },
           ],
-          fetchPods: async (datanetId: number) => {
-            if (datanetId === 31) throw new DatanetError(503, 'datanet api HTTP 503')
-            return [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }]
+          fetchPods: async (datanetId: string) => {
+            if (datanetId === DN_B) throw new DatanetError(503, 'datanet api HTTP 503')
+            return [{ datanetId: DN_A, podId: '1', name: 'cats', text: 'felines purring' }]
           },
         },
         gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'] }),
@@ -413,7 +417,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     await w.stop()
     expect(client.denied).toHaveLength(0)
     expect(client.completed).toHaveLength(0)
-    expect((client.failed[0] as { reason: string }).reason).toContain('31')
+    expect((client.failed[0] as { reason: string }).reason).toContain(DN_B)
     expect((client.failed[0] as { reason: string }).reason).toContain('not denying')
     expect(rows[0]).toMatchObject({ status: 'error' })
     // zero candidates → the gate short-circuits without a model call, so the
@@ -430,11 +434,11 @@ describe('startEvalWorker (datanet grounding)', () => {
         budget: b,
         datanet: {
           listAccessible: async () => [
-            { datanetId: 27, name: 'perps' },
-            { datanetId: 31, name: 'flaky' },
+            { datanetId: DN_A, name: 'perps' },
+            { datanetId: DN_B, name: 'flaky' },
           ],
-          fetchPods: async (datanetId: number) => {
-            if (datanetId === 31) throw new DatanetError(503, 'datanet api HTTP 503')
+          fetchPods: async (datanetId: string) => {
+            if (datanetId === DN_B) throw new DatanetError(503, 'datanet api HTTP 503')
             return [pod]
           },
         },
@@ -454,11 +458,11 @@ describe('startEvalWorker (datanet grounding)', () => {
         client,
         datanet: {
           listAccessible: async () => [
-            { datanetId: 27, name: 'perps' },
-            { datanetId: 31, name: 'flaky' },
+            { datanetId: DN_A, name: 'perps' },
+            { datanetId: DN_B, name: 'flaky' },
           ],
-          fetchPods: async (datanetId: number) => {
-            if (datanetId === 31) throw new DatanetError(503, 'datanet api HTTP 503')
+          fetchPods: async (datanetId: string) => {
+            if (datanetId === DN_B) throw new DatanetError(503, 'datanet api HTTP 503')
             return [pod]
           },
         },
@@ -469,7 +473,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     expect(client.failed).toHaveLength(0)
     expect(client.denied).toHaveLength(0)
     expect((client.completed[0] as { verdicts: { citations: unknown[] }[] }).verdicts[0]?.citations).toEqual([
-      { datanetId: 27, podId: '482' },
+      { datanetId: DN_A, podId: '482' },
     ])
   })
 
@@ -542,7 +546,7 @@ describe('startEvalWorker (datanet grounding)', () => {
 
   it('budget is reserved before retrieval: exhausted → :fail without touching the datanet source', async () => {
     const client = makeClient([job('j-budget'), null])
-    const listAccessible = vi.fn(async () => [{ datanetId: 27, name: 'a' }])
+    const listAccessible = vi.fn(async () => [{ datanetId: DN_A, name: 'a' }])
     const w = startEvalWorker(deps({ client, budget: budget(0), datanet: { listAccessible, fetchPods: async () => [] } }))
     // hasBudget() is false from the start, so the loop never leases — give it room to misbehave
     await new Promise((r) => setTimeout(r, 40))
@@ -609,23 +613,39 @@ describe('buildDenyReason', () => {
 
   it('stays inside the gateway 2000-char cap with 10 long unsupported criteria, naming each by index', () => {
     const criteria = Array.from({ length: 10 }, (_, i) => long(i + 1))
-    const reason = buildDenyReason(criteria, criteria, [27, 31])
+    const reason = buildDenyReason(criteria, criteria, [DN_A, DN_B])
     expect(reason.length).toBeLessThanOrEqual(2000)
     for (let i = 1; i <= 10; i++) expect(reason).toContain(`#${i}`)
-    expect(reason).toContain('27, 31')
+    expect(reason).toContain(`${DN_A}, ${DN_B}`)
   })
 
   it('hard-clamps even when the excerpts alone would overflow', () => {
     const criteria = Array.from({ length: 40 }, (_, i) => long(i + 1))
-    expect(buildDenyReason(criteria, criteria, [27]).length).toBeLessThanOrEqual(2000)
+    expect(buildDenyReason(criteria, criteria, [DN_A]).length).toBeLessThanOrEqual(2000)
+  })
+
+  // Datanet ids became 25-char cuids, so the searched list is ~27 chars PER
+  // datanet where it used to be ~4. Every subnet the API lists (19 as probed,
+  // 26 with pods) is a realistic worst case, and it is appended AFTER the
+  // criteria — so the clamp, not the caller, is what keeps the gateway's
+  // 2000-char cap (eval-api denyRequestSchema) from rejecting the denial.
+  it('stays inside the cap with every datanet named by cuid alongside 10 long criteria', () => {
+    const criteria = Array.from({ length: 10 }, (_, i) => long(i + 1))
+    const many = Array.from({ length: 26 }, (_, i) => `cm${String(i).padStart(2, '0')}uowns000bic04e16t673${i % 10}`)
+    for (const id of many) expect(id).toHaveLength(25)
+    const reason = buildDenyReason(criteria, criteria, many)
+    expect(reason.length).toBeLessThanOrEqual(2000)
+    // Non-vacuity: the unclamped string really does overflow, so the assertion
+    // above is testing the clamp and not an input that happens to be short.
+    expect(`${criteria.join('')}${many.join(', ')}`.length).toBeGreaterThan(2000)
   })
 
   it('reads naturally for a normal two-criterion denial (full text, no truncation)', () => {
     const criteria = ['entry historically profitable', 'sizing survives a stop hunt']
-    const reason = buildDenyReason([criteria[1]!], criteria, [27])
+    const reason = buildDenyReason([criteria[1]!], criteria, [DN_A])
     expect(reason).toContain('#2 "sizing survives a stop hunt"')
     expect(reason).not.toContain('...')
-    expect(reason).toMatch(/searched datanets 27/)
+    expect(reason).toContain(`searched datanets ${DN_A}`)
   })
 })
 
@@ -684,7 +704,7 @@ describe('startEvalWorker (budget release on pre-LLM failures)', () => {
         client,
         budget: b,
         gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'] }),
-        datanet: new InMemoryDatanetSource([{ datanetId: 27, name: 'a', pods: [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }] }]),
+        datanet: new InMemoryDatanetSource([{ datanetId: DN_A, name: 'a', pods: [{ datanetId: DN_A, podId: '1', name: 'cats', text: 'felines purring' }] }]),
       }),
     )
     await waitFor(() => client.denied.length === 1)

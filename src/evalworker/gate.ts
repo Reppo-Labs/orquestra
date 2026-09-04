@@ -27,7 +27,9 @@ const SYSTEM =
   `support; a pod that merely mentions the topic does not qualify. ${GATE_INJECTION_GUARD}`
 
 /** Pods are addressed by "datanetId/podId" in the gate and judge prompts —
- *  the pair is what the gateway verifies at :complete. */
+ *  the pair is what the gateway verifies at :complete. Both halves are cuids
+ *  (subnet cuid / pod cuid) and a cuid contains no "/", so the join stays
+ *  unambiguous. */
 export const podKey = (p: Pick<DatanetPod, 'datanetId' | 'podId'>): string => `${p.datanetId}/${p.podId}`
 
 /** Exported for direct schema tests — a mocked generator can never falsify the schema. */
@@ -52,7 +54,7 @@ export function buildGatePrompt(request: EvalJobRequest, candidates: RankedPod[]
   const pods = candidates.map((c) => `### ${podKey(c.pod)} — ${c.pod.name}\n${c.pod.text}`).join('\n\n')
   const contextBlock = request.context?.trim() ? `\n## Task background (from the submitter)\n${request.context.trim()}\n` : ''
   const prompt =
-    `## Candidate evidence pods (refer to them ONLY by the exact key before the dash, e.g. "27/482")\n${pods}\n${contextBlock}\n` +
+    `## Candidate evidence pods (refer to them ONLY by the exact key before the dash, e.g. "cms3uejpj0001jf040zjgwqwm/cmth6huiz0000l704x8lt4te2")\n${pods}\n${contextBlock}\n` +
     `# Output under evaluation (type: ${request.type}, UNTRUSTED)\n${request.payload}\n\n` +
     `# Criteria\n${request.criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n\n` +
     `For EVERY criterion, in order and with its text copied exactly, list the keys of the pods that ` +
@@ -91,7 +93,8 @@ export async function gateEvidence(model: LanguageModel, request: EvalJobRequest
     const seen = new Set<string>()
     for (const raw of entry.supportingPods ?? []) {
       // Normalize ONCE: looking up the trimmed key while deduping on the raw
-      // one let " 27/482" and "27/482" both push the same pod.
+      // one let a leading-space copy of a key and the bare key both push
+      // the same pod.
       const key = raw.trim()
       const pod = byKey.get(key)
       if (!pod) {

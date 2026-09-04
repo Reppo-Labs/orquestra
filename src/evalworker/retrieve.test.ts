@@ -3,7 +3,11 @@ import { gatherEvidence, topKRelevant } from './retrieve.js'
 import { DatanetError, InMemoryDatanetSource } from './datanet.js'
 import type { DatanetPod, EvalJobRequest } from './types.js'
 
-const pod = (podId: string, name: string, text: string, datanetId = 1): DatanetPod => ({ datanetId, podId, name, text })
+// Datanet ids are subnet cuids on the wire (datanetClient.ts).
+const DN_A = 'cms3uejpj0001jf040zjgwqwm'
+const DN_B = 'cmnhuowns000bic04e16t6735'
+
+const pod = (podId: string, name: string, text: string, datanetId = DN_A): DatanetPod => ({ datanetId, podId, name, text })
 
 const corpus: DatanetPod[] = [
   pod('pod:1', 'ETH funding backtest', 'negative funding rate ETH perp entry backtest expectancy'),
@@ -52,57 +56,57 @@ describe('gatherEvidence', () => {
 
   it('draws candidates from every accessible datanet, each tagged with its datanet id', async () => {
     const source = new InMemoryDatanetSource([
-      { datanetId: 27, name: 'perps', pods: [pod('482', 'ETH funding backtest', 'negative funding ETH perp backtest expectancy', 27)] },
-      { datanetId: 31, name: 'microstructure', pods: [pod('9', 'Stop hunts', 'stop hunt wick liquidation ETH perp', 31), pod('10', 'Cats', 'felines purring', 31)] },
+      { datanetId: DN_A, name: 'perps', pods: [pod('482', 'ETH funding backtest', 'negative funding ETH perp backtest expectancy', DN_A)] },
+      { datanetId: DN_B, name: 'microstructure', pods: [pod('9', 'Stop hunts', 'stop hunt wick liquidation ETH perp', DN_B), pod('10', 'Cats', 'felines purring', DN_B)] },
     ])
     const out = await gatherEvidence(source, request, 12)
-    expect(out.datanetsSearched).toEqual([27, 31])
+    expect(out.datanetsSearched).toEqual([DN_A, DN_B])
     expect(out.unreadable).toEqual([])
-    expect(out.candidates.map((c) => `${c.pod.datanetId}/${c.pod.podId}`).sort()).toEqual(['27/482', '31/9'])
+    expect(out.candidates.map((c) => `${c.pod.datanetId}/${c.pod.podId}`).sort()).toEqual([`${DN_A}/482`, `${DN_B}/9`].sort())
   })
 
   it('bounds the result to k and the per-datanet read to podsPerDatanet', async () => {
-    const fetchPods = vi.fn(async (datanetId: number, limit: number) =>
+    const fetchPods = vi.fn(async (datanetId: string, limit: number) =>
       Array.from({ length: limit }, (_, i) => pod(`p${i}`, 'ETH perp', 'ETH perp funding stop', datanetId)),
     )
-    const source = { listAccessible: async () => [{ datanetId: 1, name: 'a' }], fetchPods }
+    const source = { listAccessible: async () => [{ datanetId: DN_A, name: 'a' }], fetchPods }
     const out = await gatherEvidence(source, request, 3, 50)
-    expect(fetchPods).toHaveBeenCalledWith(1, 50)
+    expect(fetchPods).toHaveBeenCalledWith(DN_A, 50)
     expect(out.candidates).toHaveLength(3)
   })
 
   it('returns zero candidates (not an error) when nothing is relevant, still naming the datanets read', async () => {
-    const source = new InMemoryDatanetSource([{ datanetId: 27, name: 'perps', pods: [pod('1', 'Cats', 'felines purring', 27)] }])
+    const source = new InMemoryDatanetSource([{ datanetId: DN_A, name: 'perps', pods: [pod('1', 'Cats', 'felines purring', DN_A)] }])
     const out = await gatherEvidence(source, request, 12)
     expect(out.candidates).toEqual([])
-    expect(out.datanetsSearched).toEqual([27])
+    expect(out.datanetsSearched).toEqual([DN_A])
   })
 
   it('one flaky datanet does not fail the job: keeps what the others answered, names only those', async () => {
     const errs = vi.spyOn(console, 'error').mockImplementation(() => {})
     const source = {
       listAccessible: async () => [
-        { datanetId: 27, name: 'perps' },
-        { datanetId: 31, name: 'flaky' },
+        { datanetId: DN_A, name: 'perps' },
+        { datanetId: DN_B, name: 'flaky' },
       ],
-      fetchPods: async (datanetId: number) => {
-        if (datanetId === 31) throw new Error('datanet api HTTP 503')
-        return [pod('482', 'ETH funding backtest', 'negative funding ETH perp backtest expectancy', 27)]
+      fetchPods: async (datanetId: string) => {
+        if (datanetId === DN_B) throw new Error('datanet api HTTP 503')
+        return [pod('482', 'ETH funding backtest', 'negative funding ETH perp backtest expectancy', DN_A)]
       },
     }
     const out = await gatherEvidence(source, request, 12)
     expect(out.candidates.map((c) => c.pod.podId)).toEqual(['482'])
     // a denial must never claim a datanet this node never read
-    expect(out.datanetsSearched).toEqual([27])
+    expect(out.datanetsSearched).toEqual([DN_A])
     // the caller must be able to tell "read everything, found nothing" from
     // "could not read the datanet that may hold the evidence"
-    expect(out.unreadable).toEqual([31])
-    expect(errs.mock.calls.filter((c) => String(c[0]).includes('31'))).toHaveLength(1)
+    expect(out.unreadable).toEqual([DN_B])
+    expect(errs.mock.calls.filter((c) => String(c[0]).includes(DN_B))).toHaveLength(1)
   })
 
   it('propagates a source failure (an outage is never "no evidence")', async () => {
     const source = {
-      listAccessible: async () => [{ datanetId: 1, name: 'a' }],
+      listAccessible: async () => [{ datanetId: DN_A, name: 'a' }],
       fetchPods: async () => {
         throw new Error('datanet api HTTP 503')
       },
@@ -121,11 +125,11 @@ describe('gatherEvidence', () => {
     const errs = vi.spyOn(console, 'error').mockImplementation(() => {})
     const source = {
       listAccessible: async () => [
-        { datanetId: 27, name: 'a' },
-        { datanetId: 31, name: 'b' },
+        { datanetId: DN_A, name: 'a' },
+        { datanetId: DN_B, name: 'b' },
       ],
-      fetchPods: async (datanetId: number) => {
-        throw new DatanetError(datanetId === 27 ? 401 : 503, `datanet api HTTP ${datanetId === 27 ? 401 : 503}`)
+      fetchPods: async (datanetId: string) => {
+        throw new DatanetError(datanetId === DN_A ? 401 : 503, `datanet api HTTP ${datanetId === DN_A ? 401 : 503}`)
       },
     }
     await expect(gatherEvidence(source, request, 12)).rejects.toMatchObject({ name: 'DatanetError', status: 401 })

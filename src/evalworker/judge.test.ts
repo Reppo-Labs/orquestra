@@ -14,9 +14,16 @@ const request: EvalJobRequest = {
   criteria: ['entry historically profitable', 'sizing survives adverse candle'],
 }
 
-const backtest: DatanetPod = { datanetId: 27, podId: '482', name: 'backtest', text: 'expectancy data' }
-const wicks: DatanetPod = { datanetId: 27, podId: '533', name: 'wick stats', text: 'adverse candle frequency' }
-const glossary: DatanetPod = { datanetId: 31, podId: '9', name: 'glossary', text: 'funding definition' }
+
+// Datanet ids are subnet cuids on the wire (datanetClient.ts). Using real ones
+// here proves the "datanetId/podId" key scheme survives them: a cuid contains
+// no "/", so the join stays unambiguous.
+const DN_A = 'cms3uejpj0001jf040zjgwqwm'
+const DN_B = 'cmnhuowns000bic04e16t6735'
+const DN_OTHER = 'cmzzzzzzz0000zz00zzzzzzzz'
+const backtest: DatanetPod = { datanetId: DN_A, podId: '482', name: 'backtest', text: 'expectancy data' }
+const wicks: DatanetPod = { datanetId: DN_A, podId: '533', name: 'wick stats', text: 'adverse candle frequency' }
+const glossary: DatanetPod = { datanetId: DN_B, podId: '9', name: 'glossary', text: 'funding definition' }
 
 const gated = new Map<string, DatanetPod[]>([
   ['entry historically profitable', [backtest, glossary]],
@@ -38,14 +45,14 @@ describe('buildEvalPrompt', () => {
 
   it('lists each gated pod once by datanetId/podId key, and every criterion with its allowed keys', () => {
     const { prompt } = buildEvalPrompt(request, gated)
-    expect(prompt.match(/### 27\/482/g)).toHaveLength(1)
-    expect(prompt).toContain('### 27/533')
-    expect(prompt).toContain('### 31/9')
+    expect(prompt.match(new RegExp(`### ${DN_A}/482`, 'g'))).toHaveLength(1)
+    expect(prompt).toContain(`### ${DN_A}/533`)
+    expect(prompt).toContain(`### ${DN_B}/9`)
     expect(prompt).toContain('1. entry historically profitable')
     expect(prompt).toContain('2. sizing survives adverse candle')
     // per-criterion allowed set is spelled out so the judge cites from it
-    expect(prompt).toMatch(/1\. entry historically profitable[^\n]*\n[^\n]*27\/482[^\n]*31\/9/)
-    expect(prompt).toMatch(/2\. sizing survives adverse candle[^\n]*\n[^\n]*27\/533/)
+    expect(prompt).toMatch(new RegExp(`1\\. entry historically profitable[^\n]*\n[^\n]*${DN_A}/482[^\n]*${DN_B}/9`))
+    expect(prompt).toMatch(new RegExp(`2\\. sizing survives adverse candle[^\n]*\n[^\n]*${DN_A}/533`))
   })
 
   it('says citations are mandatory', () => {
@@ -59,14 +66,14 @@ describe('judgeEval', () => {
   it('maps cited keys to { datanetId, podId } citations', async () => {
     mockGen.mockResolvedValueOnce({
       verdicts: [
-        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: ['27/482', '31/9'] },
-        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: ['27/533'] },
+        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [`${DN_A}/482`, `${DN_B}/9`] },
+        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: [`${DN_A}/533`] },
       ],
     })
     const out = await judgeEval({} as never, request, gated)
     expect(out.verdicts).toEqual([
-      { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [{ datanetId: 27, podId: '482' }, { datanetId: 31, podId: '9' }] },
-      { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: [{ datanetId: 27, podId: '533' }] },
+      { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }, { datanetId: DN_B, podId: '9' }] },
+      { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: [{ datanetId: DN_A, podId: '533' }] },
     ])
     expect('evidenceBasis' in out).toBe(false)
   })
@@ -74,19 +81,19 @@ describe('judgeEval', () => {
   it('strips citations outside the criterion\'s gated set — a pod gated for ANOTHER criterion does not count', async () => {
     mockGen.mockResolvedValueOnce({
       verdicts: [
-        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: ['27/482', '99/fake', '27/533'] },
-        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: ['27/533'] },
+        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [`${DN_A}/482`, `${DN_OTHER}/fake`, `${DN_A}/533`] },
+        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: [`${DN_A}/533`] },
       ],
     })
     const out = await judgeEval({} as never, request, gated)
-    expect(out.verdicts[0]?.citations).toEqual([{ datanetId: 27, podId: '482' }])
+    expect(out.verdicts[0]?.citations).toEqual([{ datanetId: DN_A, podId: '482' }])
   })
 
   it('throws when a verdict is left with no gated citation (judge error → :fail, never an ungrounded submit)', async () => {
     mockGen.mockResolvedValueOnce({
       verdicts: [
-        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: ['27/482'] },
-        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: ['99/fake'] },
+        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [`${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: [`${DN_OTHER}/fake`] },
       ],
     })
     await expect(judgeEval({} as never, request, gated)).rejects.toThrow('judge cited nothing for criterion: sizing survives adverse candle')
@@ -94,7 +101,7 @@ describe('judgeEval', () => {
 
   it('throws when the judge omits a criterion (malformed output = error)', async () => {
     mockGen.mockResolvedValueOnce({
-      verdicts: [{ criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: ['27/482'] }],
+      verdicts: [{ criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [`${DN_A}/482`] }],
     })
     await expect(judgeEval({} as never, request, gated)).rejects.toThrow(/omitted criterion/)
   })
@@ -102,19 +109,19 @@ describe('judgeEval', () => {
   it('de-duplicates a repeated citation key', async () => {
     mockGen.mockResolvedValueOnce({
       verdicts: [
-        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: ['27/482', '27/482'] },
-        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: ['27/533'] },
+        { criterion: 'entry historically profitable', score: 7, critique: 'ok', citations: [`${DN_A}/482`, `${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', score: 4, critique: 'thin', citations: [`${DN_A}/533`] },
       ],
     })
     const out = await judgeEval({} as never, request, gated)
-    expect(out.verdicts[0]?.citations).toEqual([{ datanetId: 27, podId: '482' }])
+    expect(out.verdicts[0]?.citations).toEqual([{ datanetId: DN_A, podId: '482' }])
   })
 })
 
 describe('verdictSchema (direct — mocks cannot falsify the schema)', () => {
   it('accepts a valid verdict set', () => {
     const r = verdictSchema.safeParse({
-      verdicts: [{ criterion: 'c', score: 7, critique: 'ok', citations: ['27/1'] }],
+      verdicts: [{ criterion: 'c', score: 7, critique: 'ok', citations: [`${DN_A}/1`] }],
     })
     expect(r.success).toBe(true)
   })
@@ -136,8 +143,8 @@ describe('judgeEval criterion pairing (review regression)', () => {
   it('pairs by position when the model rephrased but counts match', async () => {
     mockGen.mockResolvedValueOnce({
       verdicts: [
-        { criterion: 'Is the entry historically profitable?', score: 7, critique: 'a', citations: ['27/482'] },
-        { criterion: 'Does sizing survive an adverse candle?', score: 4, critique: 'b', citations: ['27/533'] },
+        { criterion: 'Is the entry historically profitable?', score: 7, critique: 'a', citations: [`${DN_A}/482`] },
+        { criterion: 'Does sizing survive an adverse candle?', score: 4, critique: 'b', citations: [`${DN_A}/533`] },
       ],
     })
     const out = await judgeEval({} as never, request, gated)
@@ -148,8 +155,8 @@ describe('judgeEval criterion pairing (review regression)', () => {
   it('throws when rephrased AND counts mismatch — never mispairs', async () => {
     mockGen.mockResolvedValueOnce({
       verdicts: [
-        { criterion: 'completely different wording', score: 9, critique: 'a', citations: ['27/482'] },
-        { criterion: 'sizing survives adverse candle', score: 4, critique: 'b', citations: ['27/533'] },
+        { criterion: 'completely different wording', score: 9, critique: 'a', citations: [`${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', score: 4, critique: 'b', citations: [`${DN_A}/533`] },
         { criterion: 'a third invented criterion', score: 2, critique: 'c', citations: [] },
       ],
     })

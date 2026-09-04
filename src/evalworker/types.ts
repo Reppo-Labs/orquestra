@@ -25,9 +25,13 @@ export interface LeasedJob {
   answerCutoff: string
 }
 
-/** A pod reference the gateway verifies against the datanet API at :complete. */
+/** A pod reference the gateway verifies against the datanet API at :complete.
+ *  `datanetId` is the datanet's SUBNET CUID (e.g. "cms3uejpj0001jf040zjgwqwm"),
+ *  which is what a pod row names as `privateSubnetId` — never the numeric
+ *  `tokenId` (it collides across chains, and 66 pods belong to subnets that
+ *  /public/subnets does not list at all). Confirmed by live probe 2026-09-04. */
 export interface Citation {
-  datanetId: number
+  datanetId: string
   podId: string
 }
 
@@ -52,14 +56,15 @@ export interface EvalAnswer {
 export interface EvalDenial {
   jobId: string
   reason: string
-  /** Must name at least one datanet: "found nothing" is only meaningful
-   *  relative to where the node looked. */
-  datanetsSearched: number[]
+  /** Must name at least one datanet, by subnet cuid: "found nothing" is only
+   *  meaningful relative to where the node looked. */
+  datanetsSearched: string[]
 }
 
-/** One pod as read from a datanet this node can access. */
+/** One pod as read from a datanet this node can access. `datanetId` is the
+ *  subnet cuid the pod belongs to (its row's `privateSubnetId`). */
 export interface DatanetPod {
-  datanetId: number
+  datanetId: string
   podId: string
   name: string
   text: string

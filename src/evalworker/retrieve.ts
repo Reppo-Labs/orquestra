@@ -57,13 +57,14 @@ export function topKRelevant(query: string, pods: DatanetPod[], k = 5): RankedPo
 export interface GatheredEvidence {
   /** Top-k lexical candidates across every accessible datanet. */
   candidates: RankedPod[]
-  /** Every datanet id actually READ — what a denial reports as `datanetsSearched`. */
-  datanetsSearched: number[]
+  /** Every datanet (subnet cuid) actually READ — what a denial reports as
+   *  `datanetsSearched`. */
+  datanetsSearched: string[]
   /** Datanet ids this node could NOT read on this job. Non-empty means the
    *  read was PARTIAL: the caller has not seen everything, so an empty
    *  candidate set is not evidence of absence and must never become a
    *  denial (worker.ts serve()). */
-  unreadable: number[]
+  unreadable: string[]
 }
 
 /** Read every accessible datanet (bounded) and rank the union against the
@@ -89,8 +90,8 @@ export async function gatherEvidence(
   // DatanetError (401/403) keeps its status for the worker's auth backoff.
   const settled = await Promise.allSettled(datanets.map((d) => source.fetchPods(d.datanetId, podsPerDatanet)))
   const pods: DatanetPod[] = []
-  const datanetsSearched: number[] = []
-  const unreadable: number[] = []
+  const datanetsSearched: string[] = []
+  const unreadable: string[] = []
   for (const [i, r] of settled.entries()) {
     const id = datanets[i]!.datanetId
     if (r.status === 'fulfilled') {

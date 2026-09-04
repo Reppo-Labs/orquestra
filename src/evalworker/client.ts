@@ -123,7 +123,7 @@ export class GatewayClient {
   /** Report that this node looked and found no evidence for the job (the
    *  relevance gate left at least one criterion unsupported). Not a fault:
    *  the gateway counts denials at settlement. */
-  async deny(jobId: string, reason: string, datanetsSearched: number[]): Promise<void> {
+  async deny(jobId: string, reason: string, datanetsSearched: string[]): Promise<void> {
     const body: EvalDenial = { jobId, reason, datanetsSearched }
     const res = await this.fetchImpl(
       `${this.opts.baseUrl}/v1/node/jobs/${encodeURIComponent(jobId)}:deny`,

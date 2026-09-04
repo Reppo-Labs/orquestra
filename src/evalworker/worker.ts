@@ -63,7 +63,7 @@ const excerpt = (s: string): string => {
   return flat.length > CRITERION_EXCERPT_MAX ? `${flat.slice(0, CRITERION_EXCERPT_MAX - 3)}...` : flat
 }
 
-export function buildDenyReason(unsupported: string[], criteria: string[], datanetsSearched: number[]): string {
+export function buildDenyReason(unsupported: string[], criteria: string[], datanetsSearched: string[]): string {
   const named = unsupported.map((c) => {
     const i = criteria.indexOf(c)
     return `${i >= 0 ? `#${i + 1}` : '#?'} "${excerpt(c)}"`
