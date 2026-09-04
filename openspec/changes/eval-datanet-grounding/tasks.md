@@ -38,3 +38,4 @@
 
 ## 9. Stage 2b review fixes (PR #214)
 - [x] 9.1 A `gatherEvidence` returns `unreadable`; the worker :fails (never denies) on unsupported criteria while any datanet was unreadable; the two now-false in-source invariant comments corrected
+- [x] 9.2 B design.md D1 drops the false "mirrors eval-api's `client.ts`" claim (matches the corrected `datanetClient.ts` header); D2 documents the partial-read/`unreadable` behaviour
