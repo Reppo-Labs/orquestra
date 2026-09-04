@@ -476,15 +476,17 @@ async function start(): Promise<void> {
     if (!agentId || !agentApiKey) {
       console.error('orquestra: evalwork disabled — EVAL_GATEWAY_URL is set but agent credentials are missing (REPPO_AGENT_ID/REPPO_API_KEY)')
     } else {
-      // Evidence is read with the same platform credentials, from the datanet
-      // API (binding provisional — see evalworker/datanetClient.ts). Cached 5
-      // min: datanets change slowly, leases arrive often.
+      // Evidence comes from the PUBLIC datanet API — /public/subnets and
+      // /public/pods take no credential at all (probed 2026-09-04; see
+      // evalworker/datanetClient.ts). Only the gateway calls below are
+      // authenticated. Cached 5 min: datanets change slowly, leases arrive
+      // often.
       const datanetApiUrl = process.env.EVAL_DATANET_API_URL?.trim() || platformBase()
       evalWorker = startEvalWorker({
         client: new GatewayClient({ baseUrl: evalGatewayUrl, agentId, apiKey: agentApiKey }),
         budget: new EvalBudget(`${DATA_DIR}/evalwork-budget.json`, () => wiring.config.evalWork.maxJudgeCallsPerDay),
         getConfig: () => wiring.config.evalWork,
-        datanet: cachedSource(makeDatanetClient({ baseUrl: datanetApiUrl, apiKey: agentApiKey }), 5 * 60_000),
+        datanet: cachedSource(makeDatanetClient({ baseUrl: datanetApiUrl }), 5 * 60_000),
         gate: (req, candidates) => gateEvidence(liveDefaultModel(), req, candidates),
         judge: (req, gated) => judgeEval(liveDefaultModel(), req, gated),
         modelId: () => (liveDefaultModel() as { modelId?: string }).modelId ?? 'unknown',
@@ -494,7 +496,7 @@ async function start(): Promise<void> {
             podId: row.jobId, status: row.status, reason: row.reason,
           }),
       })
-      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (enabled=${wiring.config.evalWork.enabled})`)
+      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (public, no credential) (enabled=${wiring.config.evalWork.enabled})`)
     }
   } else if (config.evalWork.enabled) {
     // The config toggle without the env var is a fully inert combination —
