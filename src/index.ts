@@ -13,7 +13,7 @@ import { supportsNonReppoGrants } from './reppo/capabilities.js'
 import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName, syncAgentName, markAgentAsOrquestra } from './reppo/agent.js'
 import { isRobinhood, reppoNetwork } from './reppo/network.js'
-import { updateAgentOnPlatform } from './reppo/platformApi.js'
+import { platformBase, updateAgentOnPlatform } from './reppo/platformApi.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler, type SchedulerHandle } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -43,6 +43,9 @@ import { backfillMintReppoSpent, backfillClaimDatanets, appendActivity } from '.
 import { GatewayClient } from './evalworker/client.js'
 import { EvalBudget } from './evalworker/budget.js'
 import { judgeEval } from './evalworker/judge.js'
+import { gateEvidence } from './evalworker/gate.js'
+import { cachedSource } from './evalworker/datanet.js'
+import { makeDatanetClient } from './evalworker/datanetClient.js'
 import { startEvalWorker, type EvalWorkerHandle } from './evalworker/worker.js'
 import { defaultReppoReader } from './reppo/reader.js'
 import { makeCachedReader, type CacheTag } from './reppo/readCache.js'
@@ -473,11 +476,19 @@ async function start(): Promise<void> {
     if (!agentId || !agentApiKey) {
       console.error('orquestra: evalwork disabled — EVAL_GATEWAY_URL is set but agent credentials are missing (REPPO_AGENT_ID/REPPO_API_KEY)')
     } else {
+      // Evidence comes from the PUBLIC datanet API — /public/subnets and
+      // /public/pods take no credential at all (probed 2026-09-04; see
+      // evalworker/datanetClient.ts). Only the gateway calls below are
+      // authenticated. Cached 5 min: datanets change slowly, leases arrive
+      // often.
+      const datanetApiUrl = process.env.EVAL_DATANET_API_URL?.trim() || platformBase()
       evalWorker = startEvalWorker({
         client: new GatewayClient({ baseUrl: evalGatewayUrl, agentId, apiKey: agentApiKey }),
         budget: new EvalBudget(`${DATA_DIR}/evalwork-budget.json`, () => wiring.config.evalWork.maxJudgeCallsPerDay),
         getConfig: () => wiring.config.evalWork,
-        judge: (req, evidence) => judgeEval(liveDefaultModel(), req, evidence),
+        datanet: cachedSource(makeDatanetClient({ baseUrl: datanetApiUrl }), 5 * 60_000),
+        gate: (req, candidates) => gateEvidence(liveDefaultModel(), req, candidates),
+        judge: (req, gated) => judgeEval(liveDefaultModel(), req, gated),
         modelId: () => (liveDefaultModel() as { modelId?: string }).modelId ?? 'unknown',
         record: (row) =>
           appendActivity(DATA_DIR, {
@@ -485,7 +496,7 @@ async function start(): Promise<void> {
             podId: row.jobId, status: row.status, reason: row.reason,
           }),
       })
-      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl} (enabled=${wiring.config.evalWork.enabled})`)
+      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (public, no credential) (enabled=${wiring.config.evalWork.enabled})`)
     }
   } else if (config.evalWork.enabled) {
     // The config toggle without the env var is a fully inert combination —

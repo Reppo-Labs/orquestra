@@ -89,6 +89,9 @@ export const StrategyConfigSchema = z
       .object({
         enabled: z.boolean().default(false),
         maxConcurrent: z.number().int().min(1).max(10).default(2),
+        // Judged JOBS per day, not model calls: each job may cost up to two
+        // (relevance gate + judge, both on the node's default model). A job
+        // that fails before the gate releases its reservation.
         maxJudgeCallsPerDay: z.number().int().min(1).max(10_000).default(200),
       })
       .default({ enabled: false, maxConcurrent: 2, maxJudgeCallsPerDay: 200 }),

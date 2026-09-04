@@ -9,9 +9,6 @@
     ],
     "context": "Autonomous vault agent, $50k AUM."
   },
-  "datanetId": 27,
-  "corpusUrl": "https://example-bucket.s3.us-west-2.amazonaws.com/corpus/27/20260826T110000Z.json?X-Amz-Signature=abc",
-  "corpusVersion": "20260826T110000Z",
   "epoch": 128,
   "answerCutoff": "2026-08-27T01:00:00.000Z"
 }
