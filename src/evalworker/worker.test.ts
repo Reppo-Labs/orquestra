@@ -380,6 +380,99 @@ describe('startEvalWorker (datanet grounding)', () => {
     expect(client.completed).toHaveLength(0)
   })
 
+  // FINDING A: a criterion with no support is only a DENIAL (terminal,
+  // gateway-side) when this node actually read everything there is to read.
+  // With one datanet unreadable, the supporting pod may sit in exactly the one
+  // we could not open — the honest answer is :fail, which another node or a
+  // later lease can still serve.
+  it('unsupported criteria + an unreadable datanet → :fail naming it, never :deny', async () => {
+    const client = makeClient([job('j-partial'), null])
+    const rows: { status: string; reason: string }[] = []
+    const b = budget(5)
+    const w = startEvalWorker(
+      deps({
+        client,
+        budget: b,
+        record: (r) => rows.push(r),
+        // 27 answers with nothing relevant (zero candidates → no model call),
+        // 31 is down and may hold the only supporting pod.
+        datanet: {
+          listAccessible: async () => [
+            { datanetId: 27, name: 'perps' },
+            { datanetId: 31, name: 'flaky' },
+          ],
+          fetchPods: async (datanetId: number) => {
+            if (datanetId === 31) throw new DatanetError(503, 'datanet api HTTP 503')
+            return [{ datanetId: 27, podId: '1', name: 'cats', text: 'felines purring' }]
+          },
+        },
+        gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'] }),
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.denied).toHaveLength(0)
+    expect(client.completed).toHaveLength(0)
+    expect((client.failed[0] as { reason: string }).reason).toContain('31')
+    expect((client.failed[0] as { reason: string }).reason).toContain('not denying')
+    expect(rows[0]).toMatchObject({ status: 'error' })
+    // zero candidates → the gate short-circuits without a model call, so the
+    // reservation goes back (same `spent` discipline as every pre-LLM failure)
+    expect(b.usedToday()).toBe(0)
+  })
+
+  it('unsupported criteria + an unreadable datanet AFTER a real gate call keeps the reservation spent', async () => {
+    const client = makeClient([job('j-partial-spent'), null])
+    const b = budget(5)
+    const w = startEvalWorker(
+      deps({
+        client,
+        budget: b,
+        datanet: {
+          listAccessible: async () => [
+            { datanetId: 27, name: 'perps' },
+            { datanetId: 31, name: 'flaky' },
+          ],
+          fetchPods: async (datanetId: number) => {
+            if (datanetId === 31) throw new DatanetError(503, 'datanet api HTTP 503')
+            return [pod]
+          },
+        },
+        gate: async (): Promise<GateResult> => ({ supported: new Map(), unsupported: ['is good'] }),
+      }),
+    )
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.denied).toHaveLength(0)
+    expect(b.usedToday()).toBe(1)
+  })
+
+  it('an unreadable datanet does not block a supported job: judge + :complete proceed on what was read', async () => {
+    const client = makeClient([job('j-partial-ok'), null])
+    const w = startEvalWorker(
+      deps({
+        client,
+        datanet: {
+          listAccessible: async () => [
+            { datanetId: 27, name: 'perps' },
+            { datanetId: 31, name: 'flaky' },
+          ],
+          fetchPods: async (datanetId: number) => {
+            if (datanetId === 31) throw new DatanetError(503, 'datanet api HTTP 503')
+            return [pod]
+          },
+        },
+      }),
+    )
+    await waitFor(() => client.completed.length === 1)
+    await w.stop()
+    expect(client.failed).toHaveLength(0)
+    expect(client.denied).toHaveLength(0)
+    expect((client.completed[0] as { verdicts: { citations: unknown[] }[] }).verdicts[0]?.citations).toEqual([
+      { datanetId: 27, podId: '482' },
+    ])
+  })
+
   it('datanet source error → :fail (retryable), never deny or judge', async () => {
     const client = makeClient([job('j-src'), null])
     const judge = vi.fn()

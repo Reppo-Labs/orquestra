@@ -57,13 +57,21 @@ export function topKRelevant(query: string, pods: DatanetPod[], k = 5): RankedPo
 export interface GatheredEvidence {
   /** Top-k lexical candidates across every accessible datanet. */
   candidates: RankedPod[]
-  /** Every datanet id read — what a denial reports as `datanetsSearched`. */
+  /** Every datanet id actually READ — what a denial reports as `datanetsSearched`. */
   datanetsSearched: number[]
+  /** Datanet ids this node could NOT read on this job. Non-empty means the
+   *  read was PARTIAL: the caller has not seen everything, so an empty
+   *  candidate set is not evidence of absence and must never become a
+   *  denial (worker.ts serve()). */
+  unreadable: number[]
 }
 
 /** Read every accessible datanet (bounded) and rank the union against the
- *  request. Any source failure propagates: the worker must :fail, never deny,
- *  when it could not look. */
+ *  request. Reads are per-datanet, so a partial outage still yields evidence —
+ *  but it is reported as such: `unreadable` names what could not be read, and
+ *  the worker must :fail rather than deny while it is non-empty. A TOTAL
+ *  failure (nothing readable at all) throws: the worker must :fail, never
+ *  deny, when it could not look. */
 export async function gatherEvidence(
   source: DatanetSource,
   request: EvalJobRequest,
@@ -74,12 +82,15 @@ export async function gatherEvidence(
   // Per-datanet, not all-or-nothing: one flaky datanet must not cost the job
   // the evidence the others answered with. `datanetsSearched` therefore lists
   // only the datanets actually READ — a denial may never claim to have looked
-  // somewhere it could not reach. Only a total failure is an outage (→ :fail),
-  // and it rethrows the FIRST reason so a typed DatanetError (401/403) keeps
-  // its status for the worker's auth backoff.
+  // somewhere it could not reach — and `unreadable` lists the rest, so the
+  // worker can tell "read everything, found nothing" (a denial) from "could
+  // not read the datanet that may hold it" (a :fail). Only a total failure is
+  // an outage that throws, and it rethrows the FIRST reason so a typed
+  // DatanetError (401/403) keeps its status for the worker's auth backoff.
   const settled = await Promise.allSettled(datanets.map((d) => source.fetchPods(d.datanetId, podsPerDatanet)))
   const pods: DatanetPod[] = []
   const datanetsSearched: number[] = []
+  const unreadable: number[] = []
   for (const [i, r] of settled.entries()) {
     const id = datanets[i]!.datanetId
     if (r.status === 'fulfilled') {
@@ -87,11 +98,12 @@ export async function gatherEvidence(
       datanetsSearched.push(id)
       continue
     }
+    unreadable.push(id)
     console.error(`orquestra: evalwork: datanet ${id} unreadable (${r.reason instanceof Error ? r.reason.message : String(r.reason)}) — excluded from this job's evidence`)
   }
   if (datanets.length > 0 && datanetsSearched.length === 0) {
     throw (settled[0] as PromiseRejectedResult).reason
   }
   const query = `${request.payload} ${request.criteria.join(' ')}`
-  return { candidates: topKRelevant(query, pods, k), datanetsSearched }
+  return { candidates: topKRelevant(query, pods, k), datanetsSearched, unreadable }
 }

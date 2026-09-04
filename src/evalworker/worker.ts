@@ -185,8 +185,10 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         return
       }
       reserved = true
-      // A source failure throws out of here → :fail (retryable). It must never
-      // read as "no evidence": an outage is not a denial.
+      // A TOTAL source failure throws out of here → :fail (retryable). It must
+      // never read as "no evidence": an outage is not a denial. A PARTIAL
+      // failure does not throw — it comes back as `evidence.unreadable`, and
+      // is handled at the deny decision below for the same reason.
       const evidence = await gatherEvidence(deps.datanet, job.request)
       if (evidence.datanetsSearched.length === 0) {
         // The gateway refuses a denial naming no datanet (400 INVALID_DENIAL),
@@ -198,6 +200,18 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       if (evidence.candidates.length > 0) spent = true
       const gate = await deps.gate(job.request, evidence.candidates)
       if (gate.unsupported.length > 0) {
+        // "Nothing supports this criterion" is only a DENIAL — terminal,
+        // gateway-side — when this node read every datanet it can reach. With
+        // one unreadable, the supporting pod may sit in exactly the datanet we
+        // could not open, so absence of evidence is not evidence of absence.
+        // :fail is retryable: another node, or this one on a later lease, can
+        // still serve the job. Throwing puts it on the shared failure path,
+        // which releases the reservation iff no model call happened.
+        if (evidence.unreadable.length > 0) {
+          throw new Error(
+            `could not read datanet(s) ${evidence.unreadable.join(', ')} — evidence may exist there; not denying`,
+          )
+        }
         releaseIfUnspent()
         const reason = buildDenyReason(gate.unsupported, job.request.criteria, evidence.datanetsSearched)
         await submitWithRetry(job.jobId, 'deny', () => deps.client.deny(job.jobId, reason, evidence.datanetsSearched))

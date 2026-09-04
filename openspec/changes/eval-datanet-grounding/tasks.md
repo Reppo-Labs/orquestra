@@ -35,3 +35,6 @@
 - [x] 8.6 L5 gate dedups on the normalized pod key
 - [x] 8.7 L6 probes carry per-probe gated evidence so the live run works again
 - [x] 8.8 L1/L4/L7/I1/I2 doc + comment corrections; `GateResult.datanetsSearched` (dead) removed
+
+## 9. Stage 2b review fixes (PR #214)
+- [x] 9.1 A `gatherEvidence` returns `unreadable`; the worker :fails (never denies) on unsupported criteria while any datanet was unreadable; the two now-false in-source invariant comments corrected

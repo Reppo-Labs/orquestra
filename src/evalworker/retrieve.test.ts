@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gatherEvidence, topKRelevant } from './retrieve.js'
-import { InMemoryDatanetSource } from './datanet.js'
+import { DatanetError, InMemoryDatanetSource } from './datanet.js'
 import type { DatanetPod, EvalJobRequest } from './types.js'
 
 const pod = (podId: string, name: string, text: string, datanetId = 1): DatanetPod => ({ datanetId, podId, name, text })
@@ -57,6 +57,7 @@ describe('gatherEvidence', () => {
     ])
     const out = await gatherEvidence(source, request, 12)
     expect(out.datanetsSearched).toEqual([27, 31])
+    expect(out.unreadable).toEqual([])
     expect(out.candidates.map((c) => `${c.pod.datanetId}/${c.pod.podId}`).sort()).toEqual(['27/482', '31/9'])
   })
 
@@ -93,6 +94,9 @@ describe('gatherEvidence', () => {
     expect(out.candidates.map((c) => c.pod.podId)).toEqual(['482'])
     // a denial must never claim a datanet this node never read
     expect(out.datanetsSearched).toEqual([27])
+    // the caller must be able to tell "read everything, found nothing" from
+    // "could not read the datanet that may hold the evidence"
+    expect(out.unreadable).toEqual([31])
     expect(errs.mock.calls.filter((c) => String(c[0]).includes('31'))).toHaveLength(1)
   })
 
@@ -111,5 +115,20 @@ describe('gatherEvidence', () => {
       fetchPods: async () => [],
     }
     await expect(gatherEvidence(listFails, request, 12)).rejects.toThrow('HTTP 401')
+  })
+
+  it('every datanet failing rethrows the FIRST reason with its DatanetError status intact (auth backoff)', async () => {
+    const errs = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const source = {
+      listAccessible: async () => [
+        { datanetId: 27, name: 'a' },
+        { datanetId: 31, name: 'b' },
+      ],
+      fetchPods: async (datanetId: number) => {
+        throw new DatanetError(datanetId === 27 ? 401 : 503, `datanet api HTTP ${datanetId === 27 ? 401 : 503}`)
+      },
+    }
+    await expect(gatherEvidence(source, request, 12)).rejects.toMatchObject({ name: 'DatanetError', status: 401 })
+    expect(errs).toHaveBeenCalled()
   })
 })
