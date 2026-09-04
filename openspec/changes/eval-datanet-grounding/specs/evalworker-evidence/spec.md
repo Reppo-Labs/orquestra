@@ -26,16 +26,26 @@ Before judging, the node SHALL run a bounded relevance check that selects, per c
 - **WHEN** a candidate pod shares vocabulary with a criterion but does not address it
 - **THEN** the gate excludes it and it cannot be cited for that criterion
 
-### Requirement: Deny instead of fabricate
-If the gate finds no supporting pod for at least one criterion, the node SHALL deny the job via the gateway's deny route with a reason naming the unsupported criteria and the list of datanet ids searched, and SHALL NOT submit any verdict.
+### Requirement: Deny instead of fabricate, but only on a complete read
+If the gate finds no supporting pod for at least one criterion AND the node read every datanet it can access, the node SHALL deny the job via the gateway's deny route with a reason naming the unsupported criteria and the list of datanet ids read, and SHALL NOT submit any verdict. The reason SHALL fit the gateway's 2000-character limit.
 
-#### Scenario: No evidence for one criterion
-- **WHEN** criteria are [c1, c2] and the gate finds pods for c1 only
+A denial is terminal gateway-side, so the node SHALL NOT deny while any accessible datanet was unreadable on this job: absence of evidence is only evidence of absence once everything reachable has been read. In that case the node SHALL report `:fail` (retryable) naming the unreadable datanets.
+
+#### Scenario: No evidence for one criterion, every datanet read
+- **WHEN** criteria are [c1, c2], every accessible datanet was read, and the gate finds pods for c1 only
 - **THEN** the node calls deny with a reason naming c2 and `datanetsSearched` = the datanets it read, and never calls complete
 
-#### Scenario: No candidates at all
-- **WHEN** retrieval returns zero pods across all accessible datanets
+#### Scenario: No candidates at all, every datanet read
+- **WHEN** retrieval returns zero pods across all accessible datanets and none failed
 - **THEN** the node denies without spending a judge call
+
+#### Scenario: A datanet was unreadable and nothing supports a criterion
+- **WHEN** one accessible datanet could not be read and the gate finds no support for some criterion
+- **THEN** the node reports `:fail` naming the unreadable datanet ids and never calls deny
+
+#### Scenario: A datanet was unreadable but the evidence found still supports every criterion
+- **WHEN** one accessible datanet could not be read and the gate supports every criterion from what was read
+- **THEN** the node judges and completes normally, and `datanetsSearched` names only the datanets actually read
 
 ### Requirement: Every verdict cites gated evidence
 The judge SHALL cite at least one gated pod per criterion, as `{ datanetId, podId }`. Citations outside the gated set SHALL be stripped; a verdict left with zero citations after stripping is a judge error: the node SHALL report `:fail` (retryable) and SHALL NOT submit the answer.
