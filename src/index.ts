@@ -13,7 +13,7 @@ import { supportsNonReppoGrants } from './reppo/capabilities.js'
 import { queryBalanceJson, queryWalletAddress } from './reppo/queryBalance.js'
 import { ensureAgentId, registerAgentJson, readAgentStore, writeAgentStore, agentDisplayName, syncAgentName, markAgentAsOrquestra } from './reppo/agent.js'
 import { isRobinhood, reppoNetwork } from './reppo/network.js'
-import { platformBase, updateAgentOnPlatform } from './reppo/platformApi.js'
+import { updateAgentOnPlatform } from './reppo/platformApi.js'
 import { terminalPrompter } from './runtime/prompter.js'
 import { startScheduler, type SchedulerHandle } from './runtime/scheduler.js'
 import { BudgetLedger } from './wallet/ledger.js'
@@ -45,7 +45,7 @@ import { EvalBudget } from './evalworker/budget.js'
 import { judgeEval } from './evalworker/judge.js'
 import { gateEvidence } from './evalworker/gate.js'
 import { cachedSource } from './evalworker/datanet.js'
-import { makeDatanetClient } from './evalworker/datanetClient.js'
+import { datanetApiBase, makeDatanetClient } from './evalworker/datanetClient.js'
 import { startEvalWorker, type EvalWorkerHandle } from './evalworker/worker.js'
 import { defaultReppoReader } from './reppo/reader.js'
 import { makeCachedReader, type CacheTag } from './reppo/readCache.js'
@@ -479,9 +479,11 @@ async function start(): Promise<void> {
       // Evidence comes from the PUBLIC datanet API — /public/subnets and
       // /public/pods take no credential at all (probed 2026-09-04; see
       // evalworker/datanetClient.ts). Only the gateway calls below are
-      // authenticated. Cached 5 min: datanets change slowly, leases arrive
-      // often.
-      const datanetApiUrl = process.env.EVAL_DATANET_API_URL?.trim() || platformBase()
+      // authenticated. The base is reppo.ai on EVERY network, never
+      // platformBase(): the gateway verifies citations there and nowhere
+      // else (see datanetApiBase). Cached 5 min: datanets change slowly,
+      // leases arrive often.
+      const datanetApiUrl = datanetApiBase()
       evalWorker = startEvalWorker({
         client: new GatewayClient({ baseUrl: evalGatewayUrl, agentId, apiKey: agentApiKey }),
         budget: new EvalBudget(`${DATA_DIR}/evalwork-budget.json`, () => wiring.config.evalWork.maxJudgeCallsPerDay),
@@ -496,7 +498,7 @@ async function start(): Promise<void> {
             podId: row.jobId, status: row.status, reason: row.reason,
           }),
       })
-      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (public, no credential) (enabled=${wiring.config.evalWork.enabled})`)
+      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (public, no credential; the gateway's catalog, same on every network) (enabled=${wiring.config.evalWork.enabled})`)
     }
   } else if (config.evalWork.enabled) {
     // The config toggle without the env var is a fully inert combination —

@@ -53,6 +53,22 @@ import { z } from 'zod'
 import { DatanetError, type AccessibleDatanet, type DatanetSource } from './datanet.js'
 import type { DatanetPod } from './types.js'
 
+/** The canonical catalog: what eval-api resolves citations against. */
+export const CANONICAL_DATANET_API_URL = 'https://reppo.ai/api/v1'
+
+/** Where this node reads evidence. Deliberately NOT `platformBase()`:
+ *  on a robinhood-network node that is https://robinhood.reppo.ai/api/v1,
+ *  which lists subnets that do not exist on reppo.ai (probed 2026-09-07:
+ *  Genesis Playground cms127jgm… — its pods answer 404 on reppo.ai), while
+ *  the gateway verifies every citation against reppo.ai ONLY. A node citing
+ *  such a pod earns 422 UNRESOLVABLE_CITATION, a discard recorded against
+ *  it, and a cache flush. Evidence must be read from the SAME catalog the
+ *  gateway verifies against, on every network. `EVAL_DATANET_API_URL`
+ *  overrides (staging etc.) — set it to the gateway's catalog, not yours. */
+export function datanetApiBase(env: NodeJS.ProcessEnv = process.env): string {
+  return env.EVAL_DATANET_API_URL?.trim() || CANONICAL_DATANET_API_URL
+}
+
 export interface DatanetClientOpts {
   baseUrl: string
   fetchImpl?: typeof fetch

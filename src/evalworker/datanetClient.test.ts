@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { makeDatanetClient } from './datanetClient.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { datanetApiBase, makeDatanetClient } from './datanetClient.js'
 import { DatanetError } from './datanet.js'
 import { gatherEvidence } from './retrieve.js'
 
@@ -123,5 +123,30 @@ describe('makeDatanetClient', () => {
     })
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
     await expect(c.fetchPods(DN_A)).rejects.toThrow('ECONNRESET')
+  })
+})
+
+describe('datanetApiBase', () => {
+  const saved = { net: process.env.REPPO_NETWORK, url: process.env.EVAL_DATANET_API_URL }
+  afterEach(() => {
+    if (saved.net === undefined) delete process.env.REPPO_NETWORK
+    else process.env.REPPO_NETWORK = saved.net
+    if (saved.url === undefined) delete process.env.EVAL_DATANET_API_URL
+    else process.env.EVAL_DATANET_API_URL = saved.url
+  })
+
+  it('is reppo.ai on a robinhood-network node too — the catalog the gateway verifies citations against, not platformBase()', () => {
+    process.env.REPPO_NETWORK = 'robinhood'
+    delete process.env.EVAL_DATANET_API_URL
+    // robinhood.reppo.ai lists a subnet (Genesis Playground) whose pods 404 on
+    // reppo.ai, where eval-api resolves citations: citing it earns an
+    // UNRESOLVABLE_CITATION discard against this node.
+    expect(datanetApiBase()).toBe('https://reppo.ai/api/v1')
+  })
+
+  it('honours the EVAL_DATANET_API_URL override, trimmed', () => {
+    process.env.REPPO_NETWORK = 'robinhood'
+    process.env.EVAL_DATANET_API_URL = ' https://staging.example/api/v1 '
+    expect(datanetApiBase()).toBe('https://staging.example/api/v1')
   })
 })
