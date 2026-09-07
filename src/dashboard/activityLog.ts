@@ -41,7 +41,7 @@ export interface ActivityEntry {
   /** REPPO fee paid for this mint (reconciled actual, or MINT_REPPO_FALLBACK when unknown).
    *  Only present on kind='mint' + status='executed'. Used for lifetime PnL. */
   reppoSpent?: number
-  status: 'executed' | 'refused-budget' | 'error' | 'skipped'
+  status: 'executed' | 'refused-budget' | 'error' | 'skipped' | 'denied'
   txHash?: string
   gasEth?: number
   detail?: string

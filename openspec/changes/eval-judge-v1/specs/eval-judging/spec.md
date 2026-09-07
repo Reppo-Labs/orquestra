@@ -1,5 +1,7 @@
 # eval-judging (delta)
 
+> **SUPERSEDED (2026-09-03)** by `openspec/changes/eval-datanet-grounding` — no pod is minted, nodes ground in datanets they can read or deny; see eval-api PR #15.
+
 ## Purpose
 
 The verdict itself: independent judging by orquestra nodes (each with
@@ -50,6 +52,8 @@ verdict; 2 or more is the expected healthy state.
 - **THEN** its job belongs to the next epoch and remains open for that epoch's full judging window
 
 ### Requirement: Evidence retrieval precedes judgment
+
+> **SUPERSEDED (2026-09-03)** by `openspec/changes/eval-datanet-grounding` — no pod is minted, nodes ground in datanets they can read or deny; see eval-api PR #15. `evidenceBasis: "model-judgment"`, the corpus snapshot and `corpusVersion` are all retired: a node with no supporting pod DENIES the job instead of judging.
 
 Each judging node SHALL retrieve the top-k most relevant pods from the v1
 datanet's corpus and judge with them as evidence context. When relevant pods

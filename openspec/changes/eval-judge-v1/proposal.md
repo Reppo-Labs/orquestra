@@ -1,5 +1,7 @@
 # Proposal: eval-judge-v1
 
+> **SUPERSEDED (2026-09-03)** by `openspec/changes/eval-datanet-grounding` — no pod is minted, nodes ground in datanets they can read or deny; see eval-api PR #15.
+
 ## Why
 
 Reppo has decided to ship an evals-as-a-service API: agents submit their output to be scored by judges grounded in Reppo datanets. **v1 is free** and **evals are served by orquestra nodes** (each node runs its own LLM judge; a job settles with at least 1 node answering, target 2+).

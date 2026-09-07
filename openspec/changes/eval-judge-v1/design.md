@@ -1,5 +1,7 @@
 # Design: eval-judge-v1
 
+> **SUPERSEDED (2026-09-03)** by `openspec/changes/eval-datanet-grounding` — no pod is minted, nodes ground in datanets they can read or deny; see eval-api PR #15.
+
 ## Context
 
 See `proposal.md` for motivation. Governing docs:

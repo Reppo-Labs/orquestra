@@ -51,4 +51,35 @@ describe('EvalBudget', () => {
     expect(b.usedToday()).toBe(0)
     expect(b.reserve()).toBe(true)
   })
+  it('release() gives back a reservation the caller never spent (round-trip)', () => {
+    const f = file()
+    const b = new EvalBudget(f, () => 2)
+    expect(b.reserve()).toBe(true)
+    expect(b.usedToday()).toBe(1)
+    b.release()
+    expect(b.usedToday()).toBe(0)
+    // persisted, not just in memory
+    expect(new EvalBudget(f, () => 2).usedToday()).toBe(0)
+    expect(b.reserve()).toBe(true)
+    expect(b.reserve()).toBe(true)
+    expect(b.reserve()).toBe(false)
+  })
+
+  it('a double release floors at 0 (never manufactures budget)', () => {
+    const b = new EvalBudget(file(), () => 2)
+    b.reserve()
+    b.release()
+    b.release()
+    b.release()
+    expect(b.usedToday()).toBe(0)
+  })
+
+  it('release survives a corrupt file the same way reserve does', () => {
+    const f = file()
+    writeFileSync(f, 'not json{{')
+    const b = new EvalBudget(f, () => 2)
+    expect(b.reserve()).toBe(true)
+    b.release()
+    expect(b.usedToday()).toBe(0)
+  })
 })
