@@ -86,7 +86,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
   // Set by serve() when the public DATANET api is refused (a proxy/WAF, or a
   // wrong EVAL_DATANET_API_URL) or rate-limited. serve() still swallows the error itself (nothing escapes it); the loop
   // owns the sleep, so the backoff applies to leasing, where it belongs.
-  let datanetAuthBackoff = false
+  let datanetBackoff = false
   let stopped = false
   let wake: (() => void) | undefined
 
@@ -243,7 +243,13 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       // (PR #205): actionable message + 10x backoff.
       if (e instanceof DatanetError && (e.status === 401 || e.status === 403)) {
         log(`public datanet endpoint refused (HTTP ${e.status}) — a proxy/WAF in front of it, or a wrong EVAL_DATANET_API_URL (job ${job.jobId}): ${msg}`)
-        datanetAuthBackoff = true
+        datanetBackoff = true
+      } else if (e instanceof DatanetError && e.status === 429) {
+        // Rate-limited: retrying every idleMs re-fans one read per subnet per
+        // in-flight job, and the cache evicts failed reads immediately, so
+        // nothing else dampens it. Same 10x sleep as a refusal.
+        log(`datanet api rate-limited (HTTP 429) — backing off ${idleMs * 10}ms before the next lease (job ${job.jobId}): ${msg}`)
+        datanetBackoff = true
       } else {
         log(`job ${job.jobId} failed: ${e instanceof Error ? (e.stack ?? msg) : msg}`)
       }
@@ -268,8 +274,8 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
   const loop = (async () => {
     while (!stopped) {
       try {
-        if (datanetAuthBackoff) {
-          datanetAuthBackoff = false
+        if (datanetBackoff) {
+          datanetBackoff = false
           await sleep(idleMs * 10)
           continue
         }

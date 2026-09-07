@@ -86,8 +86,11 @@ const podsEnvelope = z.object({
     pods: z.array(
       z.object({
         id: z.string().min(1),
-        name: z.string().default(''),
-        description: z.string().default(''),
+        // nullish, not default(): zod's default covers undefined only, and a
+        // single null row must not make the WHOLE subnet unreadable (every
+        // job would then :fail on it forever). id/privateSubnetId stay strict.
+        name: z.string().nullish().transform((v) => v ?? ''),
+        description: z.string().nullish().transform((v) => v ?? ''),
         privateSubnetId: z.string().min(1),
       }),
     ),

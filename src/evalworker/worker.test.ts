@@ -780,6 +780,35 @@ describe('startEvalWorker (datanet auth rejection)', () => {
     expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(2)
   })
 
+  it('a 403 gets the same named cause and 10x backoff as a 401', async () => {
+    const client = makeClient([])
+    ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(async () => job(`j${Math.random()}`))
+    const logs: string[] = []
+    const w = startEvalWorker(
+      deps({ client, datanet: authSource(403), idleMs: 50, getConfig: () => ({ enabled: true, maxConcurrent: 1 }), log: (m) => logs.push(m) }),
+    )
+    await waitFor(() => client.failed.length >= 1)
+    await new Promise((r) => setTimeout(r, 200))
+    await w.stop()
+    expect(logs.some((l) => /public datanet endpoint refused \(HTTP 403\)/.test(l) && /proxy\/WAF/.test(l))).toBe(true)
+    expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(2)
+  })
+
+  it('a 429 is rate-limiting, not a per-job failure: named in the log and the same 10x backoff (not re-fanned every idleMs)', async () => {
+    const client = makeClient([])
+    ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(async () => job(`j${Math.random()}`))
+    const logs: string[] = []
+    const w = startEvalWorker(
+      deps({ client, datanet: authSource(429), idleMs: 50, getConfig: () => ({ enabled: true, maxConcurrent: 1 }), log: (m) => logs.push(m) }),
+    )
+    await waitFor(() => client.failed.length >= 1)
+    await new Promise((r) => setTimeout(r, 200))
+    await w.stop()
+    expect(logs.some((l) => /datanet api rate-limited \(HTTP 429\)/.test(l))).toBe(true)
+    expect(logs.some((l) => /refused|proxy\/WAF/.test(l))).toBe(false)
+    expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(2)
+  })
+
   it('a non-auth datanet failure keeps the normal cadence (no 10x backoff)', async () => {
     const client = makeClient([])
     ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(async () => job(`j${Math.random()}`))

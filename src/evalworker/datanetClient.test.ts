@@ -97,6 +97,18 @@ describe('makeDatanetClient', () => {
     await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl: wrapped.fetchImpl }).fetchPods(DN_A)).rejects.toThrow(/public\/pods/)
   })
 
+  it('a null name/description on ONE row reads as empty text — it must not make the whole subnet unreadable', async () => {
+    // zod's .default() covers undefined only; a single null row used to throw
+    // for the entire subnet, and every job then :fail-ed forever on it.
+    const { fetchImpl } = capture(() =>
+      json({ data: { pods: [podRow({ id: 'a' }), podRow({ id: 'b', description: null }), podRow({ id: 'c', name: null })] } }),
+    )
+    const pods = await makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)
+    expect(pods.map((p) => p.podId)).toEqual(['a', 'b', 'c'])
+    expect(pods[1]).toMatchObject({ name: 'backtest', text: '' })
+    expect(pods[2]).toMatchObject({ name: '', text: 'expectancy' })
+  })
+
   it('throws when a pod row is missing privateSubnetId (we cannot say which datanet it belongs to)', async () => {
     const { fetchImpl } = capture(() => json({ data: { pods: [{ id: 'p', name: 'n', description: 'd' }] } }))
     await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)).rejects.toThrow(/public\/pods/)
