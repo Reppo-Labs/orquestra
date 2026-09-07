@@ -65,13 +65,13 @@ describe('gatherEvidence', () => {
     expect(out.candidates.map((c) => `${c.pod.datanetId}/${c.pod.podId}`).sort()).toEqual([`${DN_A}/482`, `${DN_B}/9`].sort())
   })
 
-  it('bounds the result to k and the per-datanet read to podsPerDatanet', async () => {
-    const fetchPods = vi.fn(async (datanetId: string, limit: number) =>
-      Array.from({ length: limit }, (_, i) => pod(`p${i}`, 'ETH perp', 'ETH perp funding stop', datanetId)),
+  it('bounds the result to k — the read itself is the whole datanet (no per-datanet cap)', async () => {
+    const fetchPods = vi.fn(async (datanetId: string) =>
+      Array.from({ length: 50 }, (_, i) => pod(`p${i}`, 'ETH perp', 'ETH perp funding stop', datanetId)),
     )
     const source = { listAccessible: async () => [{ datanetId: DN_A, name: 'a' }], fetchPods }
-    const out = await gatherEvidence(source, request, 3, 50)
-    expect(fetchPods).toHaveBeenCalledWith(DN_A, 50)
+    const out = await gatherEvidence(source, request, 3)
+    expect(fetchPods).toHaveBeenCalledWith(DN_A)
     expect(out.candidates).toHaveLength(3)
   })
 

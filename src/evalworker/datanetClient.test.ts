@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeDatanetClient } from './datanetClient.js'
 import { DatanetError } from './datanet.js'
+import { gatherEvidence } from './retrieve.js'
 
 // Envelopes and field names below mirror the live API probed 2026-09-04; the
 // non-hermetic guard that they still hold is datanetClient.live.test.ts.
@@ -52,7 +53,7 @@ describe('makeDatanetClient', () => {
       json({ data: { pods: [podRow(), podRow({ id: 'cmsmcxx8u0000jr04cbdl20p4', name: 'wicks', description: 'stop hunts' })] } }),
     )
     const c = makeDatanetClient({ baseUrl: 'https://reppo.ai/api/v1', fetchImpl })
-    expect(await c.fetchPods(DN_A, 200)).toEqual([
+    expect(await c.fetchPods(DN_A)).toEqual([
       { datanetId: DN_A, podId: 'cmth6huiz0000l704x8lt4te2', name: 'backtest', text: 'expectancy' },
       { datanetId: DN_A, podId: 'cmsmcxx8u0000jr04cbdl20p4', name: 'wicks', text: 'stop hunts' },
     ])
@@ -62,13 +63,24 @@ describe('makeDatanetClient', () => {
   it("tags a pod with its OWN row's privateSubnetId, never the requested id or its tokenId", async () => {
     const { fetchImpl } = capture(() => json({ data: { pods: [podRow({ privateSubnetId: DN_B, tokenId: '77' })] } }))
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
-    expect((await c.fetchPods(DN_A, 5))[0]?.datanetId).toBe(DN_B)
+    expect((await c.fetchPods(DN_A))[0]?.datanetId).toBe(DN_B)
   })
 
-  it('applies the limit CLIENT-side, because the server ignores it', async () => {
-    const { calls, fetchImpl } = capture(() => json({ data: { pods: [podRow({ id: 'a' }), podRow({ id: 'b' }), podRow({ id: 'c' })] } }))
+  it('never truncates before ranking: a matching pod at row 1500 of a 1719-row subnet reaches the candidates', async () => {
+    // The server returns the whole subnet in createdAt-ish order (not
+    // relevance order) and ignores `limit`; ArAIstotle is 1719 rows. A
+    // client-side slice here made every pod past the cut unreachable and the
+    // node DENIED (terminal) jobs whose only evidence sat there.
+    const rows = Array.from({ length: 1719 }, (_, i) =>
+      podRow({ id: `row${i}`, name: i === 1500 ? 'liquidation cascade wick' : 'unrelated', description: i === 1500 ? 'stop hunt liquidation cascade' : 'lorem ipsum' }),
+    )
+    const { calls, fetchImpl } = capture((url) =>
+      url.endsWith('/public/subnets') ? json({ data: { subnets: [{ id: DN_A, subnetName: 'araistotle' }] } }) : json({ data: { pods: rows } }),
+    )
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
-    expect((await c.fetchPods(DN_A, 2)).map((p) => p.podId)).toEqual(['a', 'b'])
+    expect(await c.fetchPods(DN_A)).toHaveLength(1719)
+    const out = await gatherEvidence(c, { type: 'answer', payload: 'liquidation cascade after a stop hunt wick', criteria: ['is grounded'] })
+    expect(out.candidates.map((r) => r.pod.podId)).toContain('row1500')
     // No `limit` (nor `page`, nor `filters[currentEpoch]`) is sent: the server
     // ignores the first two and the third does not filter by its argument.
     expect(calls[0]?.url).not.toMatch(/limit|page|currentEpoch/)
@@ -80,21 +92,21 @@ describe('makeDatanetClient', () => {
     // `data` holding the array directly is the exact mistake that passed the
     // gateway's mocked suite — it must NOT parse here.
     const flat = capture(() => json({ data: [podRow()] }))
-    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl: flat.fetchImpl }).fetchPods(DN_A, 1)).rejects.toThrow(/public\/pods/)
+    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl: flat.fetchImpl }).fetchPods(DN_A)).rejects.toThrow(/public\/pods/)
     const wrapped = capture(() => json({ pods: [podRow()] }))
-    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl: wrapped.fetchImpl }).fetchPods(DN_A, 1)).rejects.toThrow(/public\/pods/)
+    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl: wrapped.fetchImpl }).fetchPods(DN_A)).rejects.toThrow(/public\/pods/)
   })
 
   it('throws when a pod row is missing privateSubnetId (we cannot say which datanet it belongs to)', async () => {
     const { fetchImpl } = capture(() => json({ data: { pods: [{ id: 'p', name: 'n', description: 'd' }] } }))
-    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A, 1)).rejects.toThrow(/public\/pods/)
+    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)).rejects.toThrow(/public\/pods/)
   })
 
   it('throws on any non-2xx (a failure is never "no evidence")', async () => {
     const { fetchImpl } = capture(() => new Response('forbidden', { status: 403 }))
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
     await expect(c.listAccessible()).rejects.toThrow(/HTTP 403/)
-    await expect(c.fetchPods(DN_A, 1)).rejects.toThrow(/HTTP 403/)
+    await expect(c.fetchPods(DN_A)).rejects.toThrow(/HTTP 403/)
   })
 
   it('throws a typed DatanetError carrying the status (401/403 keep the credential backoff wired)', async () => {
@@ -102,7 +114,7 @@ describe('makeDatanetClient', () => {
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
     await expect(c.listAccessible()).rejects.toBeInstanceOf(DatanetError)
     await expect(c.listAccessible()).rejects.toMatchObject({ status: 401 })
-    await expect(c.fetchPods(DN_A, 1)).rejects.toMatchObject({ status: 401 })
+    await expect(c.fetchPods(DN_A)).rejects.toMatchObject({ status: 401 })
   })
 
   it('propagates network errors', async () => {
@@ -110,6 +122,6 @@ describe('makeDatanetClient', () => {
       throw new Error('ECONNRESET')
     })
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
-    await expect(c.fetchPods(DN_A, 1)).rejects.toThrow('ECONNRESET')
+    await expect(c.fetchPods(DN_A)).rejects.toThrow('ECONNRESET')
   })
 })

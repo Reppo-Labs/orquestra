@@ -29,10 +29,10 @@ describe('datanet API (live)', () => {
     for (const n of nets) expect(typeof n.datanetId).toBe('string')
   }, 60_000)
 
-  it.skipIf(!LIVE)('fetchPods() honours the client-side limit and tags every pod with its own datanet', async () => {
-    const pods = await client().fetchPods(SHERWOOD, 5)
-    expect(pods.length).toBeGreaterThan(0)
-    expect(pods.length).toBeLessThanOrEqual(5)
+  it.skipIf(!LIVE)('fetchPods() returns the whole subnet (never a prefix) and tags every pod with its own datanet', async () => {
+    const pods = await client().fetchPods(SHERWOOD)
+    // Sherwood held 31 rows when probed; a client-side cap would show here.
+    expect(pods.length).toBeGreaterThan(5)
     for (const p of pods) {
       expect(p.datanetId).toBe(SHERWOOD)
       expect(p.podId).not.toBe('')
@@ -43,6 +43,6 @@ describe('datanet API (live)', () => {
   }, 60_000)
 
   it.skipIf(!LIVE)('a subnet cuid that does not exist yields an empty list (probed: 200 with no rows, not a 404)', async () => {
-    await expect(client().fetchPods(NO_SUCH, 5)).resolves.toEqual([])
+    await expect(client().fetchPods(NO_SUCH)).resolves.toEqual([])
   }, 60_000)
 })

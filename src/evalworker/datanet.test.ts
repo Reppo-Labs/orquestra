@@ -20,13 +20,13 @@ describe('InMemoryDatanetSource', () => {
       { datanetId: DN_A, name: 'perps' },
       { datanetId: DN_B, name: 'sql' },
     ])
-    expect((await src.fetchPods(DN_B, 10)).map((p) => `${p.datanetId}/${p.podId}`)).toEqual([`${DN_B}/9`])
+    expect((await src.fetchPods(DN_B)).map((p) => `${p.datanetId}/${p.podId}`)).toEqual([`${DN_B}/9`])
   })
 
-  it('honours the limit and throws for a datanet it does not hold (unknown ≠ empty)', async () => {
+  it('returns the WHOLE datanet and throws for one it does not hold (unknown ≠ empty)', async () => {
     const src = new InMemoryDatanetSource([{ datanetId: DN_A, name: 'perps', pods: [pod(DN_A, '1'), pod(DN_A, '2'), pod(DN_A, '3')] }])
-    expect(await src.fetchPods(DN_A, 2)).toHaveLength(2)
-    await expect(src.fetchPods(DN_UNKNOWN, 2)).rejects.toThrow(DN_UNKNOWN)
+    expect(await src.fetchPods(DN_A)).toHaveLength(3)
+    await expect(src.fetchPods(DN_UNKNOWN)).rejects.toThrow(DN_UNKNOWN)
   })
 })
 
@@ -43,13 +43,13 @@ describe('cachedSource', () => {
     const src = cachedSource(inner, 5_000, () => now)
     await src.listAccessible()
     await src.listAccessible()
-    await src.fetchPods(DN_A, 200)
-    await src.fetchPods(DN_A, 200)
+    await src.fetchPods(DN_A)
+    await src.fetchPods(DN_A)
     expect(inner.list).toHaveBeenCalledTimes(1)
     expect(inner.fetch).toHaveBeenCalledTimes(1)
     now += 5_001
     await src.listAccessible()
-    await src.fetchPods(DN_A, 200)
+    await src.fetchPods(DN_A)
     expect(inner.list).toHaveBeenCalledTimes(2)
     expect(inner.fetch).toHaveBeenCalledTimes(2)
   })
@@ -57,18 +57,10 @@ describe('cachedSource', () => {
   it('caches per datanet id, not globally', async () => {
     const inner = fake()
     const src = cachedSource(inner, 5_000, () => 0)
-    await src.fetchPods(DN_A, 200)
-    await src.fetchPods(DN_B, 200)
+    await src.fetchPods(DN_A)
+    await src.fetchPods(DN_B)
     expect(inner.fetch).toHaveBeenCalledTimes(2)
     expect(inner.fetch.mock.calls.map((c) => c[0])).toEqual([DN_A, DN_B])
-  })
-
-  it('a larger limit than the cached read bypasses the cache (never returns a truncated set as complete)', async () => {
-    const inner = fake()
-    const src = cachedSource(inner, 5_000, () => 0)
-    await src.fetchPods(DN_A, 10)
-    await src.fetchPods(DN_A, 200)
-    expect(inner.fetch).toHaveBeenCalledTimes(2)
   })
 
   it('does not cache failures — the next call retries the source', async () => {
@@ -77,9 +69,9 @@ describe('cachedSource', () => {
     inner.fetch.mockRejectedValueOnce(new Error('HTTP 503'))
     const src = cachedSource(inner, 5_000, () => 0)
     await expect(src.listAccessible()).rejects.toThrow('HTTP 503')
-    await expect(src.fetchPods(DN_A, 1)).rejects.toThrow('HTTP 503')
+    await expect(src.fetchPods(DN_A)).rejects.toThrow('HTTP 503')
     expect(await src.listAccessible()).toEqual([{ datanetId: DN_A, name: 'perps' }])
-    expect(await src.fetchPods(DN_A, 1)).toHaveLength(1)
+    expect(await src.fetchPods(DN_A)).toHaveLength(1)
     expect(inner.list).toHaveBeenCalledTimes(2)
     expect(inner.fetch).toHaveBeenCalledTimes(2)
   })
@@ -87,7 +79,7 @@ describe('cachedSource', () => {
   it('concurrent callers share one in-flight read', async () => {
     const inner = fake()
     const src = cachedSource(inner, 5_000, () => 0)
-    await Promise.all([src.listAccessible(), src.listAccessible(), src.fetchPods(DN_A, 5), src.fetchPods(DN_A, 5)])
+    await Promise.all([src.listAccessible(), src.listAccessible(), src.fetchPods(DN_A), src.fetchPods(DN_A)])
     expect(inner.list).toHaveBeenCalledTimes(1)
     expect(inner.fetch).toHaveBeenCalledTimes(1)
   })
@@ -97,11 +89,11 @@ describe('cachedSource.invalidate', () => {
   it('drops cached pods so the next read hits the source again (a deleted pod must not be cited twice)', async () => {
     const fetchPods = vi.fn(async () => [{ datanetId: DN_A, podId: 'p', name: 'n', text: 't' }])
     const src = cachedSource({ listAccessible: async () => [{ datanetId: DN_A, name: 'a' }], fetchPods }, 60_000)
-    await src.fetchPods(DN_A, 10)
-    await src.fetchPods(DN_A, 10)
+    await src.fetchPods(DN_A)
+    await src.fetchPods(DN_A)
     expect(fetchPods).toHaveBeenCalledTimes(1)
     src.invalidate?.()
-    await src.fetchPods(DN_A, 10)
+    await src.fetchPods(DN_A)
     expect(fetchPods).toHaveBeenCalledTimes(2)
   })
 })

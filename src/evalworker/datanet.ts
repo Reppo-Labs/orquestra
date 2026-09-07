@@ -35,8 +35,10 @@ export interface AccessibleDatanet {
 export interface DatanetSource {
   /** Every datanet this node's credentials can read. */
   listAccessible(): Promise<AccessibleDatanet[]>
-  /** Up to `limit` pods of one datanet, each tagged with its datanetId. */
-  fetchPods(datanetId: string, limit: number): Promise<DatanetPod[]>
+  /** EVERY pod of one datanet, each tagged with its datanetId. Never a
+   *  prefix: the source's order is not relevance order, so any truncation
+   *  here hides evidence from the ranker (retrieve.ts is the only bound). */
+  fetchPods(datanetId: string): Promise<DatanetPod[]>
   /** Drop any cached pods (a caching source only). Called when the gateway
    *  rejects a citation as unresolvable: the pod was deleted after we cached
    *  it, and without this every job in the TTL window cites it again and earns
@@ -57,24 +59,23 @@ export class InMemoryDatanetSource implements DatanetSource {
     return this.datanets.map(({ datanetId, name }) => ({ datanetId, name }))
   }
 
-  async fetchPods(datanetId: string, limit: number): Promise<DatanetPod[]> {
+  async fetchPods(datanetId: string): Promise<DatanetPod[]> {
     const d = this.datanets.find((x) => x.datanetId === datanetId)
     if (!d) throw new Error(`datanet ${datanetId} is not accessible to this source`)
-    return d.pods.slice(0, limit)
+    return d.pods
   }
 }
 
 interface Entry<T> {
   value: Promise<T>
   expiresAt: number
-  /** For pod reads: the limit the cached read was made with. A later call
-   *  asking for MORE must bypass — a truncated set would otherwise read as
-   *  the whole datanet for the cache's lifetime. */
-  limit: number
 }
 
 /** Datanets change slowly (minutes, not per job); one job leases arrive far
  *  more often. Cache listAccessible and each datanet's pods for `ttlMs`.
+ *  Each pod entry holds the FULL subnet list (ArAIstotle is ~1.7k rows,
+ *  ~5 MB of JSON) — the read is never truncated (see DatanetSource), so the
+ *  cache is what keeps that from being re-fetched per lease.
  *  Failures are never cached: the rejected promise is evicted immediately so
  *  the next job retries the source. Concurrent callers share one in-flight
  *  read (the entry holds the promise, not the value). */
@@ -82,30 +83,30 @@ export function cachedSource(source: DatanetSource, ttlMs: number, now: () => nu
   let list: Entry<AccessibleDatanet[]> | undefined
   const pods = new Map<string, Entry<DatanetPod[]>>()
 
-  const fresh = <T>(e: Entry<T> | undefined, limit: number): e is Entry<T> => !!e && e.expiresAt > now() && e.limit >= limit
+  const fresh = <T>(e: Entry<T> | undefined): e is Entry<T> => !!e && e.expiresAt > now()
 
   return {
     listAccessible() {
-      if (fresh(list, 0)) return list.value
+      if (fresh(list)) return list.value
       const value = source.listAccessible().catch((err: unknown) => {
         list = undefined
         throw err
       })
-      list = { value, expiresAt: now() + ttlMs, limit: 0 }
+      list = { value, expiresAt: now() + ttlMs }
       return value
     },
     invalidate() {
       // Pods only: the accessible-datanet list is not what went stale.
       pods.clear()
     },
-    fetchPods(datanetId, limit) {
+    fetchPods(datanetId) {
       const hit = pods.get(datanetId)
-      if (fresh(hit, limit)) return hit.value.then((v) => v.slice(0, limit))
-      const value = source.fetchPods(datanetId, limit).catch((err: unknown) => {
+      if (fresh(hit)) return hit.value
+      const value = source.fetchPods(datanetId).catch((err: unknown) => {
         pods.delete(datanetId)
         throw err
       })
-      pods.set(datanetId, { value, expiresAt: now() + ttlMs, limit })
+      pods.set(datanetId, { value, expiresAt: now() + ttlMs })
       return value
     },
   }

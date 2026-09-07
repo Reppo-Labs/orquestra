@@ -27,8 +27,13 @@
 // /public/subnets — so 66 pods have no numeric id at all.
 //
 // `page` and `limit` are IGNORED by the server (limit=3 returned 3343 rows);
-// `filters[subnet]` is what actually bounds a read, and the per-datanet cap is
-// therefore applied CLIENT-SIDE below. `filters[currentEpoch]` does not filter
+// `filters[subnet]` is what actually bounds a read, and the WHOLE subnet is
+// returned to the caller: the server's row order is createdAt-ish, not
+// relevance, so a client-side slice here (once `podsPerDatanet` = 200) made
+// every pod past the cut unreachable — the #1 candidate at row 1500 of the
+// 1719-row ArAIstotle subnet never reached the ranker and the node DENIED.
+// Ranking (retrieve.ts topKRelevant) is the only bound on the candidate set;
+// a subnet-sized read is ~5 MB at today's largest. `filters[currentEpoch]` does not filter
 // by the value passed (142 and 143 both returned the same currently-valid pod)
 // so it is deliberately not sent: the node wants the datanet's pods, not just
 // this epoch's.
@@ -102,14 +107,12 @@ export function makeDatanetClient(opts: DatanetClientOpts): DatanetSource {
       if (!parsed.success) throw new Error('datanet api: /public/subnets did not answer { data: { subnets: [...] } } — see datanetClient.ts')
       return parsed.data.data.subnets.map((s) => ({ datanetId: s.id, name: s.subnetName }))
     },
-    async fetchPods(datanetId: string, limit: number): Promise<DatanetPod[]> {
+    async fetchPods(datanetId: string): Promise<DatanetPod[]> {
       const path = `/public/pods?filters[subnet]=${encodeURIComponent(datanetId)}`
       const parsed = podsEnvelope.safeParse(await getJson(path))
       if (!parsed.success) throw new Error(`datanet api: /public/pods did not answer { data: { pods: [...] } } for datanet ${datanetId} — see datanetClient.ts`)
-      // The server ignores `limit`, so the per-datanet read cap is enforced here.
-      return parsed.data.data.pods
-        .slice(0, limit)
-        .map((p) => ({ datanetId: p.privateSubnetId, podId: p.id, name: p.name, text: p.description }))
+      // Never truncate here: the ranker must see every row (header comment).
+      return parsed.data.data.pods.map((p) => ({ datanetId: p.privateSubnetId, podId: p.id, name: p.name, text: p.description }))
     },
   }
 }

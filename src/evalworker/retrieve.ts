@@ -11,10 +11,11 @@
 import type { DatanetSource } from './datanet.js'
 import type { DatanetPod, EvalJobRequest } from './types.js'
 
-/** Top-k candidates handed to the relevance gate (design D2). */
+/** Top-k candidates handed to the relevance gate (design D2). This is the
+ *  ONLY bound: datanets are fetched whole and ranked whole. A per-datanet
+ *  read cap (once 200) was removed because the API's row order is not
+ *  relevance order, so it hid evidence past the cut from the ranker. */
 export const DEFAULT_TOP_K = 12
-/** Per-datanet read cap — datanets are fetched whole, bounded (design D2). */
-export const DEFAULT_PODS_PER_DATANET = 200
 
 const tokenize = (s: string): string[] =>
   s
@@ -67,7 +68,7 @@ export interface GatheredEvidence {
   unreadable: string[]
 }
 
-/** Read every accessible datanet (bounded) and rank the union against the
+/** Read every accessible datanet (whole) and rank the union against the
  *  request. Reads are per-datanet, so a partial outage still yields evidence —
  *  but it is reported as such: `unreadable` names what could not be read, and
  *  the worker must :fail rather than deny while it is non-empty. A TOTAL
@@ -77,7 +78,6 @@ export async function gatherEvidence(
   source: DatanetSource,
   request: EvalJobRequest,
   k = DEFAULT_TOP_K,
-  podsPerDatanet = DEFAULT_PODS_PER_DATANET,
 ): Promise<GatheredEvidence> {
   const datanets = await source.listAccessible()
   // Per-datanet, not all-or-nothing: one flaky datanet must not cost the job
@@ -88,7 +88,7 @@ export async function gatherEvidence(
   // not read the datanet that may hold it" (a :fail). Only a total failure is
   // an outage that throws, and it rethrows the FIRST reason so a typed
   // DatanetError (401/403) keeps its status for the worker's auth backoff.
-  const settled = await Promise.allSettled(datanets.map((d) => source.fetchPods(d.datanetId, podsPerDatanet)))
+  const settled = await Promise.allSettled(datanets.map((d) => source.fetchPods(d.datanetId)))
   const pods: DatanetPod[] = []
   const datanetsSearched: string[] = []
   const unreadable: string[] = []
