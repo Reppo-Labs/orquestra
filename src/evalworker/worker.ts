@@ -32,7 +32,7 @@ export interface EvalWorkerDeps {
   budget: EvalBudget
   /** Read live config each iteration — hot-reload for free. */
   getConfig: () => EvalWorkConfig
-  /** Where this node reads evidence: the datanets its credentials can access. */
+  /** Where this node reads evidence: the public datanet catalog (no credential). */
   datanet: DatanetSource
   /** The relevance gate (one LLM call); injected so the loop is testable without an LLM. */
   gate: (request: EvalJobRequest, candidates: RankedPod[]) => Promise<GateResult>
@@ -83,8 +83,8 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
   const idleMs = deps.idleMs ?? 30_000
   const completeRetries = deps.completeRetries ?? 2
   const inFlight = new Set<Promise<void>>()
-  // Set by serve() when the DATANET api rejects this node's credentials.
-  // serve() still swallows the error itself (nothing escapes it); the loop
+  // Set by serve() when the public DATANET api is refused (a proxy/WAF, or a
+  // wrong EVAL_DATANET_API_URL) or rate-limited. serve() still swallows the error itself (nothing escapes it); the loop
   // owns the sleep, so the backoff applies to leasing, where it belongs.
   let datanetAuthBackoff = false
   let stopped = false
@@ -193,7 +193,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       if (evidence.datanetsSearched.length === 0) {
         // The gateway refuses a denial naming no datanet (400 INVALID_DENIAL),
         // and a node that can read nothing is misconfigured, not uninformed.
-        throw new Error('no accessible datanets — this node cannot ground any verdict (check the node credentials / EVAL_DATANET_API_URL)')
+        throw new Error('no accessible datanets — this node cannot ground any verdict (the datanet endpoint is public — check EVAL_DATANET_API_URL, or a proxy/WAF in front of it)')
       }
       // Zero candidates short-circuit the gate with no model call (gate.ts), so
       // that denial is free — anything else means the gate is about to spend.
@@ -235,11 +235,14 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
     } catch (e) {
       releaseIfUnspent()
       const msg = e instanceof Error ? e.message : String(e)
-      // A datanet 401/403 is this node's configuration, not this job's luck:
-      // retrying every idleMs is noise. Same treatment the lease path gives a
-      // gateway 401 (PR #205) — actionable message + 10x backoff.
+      // A datanet 401/403 is this node's environment, not this job's luck:
+      // the endpoint is public and the client sends NO credential, so a
+      // refusal can only be a proxy/WAF in front of it or a wrong
+      // EVAL_DATANET_API_URL (REPPO_API_KEY is gateway-only). Retrying every
+      // idleMs is noise — same treatment the lease path gives a gateway 401
+      // (PR #205): actionable message + 10x backoff.
       if (e instanceof DatanetError && (e.status === 401 || e.status === 403)) {
-        log(`datanet api rejected this node's credentials (HTTP ${e.status}) — check REPPO_API_KEY/EVAL_DATANET_API_URL (job ${job.jobId}): ${msg}`)
+        log(`public datanet endpoint refused (HTTP ${e.status}) — a proxy/WAF in front of it, or a wrong EVAL_DATANET_API_URL (job ${job.jobId}): ${msg}`)
         datanetAuthBackoff = true
       } else {
         log(`job ${job.jobId} failed: ${e instanceof Error ? (e.stack ?? msg) : msg}`)

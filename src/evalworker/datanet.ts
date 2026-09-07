@@ -12,10 +12,11 @@ import type { DatanetPod } from './types.js'
 export type { DatanetPod } from './types.js'
 
 /** A datanet API rejection carrying its HTTP status. The status is what lets
- *  the worker tell "this node's credentials are wrong" (401/403 — a node
- *  misconfiguration that needs a named cause and a long backoff, exactly like
- *  the gateway lease path) from a transient outage. Lives here, on the port,
- *  not in the HTTP binding: the worker must never import the binding. */
+ *  the worker tell "this node's environment refuses a public endpoint"
+ *  (401/403 — a proxy/WAF or a wrong EVAL_DATANET_API_URL, since no credential
+ *  is sent; a condition that needs a named cause and a long backoff, exactly
+ *  like the gateway lease path) from a transient outage. Lives here, on the
+ *  port, not in the HTTP binding: the worker must never import the binding. */
 export class DatanetError extends Error {
   constructor(
     readonly status: number,
@@ -33,7 +34,7 @@ export interface AccessibleDatanet {
 }
 
 export interface DatanetSource {
-  /** Every datanet this node's credentials can read. */
+  /** Every datanet in the public catalog this node reads. */
   listAccessible(): Promise<AccessibleDatanet[]>
   /** EVERY pod of one datanet, each tagged with its datanetId. Never a
    *  prefix: the source's order is not relevance order, so any truncation

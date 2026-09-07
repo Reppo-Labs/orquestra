@@ -109,7 +109,7 @@ describe('makeDatanetClient', () => {
     await expect(c.fetchPods(DN_A)).rejects.toThrow(/HTTP 403/)
   })
 
-  it('throws a typed DatanetError carrying the status (401/403 keep the credential backoff wired)', async () => {
+  it('throws a typed DatanetError carrying the status (401/403 keep the proxy/WAF backoff wired)', async () => {
     const { fetchImpl } = capture(() => new Response('bad key', { status: 401 }))
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
     await expect(c.listAccessible()).rejects.toBeInstanceOf(DatanetError)

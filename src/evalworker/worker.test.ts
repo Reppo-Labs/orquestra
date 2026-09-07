@@ -762,7 +762,7 @@ describe('startEvalWorker (datanet auth rejection)', () => {
     fetchPods: async () => [],
   })
 
-  it('names the credentials in the log and backs off 10x instead of re-leasing at full cadence', async () => {
+  it('names the actionable cause (proxy/WAF or wrong EVAL_DATANET_API_URL, never a credential) and backs off 10x instead of re-leasing at full cadence', async () => {
     const client = makeClient([])
     ;(client.lease as ReturnType<typeof vi.fn>).mockImplementation(async () => job(`j${Math.random()}`))
     const logs: string[] = []
@@ -772,7 +772,10 @@ describe('startEvalWorker (datanet auth rejection)', () => {
     await waitFor(() => client.failed.length >= 1)
     await new Promise((r) => setTimeout(r, 200))
     await w.stop()
-    expect(logs.some((l) => /credentials \(HTTP 401\)/.test(l) && /REPPO_API_KEY/.test(l))).toBe(true)
+    // The endpoint is public and the client sends no credential: there is no
+    // key to check, so the message must not name REPPO_API_KEY (gateway-only).
+    expect(logs.some((l) => /public datanet endpoint refused \(HTTP 401\)/.test(l) && /proxy\/WAF/.test(l) && /EVAL_DATANET_API_URL/.test(l))).toBe(true)
+    expect(logs.some((l) => /REPPO_API_KEY|credential/.test(l))).toBe(false)
     // 200ms at idleMs=50 would be several leases without the 10x (500ms) backoff
     expect((client.lease as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(2)
   })
@@ -786,7 +789,7 @@ describe('startEvalWorker (datanet auth rejection)', () => {
     )
     await waitFor(() => client.failed.length >= 3)
     await w.stop()
-    expect(logs.some((l) => /credentials/.test(l))).toBe(false)
+    expect(logs.some((l) => /refused|proxy\/WAF/.test(l))).toBe(false)
   })
 })
 

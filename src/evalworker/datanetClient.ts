@@ -44,8 +44,8 @@
 // drift must be a loud failure, not a silent empty read. Every non-2xx and
 // every unparseable or drifted body THROWS (→ the worker :fail-s the job,
 // retryable) — never "no evidence". Non-2xx throws a typed DatanetError
-// carrying the status, so the worker's 401/403 credential backoff still fires
-// if a proxy or WAF ever refuses these public endpoints.
+// carrying the status, so the worker's 401/403 backoff still fires if a proxy
+// or WAF ever refuses these public endpoints (there is no credential to fix).
 // Adjust paths/field names here only; nothing outside this file knows the wire
 // shape. The live guard is datanetClient.live.test.ts (DATANET_LIVE=1) — a
 // mock can never falsify a vendor's shape.

@@ -15,7 +15,7 @@ export interface EvalJobRequest {
 
 /** What the lease endpoint hands this node (epoch model, eval-judge-v1 2b).
  *  The gateway leases NO evidence: the node grounds the verdict in pods it
- *  retrieves itself from the datanets its own credentials can read. */
+ *  retrieves itself from the public datanet catalog (no credential). */
 export interface LeasedJob {
   jobId: string
   request: EvalJobRequest
