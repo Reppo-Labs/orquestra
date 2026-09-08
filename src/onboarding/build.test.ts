@@ -64,3 +64,19 @@ describe('buildStrategyConfig defaultModel', () => {
     expect(buildStrategyConfig(answers()).defaultModel).toBeUndefined()
   })
 })
+
+describe('buildStrategyConfig mintFeeRatioMax', () => {
+  // The fee gate has no safe default — a threshold set too low silently stops minting.
+  // So onboarding carries the operator's opt-in through verbatim, and leaves the key
+  // ABSENT when they never opted in (absent = gate off, which is the safety property).
+  it('maps mintFeeRatioMax into budget when the operator chose one', () => {
+    const cfg = buildStrategyConfig({ ...answers(), mintFeeRatioMax: 0.035 })
+    expect(cfg.budget.mintFeeRatioMax).toBe(0.035)
+  })
+
+  it('omits mintFeeRatioMax when the operator declined (gate stays off)', () => {
+    const cfg = buildStrategyConfig(answers())
+    expect(cfg.budget.mintFeeRatioMax).toBeUndefined()
+    expect('mintFeeRatioMax' in cfg.budget).toBe(false)
+  })
+})

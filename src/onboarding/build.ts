@@ -20,6 +20,8 @@ export function buildStrategyConfig(a: OnboardingAnswers): StrategyConfig {
     budget: {
       voteRateMaxPerCycle: a.voteRateMaxPerCycle,
       mintReppoMax: a.mintReppoMax,
+      // Omitted when the operator did not opt in, so the fee gate stays entirely off.
+      ...(a.mintFeeRatioMax !== undefined ? { mintFeeRatioMax: a.mintFeeRatioMax } : {}),
     },
     claimEmissions: true,
     datanets,
