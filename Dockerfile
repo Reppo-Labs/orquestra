@@ -73,6 +73,9 @@ COPY --from=build /app/dist ./dist
 # to the container's bridge IP — there the host mapping is the exposure boundary, and
 # the override lives next to it. Do NOT bake 0.0.0.0 into the image default.
 ENV ORQUESTRA_DATA_DIR=/data DASHBOARD_PORT=7070
+# Public gateway base; GatewayClient appends /v1. Operators may override it.
+# Evaluation work still requires evalWork.enabled in the strategy config.
+ENV EVAL_GATEWAY_URL=https://jjpt8cr7qh.execute-api.us-west-2.amazonaws.com
 # Ownership BEFORE `VOLUME /data` — filesystem changes after a VOLUME declaration
 # are discarded by some builders (kaniko, buildah, legacy). With this ordering the
 # anonymous-volume case is owned by `node`; a host bind-mount may still need a
