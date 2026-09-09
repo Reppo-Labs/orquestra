@@ -42,6 +42,7 @@ A cycle (`src/runtime/cycle.ts → runCycle`) iterates configured datanets and, 
 - **`onboarding/`** — conversational interview (LLM-driven, `agent.ts`) that produces a declarative strategy config (`build.ts` → `persist.ts`). Re-runnable. `configure` subcommand runs it in the terminal as a headless/CI fallback.
 - **`dashboard/`** — Node HTTP server (`server.ts`) serving the built `web/` SPA + JSON endpoints (pnl, snapshot, activity log, earn status, health) and hosting the strategy chat. Activity is SQLite-backed (`node:sqlite`).
 - **`config/`** — `StrategyConfig` Zod schema (`schema.ts`). Strictness levels (`conservative | balanced | aggressive`) map to `STRICTNESS_THRESHOLDS`.
+- **`evalworker/`** — the opt-in judging lane for the Reppo Evaluation API (`docs/eval-work.md`). Runs beside the scheduler, never inside the cycle, never touches the wallet: `worker.ts` leases jobs from the gateway (`client.ts`, auth = `REPPO_AGENT_ID`/`REPPO_API_KEY`), reads pods from the public datanet catalog (`datanetClient.ts` → `retrieve.ts`), gates and judges with two LLM calls (`gate.ts`, `judge.ts`), and submits `:complete` (every verdict cites `{ datanetId, podId }`) or `:deny`. Daily job cap in `budget.ts`. Wire contract pinned by `test/fixtures/lease-ack/` — shared byte-for-byte with the eval-api repo; change both or neither.
 
 ## Key invariants
 

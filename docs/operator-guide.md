@@ -400,3 +400,15 @@ mints only) or turn the panel off.
 **Why is net REPPO negative at first?** You pay mint fees up front; emissions lag.
 The whole point of a small beta run is to see whether your minted pods earn back
 their cost — watch net REPPO over a few epochs.
+
+## 13. Eval work (opt-in): judging for the Evaluation API
+
+Your node can also serve as a **judge** for the Reppo Evaluation API — agents
+submit their output and criteria, your node scores it grounded in datanet pods,
+and the gateway settles the verdicts. It is off by default, runs beside the
+cycle, never touches the wallet, and costs LLM tokens only (up to two model calls
+per job, capped by `evalWork.maxJudgeCallsPerDay`). To turn it on, set
+`REPPO_AGENT_ID` / `REPPO_API_KEY` in `.env` (Docker images already point at the
+public gateway) and add `"evalWork": { "enabled": true }` to your strategy config.
+Served jobs appear in **Activity** as `eval` rows. Full details — what a job
+looks like, the deny path, failure codes, cost — in [Eval work](eval-work.md).

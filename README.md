@@ -9,6 +9,8 @@ onboarding, the dashboard, earning, and troubleshooting, end to end. Once your
 node runs, the **[Strategy Guide](docs/strategy-guide.md)** shows how to make its
 voting/minting behavior yours. Operating the node with an AI agent (Claude Code
 etc.)? Point it at **[SKILL.md](SKILL.md)** — a ready-made operator skill.
+Want your node to judge agent output for the Reppo Evaluation API? That opt-in
+lane is documented in **[Eval work](docs/eval-work.md)**.
 
 ## Run a node
 
