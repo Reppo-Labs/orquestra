@@ -26,17 +26,18 @@
 // one on 4663), and 26 subnets have pods while only 19 appear in
 // /public/subnets — so 66 pods have no numeric id at all.
 //
-// `page` and `limit` are IGNORED by the server (limit=3 returned 3343 rows);
-// `filters[subnet]` is what actually bounds a read, and the WHOLE subnet is
-// returned to the caller: the server's row order is createdAt-ish, not
-// relevance, so a client-side slice here (once `podsPerDatanet` = 200) made
-// every pod past the cut unreachable — the #1 candidate at row 1500 of the
-// 1719-row ArAIstotle subnet never reached the ranker and the node DENIED.
-// Ranking (retrieve.ts topKRelevant) is the only bound on the candidate set;
-// a subnet-sized read is ~5 MB at today's largest. `filters[currentEpoch]` does not filter
-// by the value passed (142 and 143 both returned the same currently-valid pod)
-// so it is deliberately not sent: the node wants the datanet's pods, not just
-// this epoch's.
+// PAGINATION CHANGED UNDER US. Probed 2026-09-04: `page` and `limit` were
+// ignored and one request returned the whole subnet (limit=3 -> 3343 rows).
+// Re-probed 2026-09-10: limit=3 returns 3, an unparameterised read returns 20,
+// and `page` works (page 2 shares no ids with page 1). So the unpaged read this
+// file used to make had silently shrunk to the first 20 rows — 5.2% of the
+// 383-row TradingGym subnet — and neither the type nor the tests could see it
+// (issue #222). fetchPods now pages to exhaustion and THROWS rather than return
+// a prefix: the server's row order is createdAt-ish, not relevance, so a pod
+// past the cut is simply unreachable, and a short read must never reach the
+// ranker looking complete. `filters[currentEpoch]` does not filter by the value
+// passed (142 and 143 both returned the same currently-valid pod) so it is
+// deliberately not sent: the node wants the datanet's pods, not this epoch's.
 //
 // Envelopes are read STRICTLY — `data.subnets` and `data.pods`, with no
 // lenient fallback to a bare array or another key. A lenient reader is exactly
@@ -97,6 +98,13 @@ const podsEnvelope = z.object({
   }),
 })
 
+/** Rows per /public/pods request. 100 is the server's ceiling — asking for 500
+ *  silently returns 100, so a larger value would read as a short page. */
+export const PODS_PAGE_SIZE = 100
+/** Page bound, so one runaway datanet cannot stall a job. 10,000 pods is ~6x the
+ *  largest subnet seen (ArAIstotle, ~1.7k); hitting it throws rather than truncates. */
+export const MAX_PODS_PAGES = 100
+
 export function makeDatanetClient(opts: DatanetClientOpts): DatanetSource {
   const fetchImpl = opts.fetchImpl ?? fetch
   const timeoutMs = opts.timeoutMs ?? 30_000
@@ -127,11 +135,39 @@ export function makeDatanetClient(opts: DatanetClientOpts): DatanetSource {
       return parsed.data.data.subnets.map((s) => ({ datanetId: s.id, name: s.subnetName }))
     },
     async fetchPods(datanetId: string): Promise<DatanetPod[]> {
-      const path = `/public/pods?filters[subnet]=${encodeURIComponent(datanetId)}`
-      const parsed = podsEnvelope.safeParse(await getJson(path))
-      if (!parsed.success) throw new Error(`datanet api: /public/pods did not answer { data: { pods: [...] } } for datanet ${datanetId} — see datanetClient.ts`)
-      // Never truncate here: the ranker must see every row (header comment).
-      return parsed.data.data.pods.map((p) => ({ datanetId: p.privateSubnetId, podId: p.id, name: p.name, text: p.description }))
+      const subnet = encodeURIComponent(datanetId)
+      const out: DatanetPod[] = []
+      const seen = new Set<string>()
+      for (let page = 1; page <= MAX_PODS_PAGES; page++) {
+        const path = `/public/pods?filters[subnet]=${subnet}&limit=${PODS_PAGE_SIZE}&page=${page}`
+        const parsed = podsEnvelope.safeParse(await getJson(path))
+        if (!parsed.success) throw new Error(`datanet api: /public/pods did not answer { data: { pods: [...] } } for datanet ${datanetId} — see datanetClient.ts`)
+        const rows = parsed.data.data.pods
+        let added = 0
+        for (const p of rows) {
+          if (seen.has(p.id)) continue
+          seen.add(p.id)
+          out.push({ datanetId: p.privateSubnetId, podId: p.id, name: p.name, text: p.description })
+          added++
+        }
+        // Over the requested size means `limit` is ignored again (the pre-2026-09-10
+        // server): that response IS the whole subnet, so stop — this is complete.
+        if (rows.length > PODS_PAGE_SIZE) break
+        if (rows.length < PODS_PAGE_SIZE) return out
+        // A full page that adds nothing new means `page` is not being honoured, so
+        // the rest is unreachable. Throw: an outage, never a short read (datanet.ts).
+        if (added === 0) {
+          throw new Error(
+            `datanet api: /public/pods returned page ${page} identical to the previous page for datanet ${datanetId} — pagination is not being honoured, so this read is truncated at ${out.length} pods`,
+          )
+        }
+      }
+      if (seen.size >= PODS_PAGE_SIZE * MAX_PODS_PAGES) {
+        throw new Error(
+          `datanet api: datanet ${datanetId} exceeded the ${MAX_PODS_PAGES}-page read bound (${out.length} pods) — refusing to judge on a truncated read; raise MAX_PODS_PAGES in datanetClient.ts`,
+        )
+      }
+      return out
     },
   }
 }

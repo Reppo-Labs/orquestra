@@ -31,8 +31,15 @@ describe('datanet API (live)', () => {
 
   it.skipIf(!LIVE)('fetchPods() returns the whole subnet (never a prefix) and tags every pod with its own datanet', async () => {
     const pods = await client().fetchPods(SHERWOOD)
-    // Sherwood held 31 rows when probed; a client-side cap would show here.
-    expect(pods.length).toBeGreaterThan(5)
+    // #222: `pods.length > 5` held while the client was reading 20 of 383 rows.
+    // Compare against the SERVER's own default page instead: if that page came
+    // back full, it is a prefix and the paged read must beat it. Self-calibrating,
+    // so a shrinking subnet turns this vacuous loudly (the else branch) not silently.
+    const raw = await fetch(`${BASE}/public/pods?filters[subnet]=${SHERWOOD}`).then((r) => r.json() as Promise<{ data: { pods: unknown[] } }>)
+    const defaultPage = raw.data.pods.length
+    if (pods.length > defaultPage) expect(pods.length).toBeGreaterThan(defaultPage)
+    else expect(defaultPage, 'subnet fits in one default page — this case cannot prove paging').toBeLessThan(20)
+    for (const p of pods) expect(p.text.length).toBeGreaterThan(0)
     for (const p of pods) {
       expect(p.datanetId).toBe(SHERWOOD)
       expect(p.podId).not.toBe('')
