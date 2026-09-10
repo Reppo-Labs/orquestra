@@ -400,7 +400,7 @@ export function StrategyTab({ strategy, netNames, economics, focusDatanet, onFoc
         <Num label="vote spend horizon (hours)" value={budget.voteSpendHorizonHours} onChange={(n) => setB('voteSpendHorizonHours', n)}
           hint="Pace your epoch voting power over at most this many hours instead of the whole epoch. Vote weight DECAYS linearly within the epoch, so a short horizon (e.g. 4) front-loads weight where it resolves highest. Leave empty to spread evenly across the full epoch (default)." />
         <Num label="mint REPPO max" value={budget.mintReppoMax} onChange={(n) => n !== undefined && setB('mintReppoMax', n)}
-          hint="Max REPPO spent on mint fees per horizon window. At the cap, further mints are refused before signing. (Mint fees run ~100–200 REPPO each.)" />
+          hint="Max REPPO spent on mint fees per horizon window. At the cap, further mints are refused before signing. The node reserves each datanet's own publishing fee where the CLI reports one, and a conservative 200 where it does not." />
       </div>
 
       <div className="sec-head"><h2>Deliberation</h2><div className="rule" /></div>

@@ -16,9 +16,9 @@ export interface RubricEconomics {
   accessFeeToken?: { address: string; symbol: string; decimals: number; amount: number; amountRaw: string }
   emissionsPerEpochReppo: number
   /** Per-mint publishing fee in REPPO, from the datanet's `publishingFeeREPPO`.
-   *  0 when absent or unparseable — `num()` cannot distinguish those from a genuine
-   *  zero fee, so a 0 here NEVER blocks a mint (see the fee gate in a later task). */
-  publishingFeeReppo: number
+   *  undefined when the CLI reports it unavailable (robinhood, older CLIs) or the field
+   *  is absent; 0 means the datanet genuinely charges nothing to publish. */
+  publishingFeeReppo?: number
   upVoteVolume: number
   downVoteVolume: number
   nativeTokenSymbol: string

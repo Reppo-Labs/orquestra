@@ -13,6 +13,21 @@ const num = (v: unknown): number => {
   return Number.isFinite(n) ? n : 0
 }
 
+/** Like `num`, but keeps "no value" distinguishable from a genuine zero.
+ *  The CLI reports an absent figure as `{ unavailable: "<why>" }` and a real zero as
+ *  `{ raw: "0", formatted: "0" }`; `num` flattens both to 0. Returns undefined for the
+ *  first shape, a number for the second. */
+const numOpt = (v: unknown): number | undefined => {
+  if (v == null) return undefined
+  if (typeof v === 'object') {
+    const obj = v as Record<string, unknown>
+    if (obj['formatted'] === undefined && obj['raw'] === undefined) return undefined
+    v = obj['formatted'] ?? obj['raw']
+  }
+  const n = Number(v)
+  return Number.isFinite(n) ? n : undefined
+}
+
 /** Trim strings; return '' for anything else. */
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
@@ -71,7 +86,7 @@ export function parseDatanetRubric(raw: unknown): DatanetRubric {
       accessFeeReppo: num(m['accessFeeREPPO']),
       ...accessFeeToken(m, nativeToken, nativeSymbol),
       emissionsPerEpochReppo: num(m['emissionsPerEpochREPPO']),
-      publishingFeeReppo: num(m['publishingFeeREPPO']),
+      publishingFeeReppo: numOpt(m['publishingFeeREPPO']),
       upVoteVolume: num(m['upVoteVolume']),
       downVoteVolume: num(m['downVoteVolume']),
       nativeTokenSymbol: nativeSymbol,
