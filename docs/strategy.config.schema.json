@@ -17,11 +17,12 @@
           "properties": {
             "lockReppo": {
               "type": "number",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 10000000
             },
             "lockDurationDays": {
               "type": "integer",
-              "exclusiveMinimum": 0
+              "minimum": 0
             }
           },
           "required": [
@@ -35,25 +36,40 @@
           "properties": {
             "voteRateMaxPerCycle": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 1000
+            },
+            "voteSpendHorizonHours": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1000
+            },
+            "mintRateMaxPerCycle": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000
             },
             "mintReppoMax": {
               "type": "number",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 1000000
             },
             "voteGasEthMax": {
               "type": "number",
               "minimum": 0,
+              "maximum": 10,
               "default": 1
             },
             "mintGasEthMax": {
               "type": "number",
               "minimum": 0,
+              "maximum": 10,
               "default": 1
             },
             "claimGasEthMax": {
               "type": "number",
               "minimum": 0,
+              "maximum": 10,
               "default": 1
             }
           },
@@ -66,6 +82,33 @@
         "claimEmissions": {
           "type": "boolean",
           "default": true
+        },
+        "evalWork": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 2
+            },
+            "maxJudgeCallsPerDay": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000,
+              "default": 200
+            }
+          },
+          "additionalProperties": false,
+          "default": {
+            "enabled": false,
+            "maxConcurrent": 2,
+            "maxJudgeCallsPerDay": 200
+          }
         },
         "deliberation": {
           "type": "object",
@@ -186,6 +229,10 @@
         "notes": {
           "type": "string",
           "default": ""
+        },
+        "nodeName": {
+          "type": "string",
+          "maxLength": 64
         }
       },
       "required": [

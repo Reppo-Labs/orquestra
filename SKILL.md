@@ -12,7 +12,10 @@ description: >
 Orquestra is Reppo's self-hosted agentic swarm node. It runs a cycle on a configured
 cadence; each cycle it **votes** (curates other operators' data pods) and **mints**
 (publishes pods where it has a data adapter), bounded by operator-set budgets, signing
-with the operator's wallet. It earns $REPPO through voting and minting only.
+with the operator's wallet. It earns $REPPO through voting and minting only. An
+opt-in **eval work** lane (`evalWork` in the strategy config, `docs/eval-work.md`)
+lets the node judge agent output for the Reppo Evaluation API; it spends LLM
+tokens only, never signs, and is unpaid in v1.
 
 You (the agent) operate it on the human's behalf. Ground rules before anything else:
 
