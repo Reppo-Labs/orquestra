@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { datanetApiBase, makeDatanetClient } from './datanetClient.js'
+import { datanetApiBase, makeDatanetClient, PODS_PAGE_SIZE } from './datanetClient.js'
 import { DatanetError } from './datanet.js'
 import { gatherEvidence } from './retrieve.js'
 
@@ -30,6 +30,14 @@ const podRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
+/** Serves `rows` the way the live API does since 2026-09-10: `limit` rows from
+ *  the 1-indexed `page` in the URL. */
+const pageOf = (rows: unknown[], url: string) => {
+  const limit = Number(new URL(url).searchParams.get('limit') ?? rows.length)
+  const page = Number(new URL(url).searchParams.get('page') ?? 1)
+  return rows.slice((page - 1) * limit, page * limit)
+}
+
 describe('makeDatanetClient', () => {
   it('lists datanets from GET {base}/public/subnets, mapping id/subnetName — and sends NO credential', async () => {
     const { calls, fetchImpl } = capture(() =>
@@ -57,7 +65,7 @@ describe('makeDatanetClient', () => {
       { datanetId: DN_A, podId: 'cmth6huiz0000l704x8lt4te2', name: 'backtest', text: 'expectancy' },
       { datanetId: DN_A, podId: 'cmsmcxx8u0000jr04cbdl20p4', name: 'wicks', text: 'stop hunts' },
     ])
-    expect(calls[0]?.url).toBe(`https://reppo.ai/api/v1/public/pods?filters[subnet]=${DN_A}`)
+    expect(calls[0]?.url).toBe(`https://reppo.ai/api/v1/public/pods?filters[subnet]=${DN_A}&limit=${PODS_PAGE_SIZE}&page=1`)
   })
 
   it("tags a pod with its OWN row's privateSubnetId, never the requested id or its tokenId", async () => {
@@ -67,23 +75,60 @@ describe('makeDatanetClient', () => {
   })
 
   it('never truncates before ranking: a matching pod at row 1500 of a 1719-row subnet reaches the candidates', async () => {
-    // The server returns the whole subnet in createdAt-ish order (not
-    // relevance order) and ignores `limit`; ArAIstotle is 1719 rows. A
-    // client-side slice here made every pod past the cut unreachable and the
-    // node DENIED (terminal) jobs whose only evidence sat there.
+    // The server orders rows createdAt-ish, not by relevance, so any prefix
+    // hides evidence. 1719 rows is ArAIstotle; served here as 18 pages.
     const rows = Array.from({ length: 1719 }, (_, i) =>
       podRow({ id: `row${i}`, name: i === 1500 ? 'liquidation cascade wick' : 'unrelated', description: i === 1500 ? 'stop hunt liquidation cascade' : 'lorem ipsum' }),
     )
     const { calls, fetchImpl } = capture((url) =>
-      url.endsWith('/public/subnets') ? json({ data: { subnets: [{ id: DN_A, subnetName: 'araistotle' }] } }) : json({ data: { pods: rows } }),
+      url.endsWith('/public/subnets') ? json({ data: { subnets: [{ id: DN_A, subnetName: 'araistotle' }] } }) : json({ data: { pods: pageOf(rows, url) } }),
     )
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
     expect(await c.fetchPods(DN_A)).toHaveLength(1719)
     const out = await gatherEvidence(c, { type: 'answer', payload: 'liquidation cascade after a stop hunt wick', criteria: ['is grounded'] })
     expect(out.candidates.map((r) => r.pod.podId)).toContain('row1500')
-    // No `limit` (nor `page`, nor `filters[currentEpoch]`) is sent: the server
-    // ignores the first two and the third does not filter by its argument.
-    expect(calls[0]?.url).not.toMatch(/limit|page|currentEpoch/)
+    // Every page is requested explicitly; the unparameterised read this file
+    // used to make now returns only the server's first 20 rows (#222).
+    expect(calls[0]?.url).toContain(`limit=${PODS_PAGE_SIZE}&page=1`)
+    expect(calls.some((c2) => c2.url.includes('page=18'))).toBe(true)
+    expect(calls[0]?.url).not.toMatch(/currentEpoch/)
+  })
+
+  it('pages to exhaustion — a 383-row subnet yields 383 pods, not the server default page', async () => {
+    // The live shape that exposed #222: an unparameterised read of TradingGym
+    // returned 20 of 383 rows (5.2%), and nothing in the type could tell.
+    const rows = Array.from({ length: 383 }, (_, i) => podRow({ id: `p${i}` }))
+    const { calls, fetchImpl } = capture((url) => json({ data: { pods: pageOf(rows, url) } }))
+    const pods = await makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)
+    expect(pods).toHaveLength(383)
+    expect(new Set(pods.map((p) => p.podId)).size).toBe(383)
+    // 4 pages: 100 + 100 + 100 + 83 (the short page ends the loop).
+    expect(calls).toHaveLength(4)
+  })
+
+  it('stops on a short page without requesting another', async () => {
+    const rows = Array.from({ length: 7 }, (_, i) => podRow({ id: `p${i}` }))
+    const { calls, fetchImpl } = capture((url) => json({ data: { pods: pageOf(rows, url) } }))
+    expect(await makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)).toHaveLength(7)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('THROWS when `page` is ignored — a repeated full page is a truncated read, never a short datanet', async () => {
+    // The dangerous regression: `limit` honoured, `page` not. Every request
+    // returns the same 100 rows, so the rest is unreachable. Returning those
+    // 100 would reach the ranker looking complete and could become a denial.
+    const rows = Array.from({ length: 100 }, (_, i) => podRow({ id: `p${i}` }))
+    const { fetchImpl } = capture(() => json({ data: { pods: rows } }))
+    await expect(makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)).rejects.toThrow(/pagination is not being honoured/)
+  })
+
+  it('treats an over-sized page as the pre-pagination server and returns it whole', async () => {
+    // Forward/backward compatible: if the server reverts to ignoring `limit`,
+    // one response is the entire subnet. That is complete, not truncated.
+    const rows = Array.from({ length: 3343 }, (_, i) => podRow({ id: `p${i}` }))
+    const { calls, fetchImpl } = capture(() => json({ data: { pods: rows } }))
+    expect(await makeDatanetClient({ baseUrl: 'https://b', fetchImpl }).fetchPods(DN_A)).toHaveLength(3343)
+    expect(calls).toHaveLength(1)
   })
 
   it('reads the envelope STRICTLY — a bare array or a differently-keyed body is drift, not an empty datanet', async () => {
