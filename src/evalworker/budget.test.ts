@@ -44,6 +44,28 @@ describe('EvalBudget', () => {
     expect(b.reserve()).toBe(true)
   })
 
+  it('an unset cap never refuses but still counts usage', () => {
+    const b = new EvalBudget(file(), () => undefined)
+    for (let i = 0; i < 500; i++) expect(b.reserve()).toBe(true)
+    expect(b.hasBudget()).toBe(true)
+    expect(b.usedToday()).toBe(500)
+  })
+
+  it('setting a cap mid-day enforces against usage counted while uncapped', () => {
+    let cap: number | undefined
+    const b = new EvalBudget(file(), () => cap)
+    expect(b.reserve()).toBe(true)
+    expect(b.reserve()).toBe(true)
+    expect(b.reserve()).toBe(true)
+    cap = 2
+    expect(b.hasBudget()).toBe(false)
+    expect(b.reserve()).toBe(false)
+    expect(b.usedToday()).toBe(3)
+    cap = undefined
+    expect(b.hasBudget()).toBe(true)
+    expect(b.reserve()).toBe(true)
+  })
+
   it('self-heals a corrupt file to a fresh day', () => {
     const f = file()
     writeFileSync(f, 'not json{{')

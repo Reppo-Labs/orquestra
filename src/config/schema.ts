@@ -91,10 +91,11 @@ export const StrategyConfigSchema = z
         maxConcurrent: z.number().int().min(1).max(10).default(2),
         // Judged JOBS per day, not model calls: each job may cost up to two
         // (relevance gate + judge, both on the node's default model). A job
-        // that fails before the gate releases its reservation.
-        maxJudgeCallsPerDay: z.number().int().min(1).max(10_000).default(200),
+        // that fails before the gate releases its reservation. Unset = no cap:
+        // every job is accepted (usage is still counted).
+        maxJudgeCallsPerDay: z.number().int().min(1).max(10_000).optional(),
       })
-      .default({ enabled: false, maxConcurrent: 2, maxJudgeCallsPerDay: 200 }),
+      .default({ enabled: false, maxConcurrent: 2 }),
     // Multi-agent panel deliberation (personas + judge; see src/panel/).
     // Defaulted so configs written before this feature load unchanged.
     deliberation: z

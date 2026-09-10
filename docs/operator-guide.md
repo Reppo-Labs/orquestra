@@ -407,7 +407,7 @@ Your node can also serve as a **judge** for the Reppo Evaluation API — agents
 submit their output and criteria, your node scores it grounded in datanet pods,
 and the gateway settles the verdicts. It is off by default, runs beside the
 cycle, never touches the wallet, and costs LLM tokens only (up to two model calls
-per job, capped by `evalWork.maxJudgeCallsPerDay`). To turn it on, set
+per job; uncapped unless you set `evalWork.maxJudgeCallsPerDay`). To turn it on, set
 `REPPO_AGENT_ID` / `REPPO_API_KEY` in `.env` (Docker images already point at the
 public gateway) and add `"evalWork": { "enabled": true }` to your strategy config.
 Served jobs appear in **Activity** as `eval` rows. Full details — what a job
