@@ -26,7 +26,6 @@ const leasedJobSchema = z
       criteria: z.array(z.string()).min(1),
       context: z.string().optional(),
     }),
-    epoch: z.number().int(),
     answerCutoff: z.string(),
   })
   .strict()

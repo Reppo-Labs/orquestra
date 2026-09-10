@@ -18,13 +18,13 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 
 // Pinned in BOTH repos — eval-api pins the same bytes via
 // fixtures/lease-ack/CHECKSUMS.sha256 (`npm run fixtures:check` in its CI).
-// Copied verbatim from eval-api @ 3d97995 (branch datanet-api-binding).
+// Copied verbatim from eval-api @ 90bab1e (branch drop-lease-epoch).
 const CHECKSUMS: Record<string, string> = {
   'complete-request.json': '19e9ed86672169c1ab223e89062ee9798ad9e12042af04cf50ebc6b1848f0e9e',
   'deny-request.json': '90e8957a7e1de201cd34a841b5b53a7003267585477a9e4be7924f9108b6edcc',
   'error-codes.json': 'cfcc493d5c2ece4d3abe1a3c88556811849655b596ae6b4a0f4bed237f6d992e',
   'fail-request.json': '73fde433d66db0ee93e14e84fc31246e309939134aef874521bf54af8108714d',
-  'lease-response.json': 'a011ed4a499532a05e3191977f4b9ce1d80a635a2c28c32762ab419fbdabefc7',
+  'lease-response.json': '9eaa2bfc57fa28a6bdba7b45319e15d6cce1966fda611a10e1fec1457edf8f07',
 }
 
 const makeClient = (fetchImpl: typeof fetch) =>
@@ -62,9 +62,16 @@ describe('lease/ack contract fixtures', () => {
         criteria: ['entry conditions are historically profitable, not curve-fit', 'risk sizing survives a 10% adverse candle'],
         context: 'Autonomous vault agent, $50k AUM.',
       },
-      epoch: 128,
       answerCutoff: '2026-08-27T01:00:00.000Z',
     })
+  })
+
+  it('client rejects a lease still carrying the retired epoch field as version skew', async () => {
+    const old = { ...JSON.parse(read('lease-response.json')), epoch: 128 }
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(old), { status: 200 }))
+    const err = await makeClient(fetchImpl).lease().catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(GatewayError)
+    expect((err as GatewayError).message).toMatch(/shape mismatch \(gateway\/worker version skew\?\)/)
   })
 
   it('client rejects an old-shape lease (corpusUrl/corpusVersion/datanetId) as version skew', async () => {

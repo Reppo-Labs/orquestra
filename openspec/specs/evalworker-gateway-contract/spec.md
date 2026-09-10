@@ -4,7 +4,7 @@
 Pins the lease / complete / deny / fail wire contract between this worker and the eval-api gateway, shared byte-for-byte through the vendored fixtures.
 ## Requirements
 ### Requirement: Lease carries no corpus reference
-The worker SHALL parse a lease as `{ jobId, request, epoch, answerCutoff }` and SHALL reject (shape error) a lease carrying `corpusUrl`, `corpusVersion`, or a top-level `datanetId`.
+The worker SHALL parse a lease as `{ jobId, request, answerCutoff }` and SHALL reject (shape error) a lease carrying `corpusUrl`, `corpusVersion`, a top-level `datanetId`, or the retired `epoch` field.
 
 #### Scenario: Old-shape lease
 - **WHEN** the gateway returns a lease with `corpusUrl`
