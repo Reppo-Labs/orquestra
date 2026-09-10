@@ -18,7 +18,8 @@ export class EvalBudget {
 
   constructor(
     private readonly file: string,
-    private readonly maxPerDay: () => number,
+    /** Undefined = uncapped: never refuses, still counts. */
+    private readonly maxPerDay: () => number | undefined,
     private readonly now: () => number = Date.now,
   ) {
     this.state = this.load()
@@ -54,17 +55,22 @@ export class EvalBudget {
     if (this.state.day !== today) this.state = { day: today, used: 0 }
   }
 
+  private capReached(): boolean {
+    const cap = this.maxPerDay()
+    return cap !== undefined && this.state.used >= cap
+  }
+
   /** True if a judge call may start now. Does not reserve. */
   hasBudget(): boolean {
     this.roll()
-    return this.state.used < this.maxPerDay()
+    return !this.capReached()
   }
 
   /** Reserve one judge call BEFORE making it. Returns false (and spends
-   *  nothing) once the day's cap is reached. */
+   *  nothing) once the day's cap is reached; an unset cap never refuses. */
   reserve(): boolean {
     this.roll()
-    if (this.state.used >= this.maxPerDay()) return false
+    if (this.capReached()) return false
     this.state.used += 1
     this.persist()
     return true

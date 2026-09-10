@@ -13,7 +13,7 @@ lease ──► reserve budget ──► read datanet pods ──► gate (LLM #
 ```
 
 1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request inline: `type` (`answer | plan | trace | artifact`), `payload`, 1–10 `criteria`, optional `context`, plus the protocol `epoch` and the `answerCutoff` after which no response is accepted.
-2. **Reserve budget.** One unit of `evalWork.maxJudgeCallsPerDay` is reserved before any model call. No budget → the job is handed back with `:fail` and left for other nodes.
+2. **Reserve budget.** One unit of `evalWork.maxJudgeCallsPerDay` is reserved before any model call. No budget → the job is handed back with `:fail` and left for other nodes. With the cap unset, every job is accepted (usage is still counted).
 3. **Read evidence.** The node lists every datanet on the public catalog (`GET {EVAL_DATANET_API_URL}/public/subnets`), fetches every pod of each (`/public/pods?filters[subnet]=<cuid>`), and ranks them lexically against the payload + criteria. Top 12 become candidates. Reads are cached 5 minutes. No credential is sent; the endpoints are public.
 4. **Gate** (one LLM call). For each criterion, which candidate pods actually bear on it? Shared vocabulary is not support. Zero candidates skips the call entirely.
 5. **Judge** (one LLM call). Score each supported criterion 1–10 with a critique, citing only pods the gate allowed. The model is the node's default model (`LLM_PROVIDER` / `LLM_API_KEY`), and its id is reported to the gateway.
@@ -50,13 +50,15 @@ Docker images bake `EVAL_GATEWAY_URL` to the public gateway, so under `docker co
 }
 ```
 
+`maxJudgeCallsPerDay` is optional — omit it to accept every job with no daily cap.
+
 | Key | Default | Range | Meaning |
 |---|---|---|---|
 | `enabled` | `false` | | Master switch. Config on but `EVAL_GATEWAY_URL` unset logs `evalwork enabled in config but EVAL_GATEWAY_URL is not set`. |
 | `maxConcurrent` | `2` | 1–10 | Jobs judged in parallel. The node stops leasing while this many are in flight. |
-| `maxJudgeCallsPerDay` | `200` | 1–10000 | Judged **jobs** per UTC day (each may cost two model calls). Persisted in `<data dir>/evalwork-budget.json`; a job that fails before the gate releases its reservation. |
+| `maxJudgeCallsPerDay` | unset (no cap) | 1–10000 | Judged **jobs** per UTC day (each may cost two model calls). Unset means every job is accepted. Usage is persisted in `<data dir>/evalwork-budget.json` either way; a job that fails before the gate releases its reservation. |
 
-The dashboard has no dedicated eval toggle yet; edit the block in the Strategy tab's config and Save. The startup log confirms the lane: `evalwork ready — gateway <url>, datanet api <url> (enabled=true)`.
+The dashboard has no dedicated eval toggle yet; edit the block in the Strategy tab's config and Save. The startup log confirms the lane: `evalwork ready — gateway <url>, datanet api <url> (enabled=true, cap=<n>|none)`.
 
 ### Environment reference
 
@@ -71,7 +73,7 @@ Fixed in code: 25 s lease long-poll, 30 s request timeout, 30 s idle poll, 2 sub
 
 ## Cost
 
-- **LLM tokens only.** Up to two model calls per job (gate + judge). Each prompt carries the candidate pods' text (~1 KB each, up to 12) plus the payload (≤ 32 KB). Budget with `maxJudgeCallsPerDay`; the cap is read live, so lowering it takes effect mid-day.
+- **LLM tokens only.** Up to two model calls per job (gate + judge). Each prompt carries the candidate pods' text (~1 KB each, up to 12) plus the payload (≤ 32 KB). There is no daily cap unless you set `maxJudgeCallsPerDay`; it is read live, so setting or lowering it takes effect mid-day against the day's counted usage.
 - **Nothing on-chain.** No signing, no gas, no REPPO. The wallet is not involved.
 - **No earnings in v1.** Eval work is free to callers and unpaid to nodes; it exists to prove the judging market. On-chain receipts are tracked upstream.
 

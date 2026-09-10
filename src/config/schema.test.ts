@@ -184,14 +184,20 @@ describe('evalWork config block (eval-judge-v1)', () => {
 
   it('a config written before evalWork existed parses with the lane OFF', () => {
     const cfg = StrategyConfigSchema.parse(base)
-    expect(cfg.evalWork).toEqual({ enabled: false, maxConcurrent: 2, maxJudgeCallsPerDay: 200 })
+    expect(cfg.evalWork).toEqual({ enabled: false, maxConcurrent: 2 })
+    expect(cfg.evalWork.maxJudgeCallsPerDay).toBeUndefined()
   })
 
-  it('a partial evalWork object fills inner defaults', () => {
+  it('a partial evalWork object fills inner defaults; the daily cap stays unset (uncapped)', () => {
     const cfg = StrategyConfigSchema.parse({ ...base, evalWork: { enabled: true } })
     expect(cfg.evalWork.enabled).toBe(true)
     expect(cfg.evalWork.maxConcurrent).toBe(2)
-    expect(cfg.evalWork.maxJudgeCallsPerDay).toBe(200)
+    expect(cfg.evalWork.maxJudgeCallsPerDay).toBeUndefined()
+  })
+
+  it('an explicit daily cap is kept as given', () => {
+    const cfg = StrategyConfigSchema.parse({ ...base, evalWork: { enabled: true, maxJudgeCallsPerDay: 50 } })
+    expect(cfg.evalWork.maxJudgeCallsPerDay).toBe(50)
   })
 
   it('rejects out-of-bounds values (hot-reload falls back to last-good)', () => {

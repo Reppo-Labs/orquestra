@@ -498,7 +498,7 @@ async function start(): Promise<void> {
             podId: row.jobId, status: row.status, reason: row.reason,
           }),
       })
-      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (public, no credential; the gateway's catalog, same on every network) (enabled=${wiring.config.evalWork.enabled})`)
+      console.error(`orquestra: evalwork ready — gateway ${evalGatewayUrl}, datanet api ${datanetApiUrl} (public, no credential; the gateway's catalog, same on every network) (enabled=${wiring.config.evalWork.enabled}, cap=${wiring.config.evalWork.maxJudgeCallsPerDay ?? 'none'})`)
     }
   } else if (config.evalWork.enabled) {
     // The config toggle without the env var is a fully inert combination —
