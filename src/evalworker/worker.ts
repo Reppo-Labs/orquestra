@@ -170,7 +170,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       deps.budget.release()
     }
     try {
-      // Past the epoch answer cut-off the gateway rejects every answer —
+      // Past the answer cut-off the gateway rejects every answer —
       // judging would spend LLM budget on a guaranteed 409. Hand it back.
       if (Date.parse(job.answerCutoff) < Date.now()) {
         await reportFail(job.jobId, 'answer cut-off already passed')

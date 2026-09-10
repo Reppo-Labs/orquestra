@@ -13,15 +13,14 @@ export interface EvalJobRequest {
   context?: string
 }
 
-/** What the lease endpoint hands this node (epoch model, eval-judge-v1 2b).
- *  The gateway leases NO evidence: the node grounds the verdict in pods it
- *  retrieves itself from the public datanet catalog (no credential). */
+/** What the lease endpoint hands this node (participation-triggered settlement;
+ *  eval-api openspec job-distribution). The gateway leases NO evidence: the
+ *  node grounds the verdict in pods it retrieves itself from the public
+ *  datanet catalog (no credential). */
 export interface LeasedJob {
   jobId: string
   request: EvalJobRequest
-  /** On-chain datanet epoch this job settles in. */
-  epoch: number
-  /** Epoch end + grace — answers submitted after this are rejected. */
+  /** Settlement deadline — answers submitted after this are rejected. The job may settle earlier on participation. */
   answerCutoff: string
 }
 

@@ -6,7 +6,6 @@ const opts = { baseUrl: 'https://gw', agentId: 'a', apiKey: 'k' }
 const goodLease = {
   jobId: 'j1',
   request: { type: 'answer', payload: 'p', criteria: ['c'] },
-  epoch: 128,
   answerCutoff: '2026-08-27T01:00:00.000Z',
 }
 
