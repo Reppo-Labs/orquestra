@@ -12,7 +12,6 @@ import type { GateResult } from './gate.js'
 const job = (id: string): LeasedJob => ({
   jobId: id,
   request: { type: 'answer', payload: 'the payload is good', criteria: ['is good'] },
-  epoch: 128,
   answerCutoff: new Date(Date.now() + 300_000).toISOString(),
 })
 

@@ -12,7 +12,7 @@ lease ──► reserve budget ──► read datanet pods ──► gate (LLM #
                                                         └── nothing bears on a criterion ──► :deny
 ```
 
-1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request inline: `type` (`answer | plan | trace | artifact`), `payload`, 1–10 `criteria`, optional `context`, plus the protocol `epoch` and the `answerCutoff` after which no response is accepted.
+1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request inline: `type` (`answer | plan | trace | artifact`), `payload`, 1–10 `criteria`, optional `context`, plus the `answerCutoff` after which no response is accepted.
 2. **Reserve budget.** One unit of `evalWork.maxJudgeCallsPerDay` is reserved before any model call. No budget → the job is handed back with `:fail` and left for other nodes.
 3. **Read evidence.** The node lists every datanet on the public catalog (`GET {EVAL_DATANET_API_URL}/public/subnets`), fetches every pod of each (`/public/pods?filters[subnet]=<cuid>`), and ranks them lexically against the payload + criteria. Top 12 become candidates. Reads are cached 5 minutes. No credential is sent; the endpoints are public.
 4. **Gate** (one LLM call). For each criterion, which candidate pods actually bear on it? Shared vocabulary is not support. Zero candidates skips the call entirely.
