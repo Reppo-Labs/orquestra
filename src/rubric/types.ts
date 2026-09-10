@@ -15,6 +15,10 @@ export interface RubricEconomics {
    *  raw-to-raw so it never loses precision through a float. */
   accessFeeToken?: { address: string; symbol: string; decimals: number; amount: number; amountRaw: string }
   emissionsPerEpochReppo: number
+  /** Per-mint publishing fee in REPPO, from the datanet's `publishingFeeREPPO`.
+   *  undefined when the CLI reports it unavailable (robinhood, older CLIs) or the field
+   *  is absent; 0 means the datanet genuinely charges nothing to publish. */
+  publishingFeeReppo?: number
   upVoteVolume: number
   downVoteVolume: number
   nativeTokenSymbol: string

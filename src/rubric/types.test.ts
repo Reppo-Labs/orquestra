@@ -9,7 +9,7 @@ import { toVoteRubric, toMintRubric, type DatanetRubric, type VoteRubric, type M
 const loaded = (): DatanetRubric => ({
   datanetId: '9', name: 'D', goal: 'g', publisherSpec: 'p', voterRubric: 'v',
   subnetUuid: 'cm-9', canVote: true, canMint: true, status: 'ACTIVE',
-  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 500, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 500, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
 })
 
 const yld: DatanetYield = {

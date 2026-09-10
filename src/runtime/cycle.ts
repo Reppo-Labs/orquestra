@@ -801,13 +801,21 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
         const adapter = deps.adapters.get(policy.adapter)
         if (!adapter) {
           recordSkip(`mint enabled but adapter "${policy.adapter}" is not registered on this node`, { activity: idleThisCycle })
-        } else if (!deps.ledger.canMint(MINT_REPPO_FALLBACK)) {
-          // Mint budget can't fit even one conservative reserve (executeMint reserves
-          // MINT_REPPO_FALLBACK pre-sign) — discovering + LLM-scoring candidates that
-          // would all be refused is wasted spend. Use the fallback, not 0: canMint(0)
-          // would pass with 1-199 REPPO of headroom and then every mint still refuses.
-          // Record a skip when otherwise idle so the dashboard still explains the silence.
-          recordSkip('mint budget below one mint reserve — skipping mint discovery', { activity: idleThisCycle })
+        } else if (!deps.ledger.canMint(rubric.economics.publishingFeeReppo || MINT_REPPO_FALLBACK)) {
+          // Mirrors executeMint's reservation (executor.ts:150) so this pre-discovery gate
+          // and the post-discovery reserve agree on what a mint here costs. A fee of 0 —
+          // genuinely free, or unreadable — keeps the conservative flat reserve, because a
+          // mint still costs gas and the CLI figure can be stale.
+          const reserve = rubric.economics.publishingFeeReppo || MINT_REPPO_FALLBACK
+          const why =
+            rubric.economics.publishingFeeReppo === undefined
+              ? ', conservative fallback — this datanet reports no REPPO publishing fee'
+              : rubric.economics.publishingFeeReppo > 0
+                ? ", this datanet's publishing fee"
+                : ', conservative fallback — this datanet publishes free'
+          recordSkip(`mint budget below one mint reserve (${reserve} REPPO${why}) — skipping mint discovery`, {
+            activity: idleThisCycle,
+          })
         } else if (computeYield(datanetId, rubric.economics, null, rewardPools).poolDry) {
           // Same gate the vote path applies, for the same reason with a higher stake:
           // a vote into a dry pool wastes gas, but a MINT pays the datanet's mint fee
@@ -828,6 +836,11 @@ export async function runCycle(config: StrategyConfig, cycleId: string, deps: Cy
           const intents = await selectMints(datanetId, candidates, toMintRubric(rubric), {
             dataDir: deps.dataDir, minScore, seenKeys, scorer: deps.scorers.candidateScorer,
             mintMode: policy.mintMode,
+            // Feeds WalletExecutor's pre-sign reservation (executor.ts:150) so
+            // mintReppoMax denominates the datanet's real publishing fee instead of a
+            // flat 200 for every mint. A 0/undefined fee falls through to
+            // MINT_REPPO_FALLBACK downstream; this layer substitutes nothing itself.
+            estReppoCost: rubric.economics.publishingFeeReppo ?? 0,
           })
           // Surface the otherwise-silent case where the adapter found candidates but
           // none cleared scoring/dedup — the difference between "no data" and "data

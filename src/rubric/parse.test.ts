@@ -218,3 +218,43 @@ describe('parseDatanetRubric — non-REPPO access fee (accessFeeToken)', () => {
     expect(r.economics.accessFeeToken).toBeUndefined()
   })
 })
+
+describe('parseDatanetRubric — publishingFeeReppo', () => {
+  it('parses publishingFeeREPPO from the {formatted, raw} object shape', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      publishingFeeREPPO: { raw: '300000000000000000000', formatted: '300' },
+    })
+    expect(r.economics.publishingFeeReppo).toBe(300)
+  })
+
+  it('parses publishingFeeREPPO from a bare number', () => {
+    const r = parseDatanetRubric({
+      ...fixture,
+      publishingFeeREPPO: 5,
+    })
+    expect(r.economics.publishingFeeReppo).toBe(5)
+  })
+
+  it('keeps a genuine zero fee as 0 — datanet 2 publishes free', () => {
+    // Live shape, base datanet 2 on 2026-09-10.
+    const r = parseDatanetRubric({ ...fixture, publishingFeeREPPO: { raw: '0', formatted: '0' } })
+    expect(r.economics.publishingFeeReppo).toBe(0)
+  })
+
+  it('reads an unavailable fee as undefined, NOT as 0 — robinhood charges in the subnet token', () => {
+    // Live shape, robinhood datanet 3 on 2026-09-10. Collapsing this to 0 makes an
+    // unreadable fee indistinguishable from a free datanet, which is what made the
+    // fee-gate diagnostic fire on datanet 2.
+    const r = parseDatanetRubric({
+      ...fixture,
+      publishingFeeREPPO: { unavailable: 'no REPPO fees on robinhood — fees are charged in the subnet token' },
+    })
+    expect(r.economics.publishingFeeReppo).toBeUndefined()
+  })
+
+  it('leaves publishingFeeReppo undefined when the field is absent (older CLIs)', () => {
+    const r = parseDatanetRubric(fixture)
+    expect(r.economics.publishingFeeReppo).toBeUndefined()
+  })
+})

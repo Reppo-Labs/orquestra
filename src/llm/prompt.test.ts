@@ -13,7 +13,7 @@ const rubric: DatanetRubric = {
   canVote: true,
   canMint: true,
   status: 'active',
-  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
+  economics: { accessFeeReppo: 0, emissionsPerEpochReppo: 0, publishingFeeReppo: 0, upVoteVolume: 0, downVoteVolume: 0, nativeTokenSymbol: 'REPPO' },
 }
 
 describe('buildRubricBlock prompt-injection guard', () => {

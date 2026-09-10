@@ -7,7 +7,7 @@ import type { DatanetRubric } from '../rubric/types.js'
 const rubric: DatanetRubric = {
   datanetId: '9', name: 'TradingGym AI', goal: 'g', publisherSpec: 'p', voterRubric: 'score 1-10',
   canVote: true, canMint: true, status: 'ACTIVE', subnetUuid: 'cm-test-9',
-  economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' },
+  economics: { accessFeeReppo: 50, emissionsPerEpochReppo: 500, publishingFeeReppo: 0, upVoteVolume: 1, downVoteVolume: 1, nativeTokenSymbol: 'REPPO' },
 }
 const pod = (podId: string, validityEpoch = '100'): VoterPod => ({ podId, validityEpoch, name: `pod ${podId}`, description: 'd' })
 const filter = (over: Partial<VoteFilter> = {}): VoteFilter => ({ currentEpoch: '100', ownPodIds: [], votedPodIds: [], ...over })
