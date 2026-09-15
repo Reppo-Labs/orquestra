@@ -13,13 +13,35 @@ export interface EvalJobRequest {
   context?: string
 }
 
+/**
+ * The request as LEASED (eval-api openspec metered-payloads D9): the payload
+ * by reference — `payloadUrl` is a presigned GET valid ~15 min, `payloadBytes`
+ * and `payloadSha256` let the node verify what it fetched — and, during the
+ * transition, possibly inline too. `resolvePayload` (payload.ts) turns this
+ * into the EvalJobRequest the gate and judge consume. A pre-migration gateway
+ * sends only `payload`.
+ */
+export interface LeasedRequest {
+  type: EvalType
+  criteria: string[]
+  context?: string
+  payloadUrl?: string
+  payloadBytes?: number
+  payloadSha256?: string
+  payload?: string
+}
+
+/** `:fail` reason vocabulary (test/fixtures/lease-ack/error-codes.json → fail). */
+export const FAIL_REASONS = ['PAYLOAD_FETCH_FAILED', 'PAYLOAD_HASH_MISMATCH', 'DATANET_UNAVAILABLE', 'BUDGET_EXHAUSTED', 'PAST_CUTOFF', 'OTHER'] as const
+export type FailReason = (typeof FAIL_REASONS)[number]
+
 /** What the lease endpoint hands this node (participation-triggered settlement;
  *  eval-api openspec job-distribution). The gateway leases NO evidence: the
  *  node grounds the verdict in pods it retrieves itself from the public
  *  datanet catalog (no credential). */
 export interface LeasedJob {
   jobId: string
-  request: EvalJobRequest
+  request: LeasedRequest
   /** Settlement deadline — answers submitted after this are rejected. The job may settle earlier on participation. */
   answerCutoff: string
 }

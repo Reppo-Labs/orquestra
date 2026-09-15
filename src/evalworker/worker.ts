@@ -9,6 +9,8 @@ import { GatewayError, type GatewayClient } from './client.js'
 import type { EvalBudget } from './budget.js'
 import { DatanetError, type DatanetSource } from './datanet.js'
 import type { GateResult } from './gate.js'
+import { PayloadError, resolvePayload } from './payload.js'
+import type { FailReason } from './types.js'
 import type { EvalJobRequest, LeasedJob } from './types.js'
 import type { GatedEvidence, JudgeOutcome } from './judge.js'
 import type { RankedPod } from './retrieve.js'
@@ -38,6 +40,8 @@ export interface EvalWorkerDeps {
   gate: (request: EvalJobRequest, candidates: RankedPod[]) => Promise<GateResult>
   /** The actual judge call; injected so the loop is testable without an LLM. */
   judge: (request: EvalJobRequest, gated: GatedEvidence) => Promise<JudgeOutcome>
+  /** fetch for the payload object GET (payload.ts); injectable for tests. Defaults to global fetch. */
+  fetchImpl?: typeof fetch
   /** Model id reported in answers (judge discipline: provenance names the model). */
   modelId: () => string
   record?: (row: EvalActivityRow) => void
@@ -112,9 +116,9 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
     }
   }
 
-  const reportFail = async (jobId: string, reason: string): Promise<void> => {
+  const reportFail = async (jobId: string, reason: FailReason, detail?: string): Promise<void> => {
     try {
-      await deps.client.fail(jobId, reason)
+      await deps.client.fail(jobId, reason, detail)
     } catch (e) {
       // Not silent: without this line the operator cannot distinguish "fail
       // reported cleanly" from "this node stays on the hook for the job".
@@ -164,6 +168,9 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
     // free. `spent` flips the moment a model call becomes unavoidable.
     let reserved = false
     let spent = false
+    // Which stage threw decides the :fail reason: a retrieval-stage failure
+    // is the datanet being unavailable, whatever error class the source used.
+    let phase: 'lease' | 'retrieve' | 'judge' = 'lease'
     const releaseIfUnspent = (): void => {
       if (!reserved || spent) return
       reserved = false
@@ -173,23 +180,42 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       // Past the answer cut-off the gateway rejects every answer —
       // judging would spend LLM budget on a guaranteed 409. Hand it back.
       if (Date.parse(job.answerCutoff) < Date.now()) {
-        await reportFail(job.jobId, 'answer cut-off already passed')
+        await reportFail(job.jobId, 'PAST_CUTOFF', 'answer cut-off already passed')
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'skipped', reason: 'past answer cut-off' })
         return
       }
       // Reserve BEFORE retrieval — the budget is a pre-spend gate, and one
-      // reservation covers gate + judge (they are one job's spend).
+      // reservation covers gate + judge (they are one job's spend). It runs
+      // synchronously before serve()'s first await so the loop's next
+      // hasBudget() already sees the slot (no lease/reserve race).
       if (!deps.budget.reserve()) {
-        await reportFail(job.jobId, 'node eval budget exhausted')
+        await reportFail(job.jobId, 'BUDGET_EXHAUSTED', 'node eval budget exhausted')
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'skipped', reason: 'budget exhausted' })
         return
       }
       reserved = true
+      // The payload FIRST, before retrieval (eval-api metered-payloads D9):
+      // the lease carries it by presigned URL with a ~15 min life, and a
+      // fetch or hash failure is this job's :fail with a named reason. No
+      // model call has happened, so the reservation is released — net zero
+      // budget — and other nodes still serve the job.
+      let request
+      try {
+        request = await resolvePayload(job, { fetchImpl: deps.fetchImpl })
+      } catch (e) {
+        if (!(e instanceof PayloadError)) throw e
+        releaseIfUnspent()
+        log(`job ${job.jobId}: ${e.reason} — ${e.message}`)
+        await reportFail(job.jobId, e.reason, e.message)
+        safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'error', reason: e.reason })
+        return
+      }
+      phase = 'retrieve'
       // A TOTAL source failure throws out of here → :fail (retryable). It must
       // never read as "no evidence": an outage is not a denial. A PARTIAL
       // failure does not throw — it comes back as `evidence.unreadable`, and
       // is handled at the deny decision below for the same reason.
-      const evidence = await gatherEvidence(deps.datanet, job.request)
+      const evidence = await gatherEvidence(deps.datanet, request)
       if (evidence.datanetsSearched.length === 0) {
         // The gateway refuses a denial naming no datanet (400 INVALID_DENIAL),
         // and a node that can read nothing is misconfigured, not uninformed.
@@ -197,8 +223,9 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       }
       // Zero candidates short-circuit the gate with no model call (gate.ts), so
       // that denial is free — anything else means the gate is about to spend.
+      phase = 'judge'
       if (evidence.candidates.length > 0) spent = true
-      const gate = await deps.gate(job.request, evidence.candidates)
+      const gate = await deps.gate(request, evidence.candidates)
       if (gate.unsupported.length > 0) {
         // "Nothing supports this criterion" is only a DENIAL — terminal,
         // gateway-side — when this node read every datanet it can reach. With
@@ -213,14 +240,14 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
           )
         }
         releaseIfUnspent()
-        const reason = buildDenyReason(gate.unsupported, job.request.criteria, evidence.datanetsSearched)
+        const reason = buildDenyReason(gate.unsupported, request.criteria, evidence.datanetsSearched)
         await submitWithRetry(job.jobId, 'deny', () => deps.client.deny(job.jobId, reason, evidence.datanetsSearched))
         submitted = true
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'denied', reason })
         return
       }
       spent = true
-      const outcome = await deps.judge(job.request, gate.supported)
+      const outcome = await deps.judge(request, gate.supported)
       const answer = { jobId: job.jobId, model: deps.modelId(), verdicts: outcome.verdicts }
       await submitWithRetry(job.jobId, 'complete', () => deps.client.complete(answer))
       submitted = true
@@ -267,7 +294,10 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         log(`job ${job.jobId}: a cited pod no longer resolves — dropping the cached datanet pods so the next job re-reads`)
         deps.datanet.invalidate?.()
       }
-      if (!submitted && !adjudicated) await reportFail(job.jobId, msg)
+      if (!submitted && !adjudicated) {
+        const reason: FailReason = e instanceof DatanetError || phase === 'retrieve' ? 'DATANET_UNAVAILABLE' : 'OTHER'
+        await reportFail(job.jobId, reason, msg)
+      }
     }
   }
 
@@ -291,7 +321,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
           // until lease expiry with zero trace on this node).
           if (job) {
             log(`job ${job.jobId} leased during shutdown — reporting :fail`)
-            await reportFail(job.jobId, 'node shutting down')
+            await reportFail(job.jobId, 'OTHER', 'node shutting down')
           }
           break
         }

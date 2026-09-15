@@ -2,12 +2,15 @@
   "jobId": "job_01J9ZX4T8RE",
   "request": {
     "type": "plan",
-    "payload": "Long ETH-PERP 3x when funding < -0.01%/h and 4h RSI < 35; -2% stop; size 15% of vault.",
     "criteria": [
       "entry conditions are historically profitable, not curve-fit",
       "risk sizing survives a 10% adverse candle"
     ],
-    "context": "Autonomous vault agent, $50k AUM."
+    "context": "Autonomous vault agent, $50k AUM.",
+    "payloadUrl": "https://payloads.example/payload/job_01J9ZX4T8RE?X-Amz-Signature=fixture",
+    "payloadBytes": 86,
+    "payloadSha256": "f78e0f1c5360112dbe7cb3f6ea8a9a176c0400ee6c0b79a1b8a3684a25679bb9",
+    "payload": "Long ETH-PERP 3x when funding < -0.01%/h and 4h RSI < 35; -2% stop; size 15% of vault."
   },
   "answerCutoff": "2026-08-27T01:00:00.000Z"
 }

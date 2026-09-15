@@ -10,22 +10,33 @@
 //    would otherwise hang a lease forever with no error — invisible stall,
 //    wedged shutdown.
 import { z } from 'zod'
-import type { EvalAnswer, EvalDenial, LeasedJob } from './types.js'
+import type { EvalAnswer, EvalDenial, FailReason, LeasedJob } from './types.js'
 import { EVAL_TYPES } from './types.js'
 
 // `.strict()`: a lease still carrying the retired corpus fields (corpusUrl /
 // corpusVersion / top-level datanetId) is an OLD gateway build — evidence is
 // node-side now, and judging against a gateway that expects corpus-pinned
 // citations would fail every :complete. Surface it as version skew instead.
+// The request is accepted in BOTH shapes for one release: by reference
+// (payloadUrl + payloadBytes + payloadSha256, the metered gateway) and inline
+// (payload only, the gateway before it). At least one must be present, and a
+// reference must come with its size and hash — a lease that names a URL but
+// no hash cannot be verified and is refused as skew.
 const leasedJobSchema = z
   .object({
     jobId: z.string().min(1),
-    request: z.object({
-      type: z.enum(EVAL_TYPES),
-      payload: z.string(),
-      criteria: z.array(z.string()).min(1),
-      context: z.string().optional(),
-    }),
+    request: z
+      .object({
+        type: z.enum(EVAL_TYPES),
+        criteria: z.array(z.string()).min(1),
+        context: z.string().optional(),
+        payloadUrl: z.string().url().optional(),
+        payloadBytes: z.number().int().nonnegative().optional(),
+        payloadSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+        payload: z.string().optional(),
+      })
+      .refine((r) => r.payload !== undefined || r.payloadUrl !== undefined, { message: 'lease carries neither payload nor payloadUrl' })
+      .refine((r) => r.payloadUrl === undefined || (r.payloadBytes !== undefined && r.payloadSha256 !== undefined), { message: 'payloadUrl without payloadBytes + payloadSha256' }),
     answerCutoff: z.string(),
   })
   .strict()
@@ -110,11 +121,15 @@ export class GatewayClient {
     if (!res.ok) throw new GatewayError(res.status, `complete failed: HTTP ${res.status}${await errorDetail(res)}`)
   }
 
-  /** Report that this node cannot serve the job (judge error after retries). */
-  async fail(jobId: string, reason: string): Promise<void> {
+  /** Report that this node cannot serve the job. `reason` is the pinned
+   *  vocabulary (error-codes.json → fail); `detail` is free text for the
+   *  operator. The gateway counts per reason, so a fleet-wide
+   *  PAYLOAD_FETCH_FAILED is visible as itself, not as "no nodes online". */
+  async fail(jobId: string, reason: FailReason, detail?: string): Promise<void> {
+    const body = { jobId, reason, ...(detail ? { detail: detail.slice(0, 2000) } : {}) }
     const res = await this.fetchImpl(
       `${this.opts.baseUrl}/v1/node/jobs/${encodeURIComponent(jobId)}:fail`,
-      { method: 'POST', headers: this.headers(), body: JSON.stringify({ reason }), signal: AbortSignal.timeout(this.requestTimeoutMs) },
+      { method: 'POST', headers: this.headers(), body: JSON.stringify(body), signal: AbortSignal.timeout(this.requestTimeoutMs) },
     )
     if (!res.ok) throw new GatewayError(res.status, `fail failed: HTTP ${res.status}${await errorDetail(res)}`)
   }
