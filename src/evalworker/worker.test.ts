@@ -839,6 +839,22 @@ describe('startEvalWorker (stale pod cache)', () => {
     expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
   })
 
+  // An unstaked pod is still on the datanet, so busting the cache would only
+  // re-read the same pod and re-cite it; the gateway adjudicated, nothing to
+  // retry, and the cache is left alone.
+  it('a 422 UNSTAKED_CITATION is final (no :fail, no retry) and leaves the cache alone', async () => {
+    const client = makeClient([job('j-unstaked'), null])
+    ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"UNSTAKED_CITATION"}'))
+    const invalidate = vi.fn()
+    const w = startEvalWorker(deps({ client, datanet: source(invalidate) }))
+    await waitFor(() => (client.complete as ReturnType<typeof vi.fn>).mock.calls.length >= 1)
+    await new Promise((r) => setTimeout(r, 40))
+    await w.stop()
+    expect(invalidate).not.toHaveBeenCalled()
+    expect((client.complete as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
+    expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
+  })
+
   it('a 422 CRITERIA_MISMATCH leaves the cache alone (the pods were fine)', async () => {
     const client = makeClient([job('j-mismatch'), null])
     ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"CRITERIA_MISMATCH"}'))
