@@ -19,11 +19,13 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 
 // Pinned in BOTH repos — eval-api pins the same bytes via
 // fixtures/lease-ack/CHECKSUMS.sha256 (`npm run fixtures:check` in its CI).
-// Copied verbatim from eval-api branch metered-payloads (openspec metered-payloads).
+// Copied verbatim from eval-api metered-payloads @ b7faaf4, which carries
+// #41's complete.422 UNSTAKED_CITATION and #39's lease-by-reference + fail
+// vocabulary — the merged contract main will pin once #39 lands.
 const CHECKSUMS: Record<string, string> = {
   'complete-request.json': '19e9ed86672169c1ab223e89062ee9798ad9e12042af04cf50ebc6b1848f0e9e',
   'deny-request.json': '90e8957a7e1de201cd34a841b5b53a7003267585477a9e4be7924f9108b6edcc',
-  'error-codes.json': '2c28f7a5632f52dbb8aae72fac46671dd24351e3fdd189e054a56cf68b3ec1c3',
+  'error-codes.json': '03102f9ddcb775ae398d136ed7d1ffd3587acd8a3e6dd3fa50aee8effd04c470',
   'fail-request.json': '09a65aeacdadfcd9b8932d6c8ac533e215bad828205eab809a9234fd17d5ba3b',
   'lease-response.json': '77f7624b771f6644efc4823efd13592f711d4b1f18baab70850be730650a115f',
   'payload.txt': 'f78e0f1c5360112dbe7cb3f6ea8a9a176c0400ee6c0b79a1b8a3684a25679bb9',
