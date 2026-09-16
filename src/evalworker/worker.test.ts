@@ -839,6 +839,21 @@ describe('startEvalWorker (stale pod cache)', () => {
     expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
   })
 
+  // The cached pod list carries no vote fields, so a pod the datanet voted
+  // down (or never backed) stays cacheable and re-citable: without busting the
+  // cache the node collects an UNSTAKED discard on every job until the TTL.
+  it('a 422 UNSTAKED_CITATION busts the pod cache too', async () => {
+    const client = makeClient([job('j-unstaked'), null])
+    ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"UNSTAKED_CITATION"}'))
+    const invalidate = vi.fn()
+    const w = startEvalWorker(deps({ client, datanet: source(invalidate) }))
+    await waitFor(() => (client.complete as ReturnType<typeof vi.fn>).mock.calls.length >= 1)
+    await new Promise((r) => setTimeout(r, 40))
+    await w.stop()
+    expect(invalidate).toHaveBeenCalledTimes(1)
+    expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
+  })
+
   it('a 422 CRITERIA_MISMATCH leaves the cache alone (the pods were fine)', async () => {
     const client = makeClient([job('j-mismatch'), null])
     ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"CRITERIA_MISMATCH"}'))

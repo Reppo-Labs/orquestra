@@ -18,11 +18,12 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 
 // Pinned in BOTH repos — eval-api pins the same bytes via
 // fixtures/lease-ack/CHECKSUMS.sha256 (`npm run fixtures:check` in its CI).
-// Copied verbatim from eval-api @ 90bab1e (branch drop-lease-epoch).
+// Copied verbatim from eval-api @ staked-citations (adds complete.422
+// UNSTAKED_CITATION).
 const CHECKSUMS: Record<string, string> = {
   'complete-request.json': '19e9ed86672169c1ab223e89062ee9798ad9e12042af04cf50ebc6b1848f0e9e',
   'deny-request.json': '90e8957a7e1de201cd34a841b5b53a7003267585477a9e4be7924f9108b6edcc',
-  'error-codes.json': 'cfcc493d5c2ece4d3abe1a3c88556811849655b596ae6b4a0f4bed237f6d992e',
+  'error-codes.json': '4b1f857f88b3749139ebd5b98a05b0efe38ec6c2115330b08702fd36d38ccdae',
   'fail-request.json': '73fde433d66db0ee93e14e84fc31246e309939134aef874521bf54af8108714d',
   'lease-response.json': '9eaa2bfc57fa28a6bdba7b45319e15d6cce1966fda611a10e1fec1457edf8f07',
 }

@@ -140,7 +140,7 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         // only wastes traffic. Per route (error-codes.json contract fixture):
         //   :complete — 400 JOB_ID_MISMATCH, 409 PAST_CUTOFF / ALREADY_DENIED,
         //               422 CRITERIA_MISMATCH / UNGROUNDED_VERDICT /
-        //               UNRESOLVABLE_CITATION
+        //               UNRESOLVABLE_CITATION / UNSTAKED_CITATION
         //   :deny     — 400 INVALID_DENIAL, 409 PAST_CUTOFF / ALREADY_ANSWERED
         // (the 409 is the OTHER route's outcome in each case). 408/429 stay
         // retryable.
@@ -260,11 +260,14 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       // on :deny (ALREADY_ANSWERED / PAST_CUTOFF), means the gateway
       // ADJUDICATED the job — a :fail on top would double-record.
       const adjudicated = e instanceof GatewayError && (e.status === 409 || e.status === 422)
-      // The gateway could not resolve a pod we cited: it was deleted after we
-      // cached it. The answer is already discarded gateway-side, so this job is
-      // over (no retry) — but the NEXT job must not cite the same dead pod.
-      if (e instanceof GatewayError && e.status === 422 && e.message.includes('UNRESOLVABLE_CITATION')) {
-        log(`job ${job.jobId}: a cited pod no longer resolves — dropping the cached datanet pods so the next job re-reads`)
+      // The gateway rejected a pod we cited — either it no longer resolves
+      // (deleted after we cached it) or the datanet's voters did not back it
+      // / voted it down. The answer is already discarded gateway-side, so this
+      // job is over (no retry) — but the cache still holds that pod, and the
+      // cached pod list carries no vote fields, so without this the next job
+      // re-cites it and collects the same discard until the cache ages out.
+      if (e instanceof GatewayError && e.status === 422 && (e.message.includes('UNRESOLVABLE_CITATION') || e.message.includes('UNSTAKED_CITATION'))) {
+        log(`job ${job.jobId}: the gateway rejected a cited pod — dropping the cached datanet pods so the next job re-reads`)
         deps.datanet.invalidate?.()
       }
       if (!submitted && !adjudicated) await reportFail(job.jobId, msg)
