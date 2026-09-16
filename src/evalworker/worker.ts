@@ -260,14 +260,16 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       // on :deny (ALREADY_ANSWERED / PAST_CUTOFF), means the gateway
       // ADJUDICATED the job — a :fail on top would double-record.
       const adjudicated = e instanceof GatewayError && (e.status === 409 || e.status === 422)
-      // The gateway rejected a pod we cited — either it no longer resolves
-      // (deleted after we cached it) or the datanet's voters did not back it
-      // / voted it down. The answer is already discarded gateway-side, so this
-      // job is over (no retry) — but the cache still holds that pod, and the
-      // cached pod list carries no vote fields, so without this the next job
-      // re-cites it and collects the same discard until the cache ages out.
-      if (e instanceof GatewayError && e.status === 422 && (e.message.includes('UNRESOLVABLE_CITATION') || e.message.includes('UNSTAKED_CITATION'))) {
-        log(`job ${job.jobId}: the gateway rejected a cited pod — dropping the cached datanet pods so the next job re-reads`)
+      // The gateway could not resolve a pod we cited: it was deleted after we
+      // cached it. The answer is already discarded gateway-side, so this job is
+      // over (no retry) — but the NEXT job must not cite the same dead pod.
+      // UNSTAKED_CITATION deliberately does NOT bust the cache: the pod is
+      // still on the datanet, so a re-read returns it and the next job re-cites
+      // it anyway; invalidating only adds a full re-read per discard. The real
+      // fix is stake-aware pod selection (the list endpoint carries the vote
+      // fields), tracked separately.
+      if (e instanceof GatewayError && e.status === 422 && e.message.includes('UNRESOLVABLE_CITATION')) {
+        log(`job ${job.jobId}: a cited pod no longer resolves — dropping the cached datanet pods so the next job re-reads`)
         deps.datanet.invalidate?.()
       }
       if (!submitted && !adjudicated) await reportFail(job.jobId, msg)

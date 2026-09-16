@@ -839,10 +839,10 @@ describe('startEvalWorker (stale pod cache)', () => {
     expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
   })
 
-  // The cached pod list carries no vote fields, so a pod the datanet voted
-  // down (or never backed) stays cacheable and re-citable: without busting the
-  // cache the node collects an UNSTAKED discard on every job until the TTL.
-  it('a 422 UNSTAKED_CITATION busts the pod cache too', async () => {
+  // An unstaked pod is still on the datanet, so busting the cache would only
+  // re-read the same pod and re-cite it; the gateway adjudicated, nothing to
+  // retry, and the cache is left alone.
+  it('a 422 UNSTAKED_CITATION is final (no :fail, no retry) and leaves the cache alone', async () => {
     const client = makeClient([job('j-unstaked'), null])
     ;(client.complete as ReturnType<typeof vi.fn>).mockRejectedValue(new GatewayError(422, 'complete failed: HTTP 422 — {"code":"UNSTAKED_CITATION"}'))
     const invalidate = vi.fn()
@@ -850,7 +850,8 @@ describe('startEvalWorker (stale pod cache)', () => {
     await waitFor(() => (client.complete as ReturnType<typeof vi.fn>).mock.calls.length >= 1)
     await new Promise((r) => setTimeout(r, 40))
     await w.stop()
-    expect(invalidate).toHaveBeenCalledTimes(1)
+    expect(invalidate).not.toHaveBeenCalled()
+    expect((client.complete as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1)
     expect(client.failed).toHaveLength(0) // already adjudicated: no :fail, no retry
   })
 
