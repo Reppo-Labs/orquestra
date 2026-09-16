@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -45,8 +46,8 @@ function makeClient(jobs: (LeasedJob | null)[]): TestClient {
     complete: vi.fn(async (a: unknown) => {
       completed.push(a)
     }),
-    fail: vi.fn(async (id: string, reason: string) => {
-      failed.push({ id, reason })
+    fail: vi.fn(async (id: string, reason: string, detail?: string) => {
+      failed.push({ id, reason, detail })
     }),
     deny: vi.fn(async (id: string, reason: string, datanetsSearched: string[]) => {
       denied.push({ id, reason, datanetsSearched })
@@ -134,7 +135,7 @@ describe('startEvalWorker', () => {
     )
     await waitFor(() => client.failed.length === 1)
     await w.stop()
-    expect(client.failed[0]).toMatchObject({ id: 'bad', reason: 'model exploded' })
+    expect(client.failed[0]).toMatchObject({ id: 'bad', reason: 'OTHER', detail: 'model exploded' })
     expect(client.completed).toHaveLength(0)
   })
 
@@ -190,7 +191,7 @@ describe('startEvalWorker (review regressions)', () => {
     await waitFor(() => client.failed.length >= 1)
     await w.stop()
     expect(judge).not.toHaveBeenCalled()
-    expect(client.failed[0]).toMatchObject({ id: 'j-late', reason: 'answer cut-off already passed' })
+    expect(client.failed[0]).toMatchObject({ id: 'j-late', reason: 'PAST_CUTOFF', detail: 'answer cut-off already passed' })
   })
 
   it('a throwing record() never escapes — the node survives (critical #1)', async () => {
@@ -332,7 +333,7 @@ describe('startEvalWorker (review regressions)', () => {
     leaseGate.resolve(job('late'))
     await stopping
     expect(client.failed).toHaveLength(1)
-    expect(client.failed[0]).toMatchObject({ id: 'late', reason: 'node shutting down' })
+    expect(client.failed[0]).toMatchObject({ id: 'late', reason: 'OTHER', detail: 'node shutting down' })
     expect(client.completed).toHaveLength(0)
   })
 })
@@ -416,8 +417,8 @@ describe('startEvalWorker (datanet grounding)', () => {
     await w.stop()
     expect(client.denied).toHaveLength(0)
     expect(client.completed).toHaveLength(0)
-    expect((client.failed[0] as { reason: string }).reason).toContain(DN_B)
-    expect((client.failed[0] as { reason: string }).reason).toContain('not denying')
+    expect((client.failed[0] as { detail: string }).detail).toContain(DN_B)
+    expect((client.failed[0] as { detail: string }).detail).toContain('not denying')
     expect(rows[0]).toMatchObject({ status: 'error' })
     // zero candidates → the gate short-circuits without a model call, so the
     // reservation goes back (same `spent` discipline as every pre-LLM failure)
@@ -495,7 +496,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     )
     await waitFor(() => client.failed.length === 1)
     await w.stop()
-    expect(client.failed[0]).toMatchObject({ id: 'j-src', reason: expect.stringContaining('HTTP 503') })
+    expect(client.failed[0]).toMatchObject({ id: 'j-src', reason: 'DATANET_UNAVAILABLE', detail: expect.stringContaining('HTTP 503') })
     expect(client.denied).toHaveLength(0)
     expect(gate).not.toHaveBeenCalled()
     expect(judge).not.toHaveBeenCalled()
@@ -506,7 +507,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     const w = startEvalWorker(deps({ client, datanet: new InMemoryDatanetSource([]) }))
     await waitFor(() => client.failed.length === 1)
     await w.stop()
-    expect(client.failed[0]).toMatchObject({ id: 'j-none', reason: expect.stringMatching(/no accessible datanets/i) })
+    expect(client.failed[0]).toMatchObject({ id: 'j-none', reason: 'DATANET_UNAVAILABLE', detail: expect.stringMatching(/no accessible datanets/i) })
     expect(client.denied).toHaveLength(0)
   })
 
@@ -522,7 +523,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     )
     await waitFor(() => client.failed.length === 1)
     await w.stop()
-    expect(client.failed[0]).toMatchObject({ id: 'j-gate', reason: 'gate omitted criterion: is good' })
+    expect(client.failed[0]).toMatchObject({ id: 'j-gate', reason: 'OTHER', detail: 'gate omitted criterion: is good' })
     expect(client.denied).toHaveLength(0)
     expect(client.completed).toHaveLength(0)
   })
@@ -539,7 +540,7 @@ describe('startEvalWorker (datanet grounding)', () => {
     )
     await waitFor(() => client.failed.length === 1)
     await w.stop()
-    expect(client.failed[0]).toMatchObject({ id: 'j-uncited', reason: 'judge cited nothing for criterion: is good' })
+    expect(client.failed[0]).toMatchObject({ id: 'j-uncited', reason: 'OTHER', detail: 'judge cited nothing for criterion: is good' })
     expect(client.completed).toHaveLength(0)
   })
 
@@ -864,5 +865,51 @@ describe('startEvalWorker (stale pod cache)', () => {
     await new Promise((r) => setTimeout(r, 40))
     await w.stop()
     expect(invalidate).not.toHaveBeenCalled()
+  })
+})
+
+describe('startEvalWorker (payload by reference)', () => {
+  const SHA = createHash('sha256').update('the payload is good').digest('hex')
+  const byRef = (id: string, over: Partial<LeasedJob['request']> = {}): LeasedJob => ({
+    jobId: id,
+    request: { type: 'answer', criteria: ['is good'], payloadUrl: 'https://p.example/payload/' + id + '?sig=S', payloadBytes: 19, payloadSha256: SHA, ...over },
+    answerCutoff: new Date(Date.now() + 300_000).toISOString(),
+  })
+
+  it('fetches the payload from payloadUrl before anything else, then judges and completes', async () => {
+    const client = makeClient([byRef('j-ref'), null])
+    const fetchImpl = vi.fn(async () => new Response('the payload is good', { status: 200 }))
+    const judge = vi.fn(async (req: { payload: string; criteria: string[] }, gated: Map<string, DatanetPod[]>) => ({
+      verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: req.payload, citations: (gated.get(criterion) ?? []).map((p) => ({ datanetId: p.datanetId, podId: p.podId })) })),
+    }))
+    const w = startEvalWorker(deps({ client, fetchImpl, judge }))
+    await waitFor(() => client.completed.length === 1)
+    await w.stop()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect((client.completed[0] as { verdicts: { critique: string }[] }).verdicts[0]!.critique).toBe('the payload is good')
+    expect(client.failed).toHaveLength(0)
+  })
+
+  it('a hash mismatch → :fail PAYLOAD_HASH_MISMATCH with no budget spent and no judge call', async () => {
+    const client = makeClient([byRef('j-bad'), null])
+    const fetchImpl = vi.fn(async () => new Response('the payload is evil', { status: 200 }))
+    const judge = vi.fn()
+    const b = budget(1)
+    const w = startEvalWorker(deps({ client, fetchImpl, judge, budget: b }))
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.failed[0]).toMatchObject({ id: 'j-bad', reason: 'PAYLOAD_HASH_MISMATCH' })
+    expect(judge).not.toHaveBeenCalled()
+    expect(b.hasBudget()).toBe(true)
+    expect(JSON.stringify(client.failed[0])).not.toContain('sig=S')
+  })
+
+  it('an expired URL (403) → :fail PAYLOAD_FETCH_FAILED', async () => {
+    const client = makeClient([byRef('j-exp'), null])
+    const fetchImpl = vi.fn(async () => new Response('expired', { status: 403 }))
+    const w = startEvalWorker(deps({ client, fetchImpl }))
+    await waitFor(() => client.failed.length === 1)
+    await w.stop()
+    expect(client.failed[0]).toMatchObject({ id: 'j-exp', reason: 'PAYLOAD_FETCH_FAILED' })
   })
 })

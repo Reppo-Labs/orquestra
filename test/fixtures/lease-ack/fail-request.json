@@ -1,4 +1,5 @@
 {
   "jobId": "job_01J9ZX4T8RE",
-  "reason": "model exploded after retries"
+  "reason": "PAYLOAD_HASH_MISMATCH",
+  "detail": "fetched 88 bytes, sha256 differs from payloadSha256"
 }

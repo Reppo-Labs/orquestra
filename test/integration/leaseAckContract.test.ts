@@ -10,7 +10,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { GatewayClient, GatewayError } from '../../src/evalworker/client.js'
-import type { EvalAnswer, EvalDenial, LeasedJob } from '../../src/evalworker/types.js'
+import { FAIL_REASONS, type EvalAnswer, type EvalDenial, type FailReason, type LeasedJob } from '../../src/evalworker/types.js'
+import { resolvePayload } from '../../src/evalworker/payload.js'
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'lease-ack')
 const read = (f: string): string => readFileSync(join(DIR, f), 'utf8')
@@ -18,14 +19,16 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 
 // Pinned in BOTH repos — eval-api pins the same bytes via
 // fixtures/lease-ack/CHECKSUMS.sha256 (`npm run fixtures:check` in its CI).
-// Copied verbatim from eval-api @ staked-citations (adds complete.422
-// UNSTAKED_CITATION).
+// Copied verbatim from eval-api metered-payloads @ b7faaf4, which carries
+// #41's complete.422 UNSTAKED_CITATION and #39's lease-by-reference + fail
+// vocabulary — the merged contract main will pin once #39 lands.
 const CHECKSUMS: Record<string, string> = {
   'complete-request.json': '19e9ed86672169c1ab223e89062ee9798ad9e12042af04cf50ebc6b1848f0e9e',
   'deny-request.json': '90e8957a7e1de201cd34a841b5b53a7003267585477a9e4be7924f9108b6edcc',
-  'error-codes.json': '4b1f857f88b3749139ebd5b98a05b0efe38ec6c2115330b08702fd36d38ccdae',
-  'fail-request.json': '73fde433d66db0ee93e14e84fc31246e309939134aef874521bf54af8108714d',
-  'lease-response.json': '9eaa2bfc57fa28a6bdba7b45319e15d6cce1966fda611a10e1fec1457edf8f07',
+  'error-codes.json': '03102f9ddcb775ae398d136ed7d1ffd3587acd8a3e6dd3fa50aee8effd04c470',
+  'fail-request.json': '09a65aeacdadfcd9b8932d6c8ac533e215bad828205eab809a9234fd17d5ba3b',
+  'lease-response.json': '77f7624b771f6644efc4823efd13592f711d4b1f18baab70850be730650a115f',
+  'payload.txt': 'f78e0f1c5360112dbe7cb3f6ea8a9a176c0400ee6c0b79a1b8a3684a25679bb9',
 }
 
 const makeClient = (fetchImpl: typeof fetch) =>
@@ -59,12 +62,31 @@ describe('lease/ack contract fixtures', () => {
       jobId: 'job_01J9ZX4T8RE',
       request: {
         type: 'plan',
-        payload: expect.stringMatching(/^Long ETH-PERP/),
         criteria: ['entry conditions are historically profitable, not curve-fit', 'risk sizing survives a 10% adverse candle'],
         context: 'Autonomous vault agent, $50k AUM.',
+        payloadUrl: expect.stringMatching(/^https:\/\//),
+        payloadBytes: expect.any(Number),
+        payloadSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        payload: expect.stringMatching(/^Long ETH-PERP/),
       },
       answerCutoff: '2026-08-27T01:00:00.000Z',
     })
+  })
+
+  it('payload.txt is the bytes behind the lease fixture: sha256 and length match, and resolvePayload verifies them', async () => {
+    const lease = JSON.parse(read('lease-response.json')) as LeasedJob
+    const bytes = readFileSync(join(DIR, 'payload.txt'))
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(lease.request.payloadSha256)
+    expect(bytes.length).toBe(lease.request.payloadBytes)
+    const fetchImpl = vi.fn(async () => new Response(bytes, { status: 200 }))
+    const req = await resolvePayload(lease, { fetchImpl })
+    expect(req.payload).toBe(bytes.toString('utf8'))
+    expect(fetchImpl).toHaveBeenCalledWith(lease.request.payloadUrl, expect.anything())
+  })
+
+  it('the fail vocabulary in error-codes.json matches FAIL_REASONS', () => {
+    const codes = JSON.parse(read('error-codes.json')) as { fail: { reasons: string[] } }
+    expect(new Set(codes.fail.reasons)).toEqual(new Set(FAIL_REASONS))
   })
 
   it('client rejects a lease still carrying the retired epoch field as version skew', async () => {
@@ -106,9 +128,9 @@ describe('lease/ack contract fixtures', () => {
 
   it('client submits a :fail body shaped exactly like the fixture', async () => {
     const { calls, fetchImpl } = capturing()
-    const fixture = JSON.parse(read('fail-request.json')) as { jobId: string; reason: string }
-    await makeClient(fetchImpl).fail(fixture.jobId, fixture.reason)
-    expect(calls[0]?.body).toEqual({ reason: fixture.reason })
+    const fixture = JSON.parse(read('fail-request.json')) as { jobId: string; reason: FailReason; detail?: string }
+    await makeClient(fetchImpl).fail(fixture.jobId, fixture.reason, fixture.detail)
+    expect(calls[0]?.body).toEqual(fixture)
     expect(calls[0]?.url).toBe('https://gw/v1/node/jobs/job_01J9ZX4T8RE:fail')
   })
 
@@ -117,7 +139,7 @@ describe('lease/ack contract fixtures', () => {
     const client = makeClient(fetchImpl)
     await client.lease().catch(() => {}) // `{}` is not a lease — shape error is fine here
     await client.deny('j', 'r', ['cms3uejpj0001jf040zjgwqwm'])
-    await client.fail('j', 'r')
+    await client.fail('j', 'OTHER', 'r')
     expect(calls).toHaveLength(3)
     for (const c of calls) expect(c.headers).toMatchObject({ 'x-agent-id': 'agent-7', 'x-api-key': 'secret' })
   })

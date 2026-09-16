@@ -1,0 +1,1 @@
+Long ETH-PERP 3x when funding < -0.01%/h and 4h RSI < 35; -2% stop; size 15% of vault.

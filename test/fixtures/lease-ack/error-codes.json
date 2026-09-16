@@ -1,5 +1,5 @@
 {
-  "comment": "Error codes the gateway's node API can answer — the worker side pins these so a new rejection class is a contract change, not a surprise.",
+  "comment": "Error codes the gateway's node API can answer \u2014 the worker side pins these so a new rejection class is a contract change, not a surprise.",
   "lease": {
     "401": [
       "UNAUTHENTICATED",
@@ -51,6 +51,27 @@
     "409": [
       "PAST_CUTOFF",
       "ALREADY_ANSWERED"
+    ],
+    "503": [
+      "AUTH_UNAVAILABLE"
+    ]
+  },
+  "fail": {
+    "comment": "Reasons a node may report; anything else is stored as OTHER with the text kept as detail. 200 always.",
+    "reasons": [
+      "PAYLOAD_FETCH_FAILED",
+      "PAYLOAD_HASH_MISMATCH",
+      "DATANET_UNAVAILABLE",
+      "BUDGET_EXHAUSTED",
+      "PAST_CUTOFF",
+      "OTHER"
+    ],
+    "400": [
+      "JOB_ID_MISMATCH"
+    ],
+    "401": [
+      "UNAUTHENTICATED",
+      "INVALID_CREDENTIALS"
     ],
     "503": [
       "AUTH_UNAVAILABLE"

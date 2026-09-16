@@ -12,7 +12,8 @@ lease ──► reserve budget ──► read datanet pods ──► gate (LLM #
                                                         └── nothing bears on a criterion ──► :deny
 ```
 
-1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request inline: `type` (`answer | plan | trace | artifact`), `payload`, 1–10 `criteria`, optional `context`, plus the `answerCutoff` after which no response is accepted.
+1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request: `type` (`answer | plan | trace | artifact`), 1–10 `criteria`, optional `context`, the payload **by reference** (`payloadUrl`, a presigned GET valid ~15 min, with `payloadBytes` + `payloadSha256`), plus the `answerCutoff` after which no response is accepted. For one release the inline `payload` also rides along when ≤ 32 KB; a pre-metering gateway sends only `payload`.
+1. **Fetch the payload.** Right after reserving budget and before any retrieval or model call: `GET payloadUrl`, check length and sha256. A fetch or hash failure is `:fail` with `PAYLOAD_FETCH_FAILED` / `PAYLOAD_HASH_MISMATCH` — the reservation is released (nothing was spent), the job stays open for other nodes. The URL is a bearer token and is never logged.
 2. **Reserve budget.** One unit of `evalWork.maxJudgeCallsPerDay` is reserved before any model call. No budget → the job is handed back with `:fail` and left for other nodes. With the cap unset, every job is accepted (usage is still counted).
 3. **Read evidence.** The node lists every datanet on the public catalog (`GET {EVAL_DATANET_API_URL}/public/subnets`), fetches every pod of each (`/public/pods?filters[subnet]=<cuid>`), and ranks them lexically against the payload + criteria. Top 12 become candidates. Reads are cached 5 minutes. No credential is sent; the endpoints are public.
 4. **Gate** (one LLM call). For each criterion, which candidate pods actually bear on it? Shared vocabulary is not support. Zero candidates skips the call entirely.
@@ -73,7 +74,7 @@ Fixed in code: 25 s lease long-poll, 30 s request timeout, 30 s idle poll, 2 sub
 
 ## Cost
 
-- **LLM tokens only.** Up to two model calls per job (gate + judge). Each prompt carries the candidate pods' text (~1 KB each, up to 12) plus the payload (≤ 32 KB). There is no daily cap unless you set `maxJudgeCallsPerDay`; it is read live, so setting or lowering it takes effect mid-day against the day's counted usage.
+- **LLM tokens only.** Up to two model calls per job (gate + judge). Each prompt carries the candidate pods' text (~1 KB each, up to 12) plus the payload (up to a few hundred KB; the gateway's ceiling is 3 MB). There is no daily cap unless you set `maxJudgeCallsPerDay`; it is read live, so setting or lowering it takes effect mid-day against the day's counted usage.
 - **Nothing on-chain.** No signing, no gas, no REPPO. The wallet is not involved.
 - **No earnings in v1.** Eval work is free to callers and unpaid to nodes; it exists to prove the judging market. On-chain receipts are tracked upstream.
 
@@ -85,7 +86,7 @@ Fixed in code: 25 s lease long-poll, 30 s request timeout, 30 s idle poll, 2 sub
 |---|---|---|
 | `executed` | `judged N criteria, M citation(s) across datanets …` | verdict submitted |
 | `denied` | the deny reason (criteria excerpts + datanets searched) | no evidence — not a fault |
-| `error` | the failure | `:fail` was reported; the job stays open for other nodes |
+| `error` | the failure (or a `PAYLOAD_*` reason) | `:fail` was reported; the job stays open for other nodes |
 | `skipped` | `answer cut-off already passed` / `node eval budget exhausted` | leased but not judged |
 
 Eval rows show under "all kinds"; there is no `eval` filter option yet.
@@ -105,7 +106,9 @@ Eval rows show under "all kinds"; there is no `eval` filter option yet.
 | `no accessible datanets` | the catalog returned nothing readable | `:fail`; check `EVAL_DATANET_API_URL` |
 | `lease response shape mismatch (gateway/worker version skew?)` | the gateway changed the lease contract | update the node; the fixtures in `test/fixtures/lease-ack/` pin the shape |
 
-Every failure is caught inside the lane; nothing here can abort a vote or mint cycle. On shutdown in-flight jobs get up to 10 s to finish and a job leased mid-shutdown is handed back with `:fail("node shutting down")`.
+Every failure is caught inside the lane; nothing here can abort a vote or mint cycle. On shutdown in-flight jobs get up to 10 s to finish and a job leased mid-shutdown is handed back with `:fail OTHER "node shutting down"`.
+
+`:fail` carries a `reason` from the pinned vocabulary — `PAYLOAD_FETCH_FAILED` · `PAYLOAD_HASH_MISMATCH` · `DATANET_UNAVAILABLE` · `BUDGET_EXHAUSTED` · `PAST_CUTOFF` · `OTHER` — plus a free-text `detail`; the gateway counts per reason.
 
 ## Safety
 
@@ -116,6 +119,6 @@ Every failure is caught inside the lane; nothing here can abort a vote or mint c
 
 ## Contract with the gateway
 
-The wire shapes (`lease-response`, `complete-request`, `deny-request`, `fail-request`, `error-codes`) live in `test/fixtures/lease-ack/` and are byte-identical to `fixtures/lease-ack/` in the eval-api repo; `test/integration/leaseAckContract.test.ts` pins their checksums. Change them on both sides or not at all. The node-side requirements are `openspec/specs/evalworker-gateway-contract/` and `openspec/specs/evalworker-evidence/`.
+The wire shapes (`lease-response` + `payload.txt`, `complete-request`, `deny-request`, `fail-request`, `error-codes`) live in `test/fixtures/lease-ack/` and are byte-identical to `fixtures/lease-ack/` in the eval-api repo; `test/integration/leaseAckContract.test.ts` pins their checksums. Change them on both sides or not at all. The node-side requirements are `openspec/specs/evalworker-gateway-contract/` and `openspec/specs/evalworker-evidence/`.
 
 Source: `src/evalworker/` — `worker.ts` (loop), `client.ts` (gateway HTTP), `datanetClient.ts` + `retrieve.ts` (evidence), `gate.ts` + `judge.ts` (the two LLM calls), `budget.ts` (daily cap).
