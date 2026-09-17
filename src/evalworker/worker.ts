@@ -4,7 +4,7 @@
 // judge → submit (or deny), always — settlement is entirely the gateway's
 // concern. Evidence is node-side (eval-datanet-grounding design D5): the node
 // grounds every verdict in pods it read itself, and denies the job when the
-// relevance gate finds nothing for a criterion — never judges without evidence.
+// relevance gate finds no usable pods (or leaves a legacy criterion unsupported).
 import { GatewayError, type GatewayClient } from './client.js'
 import type { EvalBudget } from './budget.js'
 import { DatanetError, type DatanetSource } from './datanet.js'
@@ -67,7 +67,12 @@ const excerpt = (s: string): string => {
   return flat.length > CRITERION_EXCERPT_MAX ? `${flat.slice(0, CRITERION_EXCERPT_MAX - 3)}...` : flat
 }
 
-export function buildDenyReason(unsupported: string[], criteria: string[], datanetsSearched: string[]): string {
+export function buildDenyReason(unsupported: string[], criteria: string[] | undefined, datanetsSearched: string[]): string {
+  if (criteria === undefined) {
+    const reason = `no pod on the datanets this node can read contains evidence usable to assess the submitted output in context` +
+      ` (searched datanets ${datanetsSearched.join(', ')})`
+    return reason.length > DENY_REASON_MAX ? `${reason.slice(0, DENY_REASON_MAX - 3)}...` : reason
+  }
   const named = unsupported.map((c) => {
     const i = criteria.indexOf(c)
     return `${i >= 0 ? `#${i + 1}` : '#?'} "${excerpt(c)}"`
@@ -143,9 +148,10 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
         // Deterministic gateway rejections never change on resend; retrying
         // only wastes traffic. Per route (error-codes.json contract fixture):
         //   :complete — 400 JOB_ID_MISMATCH, 409 PAST_CUTOFF / ALREADY_DENIED,
-        //               422 CRITERIA_MISMATCH / UNGROUNDED_VERDICT /
+        //               422 INVALID_ANSWER / UNGROUNDED_VERDICT /
         //               UNRESOLVABLE_CITATION / UNSTAKED_CITATION
         //   :deny     — 400 INVALID_DENIAL, 409 PAST_CUTOFF / ALREADY_ANSWERED
+        // Legacy gateways may also return 422 CRITERIA_MISMATCH.
         // (the 409 is the OTHER route's outcome in each case). 408/429 stay
         // retryable.
         if (e instanceof GatewayError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) {
@@ -226,8 +232,12 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
       phase = 'judge'
       if (evidence.candidates.length > 0) spent = true
       const gate = await deps.gate(request, evidence.candidates)
-      if (gate.unsupported.length > 0) {
-        // "Nothing supports this criterion" is only a DENIAL — terminal,
+      const legacy = request.criteria !== undefined
+      if (legacy !== ('supported' in gate)) throw new Error('gate result does not match leased request format')
+      const unsupported = 'pods' in gate ? [] : gate.unsupported
+      const gated = 'pods' in gate ? gate.pods : gate.supported
+      if ('pods' in gate ? gate.pods.length === 0 : gate.unsupported.length > 0) {
+        // Insufficient evidence is only a DENIAL — terminal,
         // gateway-side — when this node read every datanet it can reach. With
         // one unreadable, the supporting pod may sit in exactly the datanet we
         // could not open, so absence of evidence is not evidence of absence.
@@ -240,24 +250,29 @@ export function startEvalWorker(deps: EvalWorkerDeps): EvalWorkerHandle {
           )
         }
         releaseIfUnspent()
-        const reason = buildDenyReason(gate.unsupported, request.criteria, evidence.datanetsSearched)
+        const reason = buildDenyReason(unsupported, request.criteria, evidence.datanetsSearched)
         await submitWithRetry(job.jobId, 'deny', () => deps.client.deny(job.jobId, reason, evidence.datanetsSearched))
         submitted = true
         safeRecord({ ts: new Date().toISOString(), kind: 'eval', jobId: job.jobId, status: 'denied', reason })
         return
       }
       spent = true
-      const outcome = await deps.judge(request, gate.supported)
-      const answer = { jobId: job.jobId, model: deps.modelId(), verdicts: outcome.verdicts }
+      const outcome = await deps.judge(request, gated)
+      if (legacy !== ('verdicts' in outcome)) throw new Error('judge result does not match leased request format')
+      // Serialize explicitly: no legacy fields may leak into the new gateway body.
+      const answer = 'verdicts' in outcome
+        ? { jobId: job.jobId, model: deps.modelId(), verdicts: outcome.verdicts }
+        : { jobId: job.jobId, model: deps.modelId(), score: outcome.score, critique: outcome.critique, citations: outcome.citations }
       await submitWithRetry(job.jobId, 'complete', () => deps.client.complete(answer))
       submitted = true
-      const cited = outcome.verdicts.reduce((n, v) => n + v.citations.length, 0)
+      const verdicts = 'verdicts' in outcome ? outcome.verdicts : [outcome]
+      const cited = verdicts.reduce((n, v) => n + v.citations.length, 0)
       safeRecord({
         ts: new Date().toISOString(),
         kind: 'eval',
         jobId: job.jobId,
         status: 'executed',
-        reason: `judged ${outcome.verdicts.length} criteria, ${cited} citation(s) across datanets ${evidence.datanetsSearched.join(', ')}`,
+        reason: `judged ${legacy ? `${verdicts.length} criteria` : 'output in context'}, ${cited} citation(s) across datanets ${evidence.datanetsSearched.join(', ')}`,
       })
     } catch (e) {
       releaseIfUnspent()

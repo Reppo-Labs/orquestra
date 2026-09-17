@@ -1,6 +1,6 @@
 # Eval work — serving Reppo Evaluation API jobs
 
-Your node can act as a **judge** for the [Reppo Evaluation API](https://github.com/Reppo-Labs/eval-api): agents submit their output plus criteria, the gateway hands the job to judging nodes, each node scores it grounded in datanet pods, and the gateway settles the verdicts. This page is the complete operator description of that lane.
+Your node can act as a **judge** for the [Reppo Evaluation API](https://github.com/Reppo-Labs/eval-api): agents submit their output plus optional free-form context, the gateway hands the job to judging nodes, each node scores it grounded in datanet pods, and the gateway settles the verdicts. This page is the complete operator description of that lane.
 
 It is **off by default**, opt-in, and isolated: the eval worker runs beside the scheduler, never inside the vote/mint cycle, never touches the wallet, and spends **LLM tokens only**. In v1 there is no payment for eval work.
 
@@ -9,23 +9,29 @@ It is **off by default**, opt-in, and isolated: the eval worker runs beside the 
 ```
 lease ──► reserve budget ──► read datanet pods ──► gate (LLM #1) ──► judge (LLM #2) ──► :complete
                                                         │
-                                                        └── nothing bears on a criterion ──► :deny
+                                                        └── no evidence bears on the output ──► :deny
 ```
 
-1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request: `type` (`answer | plan | trace | artifact`), 1–10 `criteria`, optional `context`, the payload **by reference** (`payloadUrl`, a presigned GET valid ~15 min, with `payloadBytes` + `payloadSha256`), plus the `answerCutoff` after which no response is accepted. For one release the inline `payload` also rides along when ≤ 32 KB; a pre-metering gateway sends only `payload`.
+1. **Lease.** Long-polls `POST {EVAL_GATEWAY_URL}/v1/node/jobs:lease` (25 s wait) with the node's platform agent identity. A lease is the caller's request: `type` (`answer | plan | trace | artifact`), optional `context` (legacy leases also carry 1–10 `criteria`), the payload **by reference** (`payloadUrl`, a presigned GET valid ~15 min, with `payloadBytes` + `payloadSha256`), plus the `answerCutoff` after which no response is accepted. For one release the inline `payload` also rides along when ≤ 32 KB; a pre-metering gateway sends only `payload`.
 1. **Fetch the payload.** Right after reserving budget and before any retrieval or model call: `GET payloadUrl`, check length and sha256. A fetch or hash failure is `:fail` with `PAYLOAD_FETCH_FAILED` / `PAYLOAD_HASH_MISMATCH` — the reservation is released (nothing was spent), the job stays open for other nodes. The URL is a bearer token and is never logged.
 2. **Reserve budget.** One unit of `evalWork.maxJudgeCallsPerDay` is reserved before any model call. No budget → the job is handed back with `:fail` and left for other nodes. With the cap unset, every job is accepted (usage is still counted).
-3. **Read evidence.** The node lists every datanet on the public catalog (`GET {EVAL_DATANET_API_URL}/public/subnets`), fetches every pod of each (`/public/pods?filters[subnet]=<cuid>`), and ranks them lexically against the payload + criteria. Top 12 become candidates. Reads are cached 5 minutes. No credential is sent; the endpoints are public.
-4. **Gate** (one LLM call). For each criterion, which candidate pods actually bear on it? Shared vocabulary is not support. Zero candidates skips the call entirely.
-5. **Judge** (one LLM call). Score each supported criterion 1–10 with a critique, citing only pods the gate allowed. The model is the node's default model (`LLM_PROVIDER` / `LLM_API_KEY`), and its id is reported to the gateway.
+3. **Read evidence.** The node lists every datanet on the public catalog (`GET {EVAL_DATANET_API_URL}/public/subnets`), fetches every pod of each (`/public/pods?filters[subnet]=<cuid>`), and ranks them lexically against the payload + context (plus criteria for legacy leases). Top 12 become candidates. Reads are cached 5 minutes. No credential is sent; the endpoints are public.
+4. **Gate** (one LLM call). A pod must contain substantive information directly usable to assess the output in context: facts, applicable rules, measurements, or counterexamples. Evidence may confirm or contradict the output. Shared keywords, topic mentions, and generic background alone do not qualify. Without context, assess the output's own claims and purpose; do not invent requirements. Legacy leases retain per-criterion coverage. Zero candidates skips the call entirely.
+5. **Judge** (one LLM call). Give one integer score 1–10 with a critique (one per criterion for legacy leases), citing only pods the gate allowed. The model is the node's default model (`LLM_PROVIDER` / `LLM_API_KEY`), and its id is reported to the gateway.
 6. **Submit.**
-   - Every criterion supported → `:complete` with `{ jobId, model, verdicts[] }`, each verdict carrying `{ datanetId, podId }` citations. The gateway verifies every cited pod exists on the named datanet.
-   - Any criterion unsupported → `:deny` with the reason and the datanets searched. A denial is not a fault; it tells the caller to reframe.
-   - Any datanet was unreadable while a criterion went unsupported → `:fail` (absence of evidence is not evidence of absence). Model errors after retries → `:fail`.
+   - At least one pod admitted → `:complete` with `{ jobId, model, score, critique, citations }`, with non-empty `{ datanetId, podId }` citations. For a lease carrying `criteria`, every criterion must be supported and the body remains `{ jobId, model, verdicts[] }`. The gateway verifies every cited pod exists on the named datanet.
+   - No pod admitted (or any legacy criterion unsupported) → `:deny` with the reason and the datanets searched. A denial is not a fault; it tells the caller to reframe.
+   - Any datanet was unreadable while evidence was insufficient → `:fail` (absence of evidence is not evidence of absence). Model errors after retries → `:fail`.
 
-A verdict that would leave a criterion with zero citations is never sent: the node throws and reports `:fail` instead. There is no ungrounded path.
+A verdict that would have zero allowed citations is never sent: the node throws and reports `:fail` instead. There is no ungrounded path.
 
 Nodes are **quorum-oblivious**: lease, judge, submit, always. When the job settles, how many judges count, and what the caller sees is entirely the gateway's concern (see `docs/node-protocol.md` in the eval-api repo).
+
+## Criteria-free gateway rollout
+
+Deploy this worker first and confirm it is live across the fleet before deploying the criteria-free gateway. Completion format is chosen for each lease by whether `criteria` is present, so mixed leases and a gateway rollback remain supported. No build flag or global protocol switch is used.
+
+Keep the legacy path until the gateway deployment has outlived one `SETTLE_DEADLINE_SECONDS` window (24 hours by default). Existing shared `test/fixtures/lease-ack/` fixtures remain the legacy compatibility contract; new worker tests cover criteria-free requests and completions without changing those pinned fixtures unilaterally. `CRITERIA_MISMATCH` remains relevant only to legacy gateway responses; the worker treats any deterministic 422 as terminal.
 
 ## Enable it
 
@@ -84,8 +90,8 @@ Fixed in code: 25 s lease long-poll, 30 s request timeout, 30 s idle poll, 2 sub
 
 | status | detail | meaning |
 |---|---|---|
-| `executed` | `judged N criteria, M citation(s) across datanets …` | verdict submitted |
-| `denied` | the deny reason (criteria excerpts + datanets searched) | no evidence — not a fault |
+| `executed` | `judged output in context, M citation(s) across datanets …` (legacy: `judged N criteria`) | verdict submitted |
+| `denied` | the deny reason (output in context + datanets searched; criteria excerpts for legacy leases) | no evidence — not a fault |
 | `error` | the failure (or a `PAYLOAD_*` reason) | `:fail` was reported; the job stays open for other nodes |
 | `skipped` | `answer cut-off already passed` / `node eval budget exhausted` | leased but not judged |
 
@@ -115,7 +121,7 @@ Every failure is caught inside the lane; nothing here can abort a vote or mint c
 - The wallet signs nothing for eval work. The lane cannot spend REPPO or ETH.
 - Payloads are **untrusted input** from arbitrary callers. Both prompts frame them as such and carry an injection guard; the model can only score and cite, never act.
 - Credentials: `REPPO_API_KEY` goes to the gateway only. The datanet reads are anonymous.
-- A job's payload and criteria are never written to a datanet, the chain, or telemetry. Activity rows store the job id and a summary line, not the payload.
+- A job's payload, context, and legacy criteria are never written to a datanet, the chain, or telemetry. Activity rows store the job id and a summary line, not the payload.
 
 ## Contract with the gateway
 

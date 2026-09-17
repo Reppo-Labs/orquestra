@@ -9,7 +9,8 @@ export type EvalType = (typeof EVAL_TYPES)[number]
 export interface EvalJobRequest {
   type: EvalType
   payload: string
-  criteria: string[]
+  /** Present only on legacy gateway leases during the rollout window. */
+  criteria?: string[]
   context?: string
 }
 
@@ -23,7 +24,8 @@ export interface EvalJobRequest {
  */
 export interface LeasedRequest {
   type: EvalType
-  criteria: string[]
+  /** Present only on legacy gateway leases during the rollout window. */
+  criteria?: string[]
   context?: string
   payloadUrl?: string
   payloadBytes?: number
@@ -56,8 +58,7 @@ export interface Citation {
   podId: string
 }
 
-export interface CriterionVerdict {
-  criterion: string
+export interface Verdict {
   score: number // 1-10 integer
   critique: string
   /** Non-empty: every verdict must be grounded in at least one pod
@@ -65,13 +66,14 @@ export interface CriterionVerdict {
   citations: Citation[]
 }
 
+export interface CriterionVerdict extends Verdict {
+  criterion: string
+}
+
 /** What :complete submits. The node is quorum-oblivious: it always judges and
  *  submits; settlement is entirely the gateway's concern. */
-export interface EvalAnswer {
-  jobId: string
-  model: string
-  verdicts: CriterionVerdict[]
-}
+export type EvalAnswer = { jobId: string; model: string } &
+  (Verdict | { verdicts: CriterionVerdict[] })
 
 /** What :deny submits — the node looked and found nothing usable. Never a fault. */
 export interface EvalDenial {

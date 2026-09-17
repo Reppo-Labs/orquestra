@@ -105,6 +105,6 @@ export async function gatherEvidence(
   if (datanets.length > 0 && datanetsSearched.length === 0) {
     throw (settled[0] as PromiseRejectedResult).reason
   }
-  const query = `${request.payload} ${request.criteria.join(' ')}`
+  const query = `${request.payload} ${request.context ?? ''} ${request.criteria?.join(' ') ?? ''}`
   return { candidates: topKRelevant(query, pods, k), datanetsSearched, unreadable }
 }

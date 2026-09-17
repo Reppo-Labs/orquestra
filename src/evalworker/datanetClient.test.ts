@@ -85,7 +85,7 @@ describe('makeDatanetClient', () => {
     )
     const c = makeDatanetClient({ baseUrl: 'https://b', fetchImpl })
     expect(await c.fetchPods(DN_A)).toHaveLength(1719)
-    const out = await gatherEvidence(c, { type: 'answer', payload: 'liquidation cascade after a stop hunt wick', criteria: ['is grounded'] })
+    const out = await gatherEvidence(c, { type: 'answer', payload: 'liquidation cascade after a stop hunt wick', context: 'Assess whether the output is grounded' })
     expect(out.candidates.map((r) => r.pod.podId)).toContain('row1500')
     // Every page is requested explicitly; the unparameterised read this file
     // used to make now returns only the server's first 20 rows (#222).

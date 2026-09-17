@@ -35,7 +35,7 @@ export interface ResolvePayloadOpts {
  */
 export async function resolvePayload(job: LeasedJob, opts: ResolvePayloadOpts = {}): Promise<EvalJobRequest> {
   const { type, criteria, context, payloadUrl, payloadBytes, payloadSha256, payload } = job.request
-  const base = { type, criteria, ...(context !== undefined ? { context } : {}) }
+  const base = { type, ...(criteria !== undefined ? { criteria } : {}), ...(context !== undefined ? { context } : {}) }
   if (!payloadUrl) {
     if (payload === undefined) throw new PayloadError('PAYLOAD_FETCH_FAILED', `job ${job.jobId}: lease carries neither payloadUrl nor payload`)
     return { ...base, payload }
