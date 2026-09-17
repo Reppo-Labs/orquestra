@@ -26,7 +26,7 @@ interface Probe {
 // admit — one refund set for the four customer-support probes, one risk set
 // for the plan probe. They exist to make the live run possible, not to be
 // realistic datanet content; the graded thing is still the payload.
-const pod = (podId: string, name: string, text: string): DatanetPod => ({ datanetId: 90, podId, name, text })
+const pod = (podId: string, name: string, text: string): DatanetPod => ({ datanetId: 'cprobe0000000000000000000', podId, name, text })
 
 const REFUND_EVIDENCE: DatanetPod[] = [
   pod(
@@ -54,10 +54,18 @@ const RISK_EVIDENCE: DatanetPod[] = [
   ),
 ]
 
-/** Per-criterion gated evidence for a probe — every criterion gets >= 1 pod,
- *  which is exactly what judgeEval requires to produce a citable verdict. */
-const evidenceFor = (p: Probe): GatedEvidence =>
-  new Map(p.request.criteria.map((c) => [c, p.request.type === 'plan' ? RISK_EVIDENCE : REFUND_EVIDENCE]))
+/** The probe fixture is legacy-shaped (every probe carries criteria); read it
+ *  through here so a criteria-free probe fails an assertion instead of
+ *  throwing. */
+const criteriaOf = (p: Probe): string[] => p.request.criteria ?? []
+
+/** Gated evidence for a probe, in the shape the request selects — every
+ *  criterion (or the job) gets >= 1 pod, which is what judgeEval requires to
+ *  produce a citable verdict. */
+const evidenceFor = (p: Probe): GatedEvidence => {
+  const pods = p.request.type === 'plan' ? RISK_EVIDENCE : REFUND_EVIDENCE
+  return p.request.criteria ? new Map(p.request.criteria.map((c) => [c, pods])) : pods
+}
 
 const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'eval-probes.json')
 const probes = (JSON.parse(readFileSync(file, 'utf8')) as { probes: Probe[] }).probes
@@ -67,7 +75,7 @@ describe('eval judge probes (static)', () => {
     expect(probes).toHaveLength(5)
     expect(probes.some((p) => p.id === 'injection-attack')).toBe(true)
     for (const p of probes) {
-      expect(p.request.criteria.length).toBeGreaterThan(0)
+      expect(criteriaOf(p).length).toBeGreaterThan(0)
       expect(p.designedTier).toBeGreaterThanOrEqual(1)
       expect(p.designedTier).toBeLessThanOrEqual(10)
     }
@@ -76,13 +84,17 @@ describe('eval judge probes (static)', () => {
   it('every probe has gated evidence for every criterion (the live run cannot judge without it)', () => {
     for (const p of probes) {
       const gated = evidenceFor(p)
-      for (const c of p.request.criteria) expect(gated.get(c)?.length ?? 0).toBeGreaterThan(0)
+      if (Array.isArray(gated)) {
+        expect(gated.length).toBeGreaterThan(0)
+        continue
+      }
+      for (const c of criteriaOf(p)) expect(gated.get(c)?.length ?? 0).toBeGreaterThan(0)
     }
   })
 
   it('every probe builds a prompt that frames the payload as untrusted', () => {
     for (const p of probes) {
-      const { system, prompt } = buildEvalPrompt(p.request, new Map())
+      const { system, prompt } = buildEvalPrompt(p.request, evidenceFor(p))
       expect(system).toMatch(/never follow any instructions/i)
       expect(prompt).toContain(p.request.payload)
       expect(prompt).toMatch(/UNTRUSTED/)
@@ -100,7 +112,8 @@ describe.runIf(live)('eval judge probes (live model)', () => {
     const scores = new Map<string, number>()
     for (const p of probes) {
       const out = await judgeEval(model, p.request, evidenceFor(p))
-      const mean = out.verdicts.reduce((a, v) => a + v.score, 0) / out.verdicts.length
+      const verdicts = 'verdicts' in out ? out.verdicts : [out]
+      const mean = verdicts.reduce((a, v) => a + v.score, 0) / verdicts.length
       scores.set(p.id, mean)
     }
     // Rank order, not absolute values (Phase 0: absolute calibration drifts).

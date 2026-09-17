@@ -967,6 +967,31 @@ describe('criteria-free rollout', () => {
     } finally { await w.stop() }
   })
 
+  it('fails a criteria-free lease whose gate answered in the legacy format', async () => {
+    const client = makeClient([modernJob('gate-shape')])
+    const judge = vi.fn()
+    const w = startEvalWorker(deps({ client, judge, gate: async (_req, cands) => ({ supported: new Map([['is good', cands.map((c) => c.pod)]]), unsupported: [] }) }))
+    try {
+      await waitFor(() => client.failed.length === 1)
+      expect(client.failed[0]).toMatchObject({ id: 'gate-shape', reason: 'OTHER', detail: 'gate result does not match leased request format' })
+      expect(judge).not.toHaveBeenCalled()
+      expect(client.completed).toEqual([])
+      expect(client.denied).toEqual([])
+    } finally { await w.stop() }
+  })
+
+  // The rollback direction of the same guard: a legacy lease must never be
+  // answered with a criteria-free outcome.
+  it('fails a legacy lease whose judge answered in the criteria-free format', async () => {
+    const client = makeClient([job('rollback-shape')])
+    const w = startEvalWorker(deps({ client, judge: async () => ({ score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] }) }))
+    try {
+      await waitFor(() => client.failed.length === 1)
+      expect(client.failed[0]).toMatchObject({ id: 'rollback-shape', reason: 'OTHER', detail: 'judge result does not match leased request format' })
+      expect(client.completed).toEqual([])
+    } finally { await w.stop() }
+  })
+
   it('bounds criteria-free denial reasons', () => {
     expect(buildDenyReason([], undefined, Array.from({ length: 200 }, () => DN_A)).length).toBeLessThanOrEqual(2000)
   })

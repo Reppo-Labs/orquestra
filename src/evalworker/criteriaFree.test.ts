@@ -22,9 +22,14 @@ describe('criteria-free evaluations', () => {
     expect(await resolvePayload(job!)).toEqual(request)
   })
 
-  it('retrieves pods using context when payload has no matching terms', async () => {
+  it('retrieves pods using context when the payload shares no terms with them', async () => {
     const source = new InMemoryDatanetSource([{ datanetId: 'subnet', name: 'Policies', pods: [pod] }])
-    const evidence = await gatherEvidence(source, request)
+    // 'Yes.' shares no scoring term with the pod, so the pod is a candidate
+    // only because the context contributed one — control first, or the
+    // assertion holds even with the context term dropped from the query.
+    const bare = { ...request, payload: 'Yes.' }
+    expect((await gatherEvidence(source, { ...bare, context: undefined })).candidates).toEqual([])
+    const evidence = await gatherEvidence(source, bare)
     expect(evidence.candidates.map(c => c.pod)).toEqual([pod])
   })
 
@@ -37,6 +42,11 @@ describe('criteria-free evaluations', () => {
   it('gates one evidence set, removing unknown and duplicate keys', async () => {
     generate.mockResolvedValueOnce({ supportingPods: ['subnet/pod', ' subnet/pod ', 'subnet/fake'] })
     expect(await gateEvidence({} as never, request, candidates)).toEqual({ pods: [pod] })
+  })
+
+  it('treats an empty supportingPods array as "nothing qualifies"', async () => {
+    generate.mockResolvedValueOnce({ supportingPods: [] })
+    expect(await gateEvidence({} as never, request, candidates)).toEqual({ pods: [] })
   })
 
   it('returns one verdict with only gated citations', async () => {
@@ -77,7 +87,10 @@ describe('criteria-free prompt and schema guards', () => {
     for (const score of [0, 11, 2.5]) expect(jobVerdictSchema.safeParse({ ...valid, score }).success).toBe(false)
     expect(jobVerdictSchema.safeParse({ ...valid, citations: [] }).success).toBe(false)
     expect(jobVerdictSchema.safeParse({ ...valid, critique: '' }).success).toBe(false)
-    expect(jobGateSchema.parse({})).toEqual({ supportingPods: [] })
+    // Absent supportingPods is a malformed response (→ :fail), not "nothing
+    // qualifies" — only an empty array means that.
+    expect(jobGateSchema.safeParse({}).success).toBe(false)
+    expect(jobGateSchema.parse({ supportingPods: [] })).toEqual({ supportingPods: [] })
     expect(jobGateSchema.safeParse({ supportingPods: [1] }).success).toBe(false)
   })
 })

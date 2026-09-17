@@ -46,7 +46,10 @@ export const gateSchema = z.object({
 
 export type GateResult = LegacyGateResult | { pods: DatanetPod[] }
 
-export const jobGateSchema = z.object({ supportingPods: z.array(z.string()).default([]) })
+/** `supportingPods` is REQUIRED: an absent field is a malformed model response
+ *  (→ :fail, retryable), never a measured "no pod qualifies". Only an empty
+ *  array means nothing qualifies (→ deny). */
+export const jobGateSchema = z.object({ supportingPods: z.array(z.string()) })
 
 export interface LegacyGateResult {
   /** Criterion text (as leased) → the pods that support it. Only criteria
@@ -95,7 +98,7 @@ export async function gateEvidence(model: LanguageModel, request: EvalJobRequest
     const byKey = new Map(candidates.map(c => [podKey(c.pod), c.pod]))
     const pods: DatanetPod[] = []
     let dropped = 0
-    for (const key of new Set((out.supportingPods ?? []).map(key => key.trim()))) {
+    for (const key of new Set(out.supportingPods.map(key => key.trim()))) {
       const pod = byKey.get(key)
       if (pod) pods.push(pod)
       else dropped++
