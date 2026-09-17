@@ -992,6 +992,19 @@ describe('criteria-free rollout', () => {
     } finally { await w.stop() }
   })
 
+  it('submits exactly the five completion fields, dropping anything else the judge carried', async () => {
+    const client = makeClient([modernJob('extra')])
+    // `criterion` is legacy-shaped: spreading the outcome would leak it into
+    // the new gateway body. (`verdicts` never reaches the serializer — the
+    // format guard above rejects that outcome first.)
+    const judge = (async () => ({ score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }], criterion: 'is good' })) as EvalWorkerDeps['judge']
+    const w = startEvalWorker(deps({ client, judge }))
+    try {
+      await waitFor(() => client.completed.length === 1)
+      expect(Object.keys(client.completed[0] as object).sort()).toEqual(['citations', 'critique', 'jobId', 'model', 'score'])
+    } finally { await w.stop() }
+  })
+
   it('bounds criteria-free denial reasons', () => {
     expect(buildDenyReason([], undefined, Array.from({ length: 200 }, () => DN_A)).length).toBeLessThanOrEqual(2000)
   })

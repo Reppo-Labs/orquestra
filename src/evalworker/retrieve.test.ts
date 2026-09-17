@@ -65,6 +65,17 @@ describe('gatherEvidence', () => {
     expect(out.candidates.map((c) => `${c.pod.datanetId}/${c.pod.podId}`).sort()).toEqual([`${DN_A}/482`, `${DN_B}/9`].sort())
   })
 
+  it('ranks on the legacy criteria term: without it the pod is not a candidate at all', async () => {
+    const policy = pod('p', 'Refund policy', 'refunds allowed within thirty days')
+    const source = new InMemoryDatanetSource([{ datanetId: DN_A, name: 'policies', pods: [policy] }])
+    // 'Yes.' shares no scoring term with the pod — control first, or the
+    // assertion holds even with the criteria term dropped from the query.
+    const bare: EvalJobRequest = { type: 'answer', payload: 'Yes.' }
+    expect((await gatherEvidence(source, bare)).candidates).toEqual([])
+    const withCriteria = { ...bare, criteria: ['refunds allowed promptly'] }
+    expect((await gatherEvidence(source, withCriteria)).candidates.map((c) => c.pod)).toEqual([policy])
+  })
+
   it('bounds the result to k — the read itself is the whole datanet (no per-datanet cap)', async () => {
     const fetchPods = vi.fn(async (datanetId: string) =>
       Array.from({ length: 50 }, (_, i) => pod(`p${i}`, 'ETH perp', 'ETH perp funding stop', datanetId)),
