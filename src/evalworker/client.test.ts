@@ -116,3 +116,28 @@ describe('GatewayClient', () => {
     for (const s of signals) expect(s).toBeInstanceOf(AbortSignal)
   })
 })
+
+describe('criteria-free wire compatibility', () => {
+  it('accepts by-reference leases without criteria and keeps payload verification metadata', async () => {
+    const request = { type: 'answer', payloadUrl: 'https://p.example/x', payloadBytes: 1, payloadSha256: 'a'.repeat(64) }
+    const fetchImpl = vi.fn(async () => Response.json({ ...goodLease, request }))
+    expect((await new GatewayClient({ ...opts, fetchImpl }).lease())?.request).toEqual(request)
+  })
+
+  it.each([[], null, 'criterion'])('rejects malformed present criteria: %j', async criteria => {
+    const fetchImpl = vi.fn(async () => Response.json({ ...goodLease, request: { ...goodLease.request, criteria } }))
+    await expect(new GatewayClient({ ...opts, fetchImpl }).lease()).rejects.toThrow(/shape mismatch/)
+  })
+
+  it('posts exactly the flattened completion body', async () => {
+    let sent: unknown
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body))
+      return Response.json({})
+    })
+    const answer = { jobId: 'j', model: 'm', score: 3, critique: 'Unsupported claim.', citations: [{ datanetId: DN_A, podId: 'p' }] }
+    await new GatewayClient({ ...opts, fetchImpl }).complete(answer)
+    expect(sent).toEqual(answer)
+    expect(sent).not.toHaveProperty('verdicts')
+  })
+})

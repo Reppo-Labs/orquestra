@@ -28,7 +28,8 @@ const leasedJobSchema = z
     request: z
       .object({
         type: z.enum(EVAL_TYPES),
-        criteria: z.array(z.string()).min(1),
+        // Absence selects the new contract; malformed legacy criteria still fail.
+        criteria: z.array(z.string()).min(1).optional(),
         context: z.string().optional(),
         payloadUrl: z.string().url().optional(),
         payloadBytes: z.number().int().nonnegative().optional(),
@@ -135,7 +136,7 @@ export class GatewayClient {
   }
 
   /** Report that this node looked and found no evidence for the job (the
-   *  relevance gate left at least one criterion unsupported). Not a fault:
+   *  relevance gate admitted no pods, or left a legacy criterion unsupported). Not a fault:
    *  the gateway counts denials at settlement. */
   async deny(jobId: string, reason: string, datanetsSearched: string[]): Promise<void> {
     const body: EvalDenial = { jobId, reason, datanetsSearched }

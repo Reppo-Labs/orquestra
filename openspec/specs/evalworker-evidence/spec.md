@@ -4,7 +4,7 @@
 Defines how an orquestra node grounds an evaluation verdict in datanet pods it can read, and when it must deny a job instead of judging.
 ## Requirements
 ### Requirement: Evidence comes from the datanets this node can read
-For each leased job the node SHALL retrieve candidate pods from every datanet it can access, rank them by relevance to the request and criteria, and consider only those candidates as evidence. The node SHALL NOT use any gateway-provided corpus.
+For each leased job the node SHALL retrieve candidate pods from every datanet it can access, rank them by relevance to the request — payload plus its criteria on a legacy lease, payload plus its context on a criteria-free lease — and consider only those candidates as evidence. The node SHALL NOT use any gateway-provided corpus.
 
 A datanet SHALL be identified by its **subnet cuid string** (e.g. `cms3uejpj0001jf040zjgwqwm`) everywhere it is named — in `Citation.datanetId`, `DatanetPod.datanetId`, `datanetsSearched`, and the `"datanetId/podId"` pod keys the gate and judge prompts use. The node SHALL NOT identify a datanet by the numeric `tokenId` on its subnet row: that value collides across chains, and pods exist on subnets that carry no listed numeric id at all. The datanet API the node reads is public and unauthenticated, so "the datanets this node can access" is every datanet the API lists, not a per-credential subset.
 
@@ -21,20 +21,32 @@ A datanet SHALL be identified by its **subnet cuid string** (e.g. `cms3uejpj0001
 - **THEN** the node reports `:fail` with the error (retryable) and does not deny or judge
 
 ### Requirement: Relevance gate before judging
-Before judging, the node SHALL run a bounded relevance check that selects, per criterion, which candidate pods actually bear on that criterion. Lexical overlap alone SHALL NOT qualify a pod as evidence.
+Before judging, the node SHALL run a bounded relevance check over the candidates, in the shape the lease selects: one job-wide check for a criteria-free lease (which pods bear on the submitted output in its context), a per-criterion check for a legacy lease (which pods bear on that criterion). Lexical overlap alone SHALL NOT qualify a pod as evidence. An absent `supportingPods` field in the gate's answer is a malformed model response (`:fail`, retryable), never a measured "no pod qualifies"; only an empty list means that.
 
 #### Scenario: Pod mentions a keyword but not the claim
 - **WHEN** a candidate pod shares vocabulary with a criterion but does not address it
 - **THEN** the gate excludes it and it cannot be cited for that criterion
 
+#### Scenario: Criteria-free lease
+- **WHEN** the lease carries no criteria
+- **THEN** the gate returns one job-wide evidence set, with no per-criterion mapping
+
+#### Scenario: Gate omits the supporting-pod field
+- **WHEN** the gate model answers without a `supportingPods` field
+- **THEN** the node reports `:fail` and does not deny
+
 ### Requirement: Deny instead of fabricate, but only on a complete read
-If the gate finds no supporting pod for at least one criterion AND the node read every datanet it can access, the node SHALL deny the job via the gateway's deny route with a reason naming the unsupported criteria and the list of datanet ids read, and SHALL NOT submit any verdict. The reason SHALL fit the gateway's 2000-character limit.
+If the gate admits no supporting pod — none at all on a criteria-free lease, none for at least one criterion on a legacy lease — AND the node read every datanet it can access, the node SHALL deny the job via the gateway's deny route with a reason naming what went unsupported (the unsupported criteria on a legacy lease) and the list of datanet ids read, and SHALL NOT submit any verdict. The reason SHALL fit the gateway's 2000-character limit.
 
 A denial is terminal gateway-side, so the node SHALL NOT deny while any accessible datanet was unreadable on this job: absence of evidence is only evidence of absence once everything reachable has been read. In that case the node SHALL report `:fail` (retryable) naming the unreadable datanets.
 
 #### Scenario: No evidence for one criterion, every datanet read
 - **WHEN** criteria are [c1, c2], every accessible datanet was read, and the gate finds pods for c1 only
 - **THEN** the node calls deny with a reason naming c2 and `datanetsSearched` = the datanets it read, and never calls complete
+
+#### Scenario: Criteria-free lease with no admitted pod
+- **WHEN** the lease carries no criteria, every accessible datanet was read, and the gate admits no pod
+- **THEN** the node calls deny with a reason naming the datanets searched, and never calls complete
 
 #### Scenario: No candidates at all, every datanet read
 - **WHEN** retrieval returns zero pods across all accessible datanets and none failed
@@ -49,7 +61,7 @@ A denial is terminal gateway-side, so the node SHALL NOT deny while any accessib
 - **THEN** the node judges and completes normally, and `datanetsSearched` names only the datanets actually read
 
 ### Requirement: Every verdict cites gated evidence
-The judge SHALL cite at least one gated pod per criterion, as `{ datanetId, podId }`. Citations outside the gated set SHALL be stripped; a verdict left with zero citations after stripping is a judge error: the node SHALL report `:fail` (retryable) and SHALL NOT submit the answer.
+The judge SHALL cite at least one gated pod as `{ datanetId, podId }` — for the single verdict on a criteria-free lease, and per criterion on a legacy lease. Citations outside the gated set SHALL be stripped; a verdict left with zero citations after stripping is a judge error: the node SHALL report `:fail` (retryable) and SHALL NOT submit the answer.
 
 #### Scenario: Judge cites an ungated pod
 - **WHEN** the judge output cites a pod id not in the gated set for that criterion

@@ -26,7 +26,7 @@ const pod: DatanetPod = { datanetId: DN_A, podId: '482', name: 'good things', te
 const datanet = (): DatanetSource => new InMemoryDatanetSource([{ datanetId: DN_A, name: 'perps', pods: [pod] }])
 
 /** Gate that admits every candidate for every criterion. */
-const admitAll = async (req: { criteria: string[] }, cands: { pod: DatanetPod }[]): Promise<GateResult> => ({
+const admitAll = async (req: { criteria?: string[] }, cands: { pod: DatanetPod }[]): Promise<GateResult> => req.criteria === undefined ? { pods: cands.map(x => x.pod) } : ({
   supported: new Map(req.criteria.map((c) => [c, cands.map((x) => x.pod)])),
   unsupported: [],
 })
@@ -65,8 +65,8 @@ function deps(over: Partial<EvalWorkerDeps>): EvalWorkerDeps {
     getConfig: () => ({ enabled: true, maxConcurrent: 2 }),
     datanet: datanet(),
     gate: admitAll,
-    judge: async (req, gated) => ({
-      verdicts: req.criteria.map((criterion) => ({
+    judge: async (req, gated) => Array.isArray(gated) ? { score: 7, critique: 'ok', citations: gated.map(p => ({ datanetId: p.datanetId, podId: p.podId })) } : ({
+      verdicts: (req.criteria ?? []).map((criterion) => ({
         criterion,
         score: 7,
         critique: 'ok',
@@ -253,7 +253,7 @@ describe('startEvalWorker (review regressions)', () => {
         judge: async (req) => {
           judgeStarted++
           await gate.promise
-          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
+          return { verdicts: (req.criteria ?? []).map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
         },
       }),
     )
@@ -279,7 +279,7 @@ describe('startEvalWorker (review regressions)', () => {
         judge: async (req) => {
           judgeStarted++
           await gate.promise
-          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
+          return { verdicts: (req.criteria ?? []).map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
         },
       }),
     )
@@ -306,7 +306,7 @@ describe('startEvalWorker (review regressions)', () => {
           peak = Math.max(peak, running)
           await gate.promise
           running--
-          return { verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
+          return { verdicts: (req.criteria ?? []).map((criterion) => ({ criterion, score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] })) }
         },
       }),
     )
@@ -879,9 +879,11 @@ describe('startEvalWorker (payload by reference)', () => {
   it('fetches the payload from payloadUrl before anything else, then judges and completes', async () => {
     const client = makeClient([byRef('j-ref'), null])
     const fetchImpl = vi.fn(async () => new Response('the payload is good', { status: 200 }))
-    const judge = vi.fn(async (req: { payload: string; criteria: string[] }, gated: Map<string, DatanetPod[]>) => ({
-      verdicts: req.criteria.map((criterion) => ({ criterion, score: 7, critique: req.payload, citations: (gated.get(criterion) ?? []).map((p) => ({ datanetId: p.datanetId, podId: p.podId })) })),
-    }))
+    const judge = vi.fn<EvalWorkerDeps['judge']>(async (req, gated) => {
+      if (Array.isArray(gated)) throw new Error('expected legacy evidence')
+      return { verdicts: (req.criteria ?? []).map((criterion) => ({ criterion, score: 7, critique: req.payload, citations: (gated.get(criterion) ?? []).map((p) => ({ datanetId: p.datanetId, podId: p.podId })) })),
+      }
+    })
     const w = startEvalWorker(deps({ client, fetchImpl, judge }))
     await waitFor(() => client.completed.length === 1)
     await w.stop()
@@ -911,5 +913,99 @@ describe('startEvalWorker (payload by reference)', () => {
     await waitFor(() => client.failed.length === 1)
     await w.stop()
     expect(client.failed[0]).toMatchObject({ id: 'j-exp', reason: 'PAYLOAD_FETCH_FAILED' })
+  })
+})
+
+describe('criteria-free rollout', () => {
+  const modernJob = (id: string): LeasedJob => ({ ...job(id), request: { type: 'answer', payload: 'the payload is good', context: 'Assess correctness.' } })
+
+  it('selects completion format per lease, including a rollback to legacy leases', async () => {
+    const client = makeClient([job('old'), modernJob('new'), job('rollback')])
+    const w = startEvalWorker(deps({ client }))
+    try {
+      await waitFor(() => client.completed.length === 3)
+      expect(client.completed).toEqual(expect.arrayContaining([
+        { jobId: 'new', model: 'test/model', score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] },
+        ...['old', 'rollback'].map(jobId => ({ jobId, model: 'test/model', verdicts: [{ criterion: 'is good', score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] }] })),
+      ]))
+      expect(client.failed).toEqual([])
+    } finally { await w.stop() }
+  })
+
+  it('denies when the single gate rejects every candidate, without invoking judge', async () => {
+    const client = makeClient([modernJob('unsupported')])
+    const judge = vi.fn()
+    const w = startEvalWorker(deps({ client, gate: async () => ({ pods: [] }), judge }))
+    try {
+      await waitFor(() => client.denied.length === 1)
+      expect(client.denied[0]).toMatchObject({ id: 'unsupported', reason: expect.stringContaining('submitted output in context'), datanetsSearched: [DN_A] })
+      expect(judge).not.toHaveBeenCalled()
+      expect(client.completed).toEqual([])
+    } finally { await w.stop() }
+  })
+
+  it('reports failure instead of denial when a datanet was unreadable', async () => {
+    const client = makeClient([modernJob('outage')])
+    const w = startEvalWorker(deps({ client, gate: async () => ({ pods: [] }), datanet: {
+      listAccessible: async () => [{ datanetId: DN_A, name: 'ok' }, { datanetId: DN_B, name: 'offline' }],
+      fetchPods: async id => { if (id === DN_B) throw new Error('HTTP 503'); return [pod] },
+    } }))
+    try {
+      await waitFor(() => client.failed.length === 1)
+      expect(client.denied).toEqual([])
+      expect(client.completed).toEqual([])
+    } finally { await w.stop() }
+  })
+
+  it('does not submit an outcome whose format disagrees with the lease', async () => {
+    const client = makeClient([modernJob('wrong')])
+    const w = startEvalWorker(deps({ client, judge: async () => ({ verdicts: [] }) }))
+    try {
+      await waitFor(() => client.failed.length === 1)
+      expect(client.completed).toEqual([])
+      expect(client.failed[0]).toMatchObject({ detail: 'judge result does not match leased request format' })
+    } finally { await w.stop() }
+  })
+
+  it('fails a criteria-free lease whose gate answered in the legacy format', async () => {
+    const client = makeClient([modernJob('gate-shape')])
+    const judge = vi.fn()
+    const w = startEvalWorker(deps({ client, judge, gate: async (_req, cands) => ({ supported: new Map([['is good', cands.map((c) => c.pod)]]), unsupported: [] }) }))
+    try {
+      await waitFor(() => client.failed.length === 1)
+      expect(client.failed[0]).toMatchObject({ id: 'gate-shape', reason: 'OTHER', detail: 'gate result does not match leased request format' })
+      expect(judge).not.toHaveBeenCalled()
+      expect(client.completed).toEqual([])
+      expect(client.denied).toEqual([])
+    } finally { await w.stop() }
+  })
+
+  // The rollback direction of the same guard: a legacy lease must never be
+  // answered with a criteria-free outcome.
+  it('fails a legacy lease whose judge answered in the criteria-free format', async () => {
+    const client = makeClient([job('rollback-shape')])
+    const w = startEvalWorker(deps({ client, judge: async () => ({ score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }] }) }))
+    try {
+      await waitFor(() => client.failed.length === 1)
+      expect(client.failed[0]).toMatchObject({ id: 'rollback-shape', reason: 'OTHER', detail: 'judge result does not match leased request format' })
+      expect(client.completed).toEqual([])
+    } finally { await w.stop() }
+  })
+
+  it('submits exactly the five completion fields, dropping anything else the judge carried', async () => {
+    const client = makeClient([modernJob('extra')])
+    // `criterion` is legacy-shaped: spreading the outcome would leak it into
+    // the new gateway body. (`verdicts` never reaches the serializer — the
+    // format guard above rejects that outcome first.)
+    const judge = (async () => ({ score: 7, critique: 'ok', citations: [{ datanetId: DN_A, podId: '482' }], criterion: 'is good' })) as EvalWorkerDeps['judge']
+    const w = startEvalWorker(deps({ client, judge }))
+    try {
+      await waitFor(() => client.completed.length === 1)
+      expect(Object.keys(client.completed[0] as object).sort()).toEqual(['citations', 'critique', 'jobId', 'model', 'score'])
+    } finally { await w.stop() }
+  })
+
+  it('bounds criteria-free denial reasons', () => {
+    expect(buildDenyReason([], undefined, Array.from({ length: 200 }, () => DN_A)).length).toBeLessThanOrEqual(2000)
   })
 })

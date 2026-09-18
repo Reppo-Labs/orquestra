@@ -44,7 +44,7 @@ runs. _Avoid_: voting loop, vote phase.
 **Eval work**:
 The opt-in lane (`src/evalworker/`) in which the node serves Reppo Evaluation
 API jobs as a judge: it **leases** an eval job from the gateway, grounds a
-**verdict** (1–10 per criterion, each citing datanet pods) or a **denial** (no
+**verdict** (one 1–10 score in context, citing datanet pods; per-criterion scores for legacy leases) or a **denial** (no
 evidence found), and submits it. Runs beside the scheduler, outside any cycle,
 spends LLM tokens only, and never signs. _Avoid_: eval cycle, judging pass
 (it is not part of the cycle), audit.
