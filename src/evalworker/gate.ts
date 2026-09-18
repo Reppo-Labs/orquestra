@@ -34,12 +34,15 @@ const SYSTEM =
  *  unambiguous. */
 export const podKey = (p: Pick<DatanetPod, 'datanetId' | 'podId'>): string => `${p.datanetId}/${p.podId}`
 
-/** Exported for direct schema tests — a mocked generator can never falsify the schema. */
+/** Exported for direct schema tests — a mocked generator can never falsify the schema.
+ *  `supportingPods` is REQUIRED, same as `jobGateSchema`: an absent field is a
+ *  malformed model response (→ :fail, retryable), never a measured "no pod
+ *  supports this criterion". Only an empty array means that (→ unsupported → deny). */
 export const gateSchema = z.object({
   perCriterion: z.array(
     z.object({
       criterion: z.string(),
-      supportingPods: z.array(z.string()).default([]),
+      supportingPods: z.array(z.string()),
     }),
   ),
 })
@@ -133,7 +136,7 @@ export async function gateEvidence(model: LanguageModel, request: EvalJobRequest
     }
     const pods: DatanetPod[] = []
     const seen = new Set<string>()
-    for (const raw of entry.supportingPods ?? []) {
+    for (const raw of entry.supportingPods) {
       // Normalize ONCE: looking up the trimmed key while deduping on the raw
       // one let a leading-space copy of a key and the bare key both push
       // the same pod.

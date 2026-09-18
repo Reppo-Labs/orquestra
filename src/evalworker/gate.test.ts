@@ -67,6 +67,17 @@ describe('gateEvidence', () => {
     expect(out.unsupported).toEqual(['sizing survives adverse candle'])
   })
 
+  it('an explicitly empty supportingPods list still means unsupported (→ deny)', async () => {
+    mockGen.mockResolvedValueOnce({
+      perCriterion: [
+        { criterion: 'entry historically profitable', supportingPods: [`${DN_A}/482`] },
+        { criterion: 'sizing survives adverse candle', supportingPods: [] },
+      ],
+    })
+    const out = await gateEvidence({} as never, request, candidates)
+    expect(out.unsupported).toEqual(['sizing survives adverse candle'])
+  })
+
   it('matches criteria by trimmed lowercase text', async () => {
     mockGen.mockResolvedValueOnce({
       perCriterion: [
@@ -138,8 +149,11 @@ describe('buildGatePrompt', () => {
 })
 
 describe('gateSchema (direct — mocks cannot falsify the schema)', () => {
-  it('accepts a per-criterion list and defaults missing supportingPods to empty', () => {
-    const r = gateSchema.safeParse({ perCriterion: [{ criterion: 'c' }] })
+  // Absent supportingPods is a malformed response (→ :fail), not "nothing
+  // supports this criterion" — only an empty array means that (→ deny).
+  it('rejects an entry with no supportingPods field, accepts an explicit empty list', () => {
+    expect(gateSchema.safeParse({ perCriterion: [{ criterion: 'c' }] }).success).toBe(false)
+    const r = gateSchema.safeParse({ perCriterion: [{ criterion: 'c', supportingPods: [] }] })
     expect(r.success && r.data.perCriterion[0]?.supportingPods).toEqual([])
   })
 
