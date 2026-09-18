@@ -1,5 +1,5 @@
 // The relevance gate: criteria-free leases get one job-wide evidence set.
-// Legacy leases retain per-criterion coverage until the gateway rollback window closes.
+// Legacy leases retain per-criterion coverage for as long as the gateway sends criteria.
 // One bounded LLM call decides, per criterion, which
 // retrieved candidate pods actually bear on it (eval-datanet-grounding design
 // D3). Lexical overlap (retrieve.ts) only nominates candidates; a pod counts

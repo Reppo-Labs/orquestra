@@ -1,5 +1,5 @@
 // The node-side eval judge: one verdict for criteria-free leases; legacy
-// leases retain per-criterion verdicts during the gateway rollback window.
+// leases retain per-criterion verdicts for as long as the gateway sends criteria.
 // One disciplined LLM call per job — temp 0 comes
 // from the shared generateObjectWithRetry path, the payload is framed as
 // untrusted (INJECTION_GUARD variant), and citations may only reference the

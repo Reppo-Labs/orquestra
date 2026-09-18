@@ -105,6 +105,13 @@ export async function gatherEvidence(
   if (datanets.length > 0 && datanetsSearched.length === 0) {
     throw (settled[0] as PromiseRejectedResult).reason
   }
-  const query = `${request.payload} ${request.context ?? ''} ${request.criteria?.join(' ') ?? ''}`
+  // `context` ranks only on a criteria-free lease, where it is the only extra
+  // retrieval signal. On a criteria-bearing lease the criteria rank, unchanged:
+  // context is submitter-controlled and far larger, so adding it there can
+  // evict the criterion-relevant pod from the top-k.
+  const query =
+    request.criteria === undefined
+      ? `${request.payload} ${request.context ?? ''}`
+      : `${request.payload} ${request.criteria.join(' ')}`
   return { candidates: topKRelevant(query, pods, k), datanetsSearched, unreadable }
 }
